@@ -1,0 +1,14 @@
+{
+  "name": "rehearse",
+  "description": "Skills that make coding agents rehearse a program by hand before building it.",
+  "owner": {
+    "name": "GITHUB_USER"
+  },
+  "plugins": [
+    {
+      "name": "rehearse",
+      "source": "./",
+      "description": "Rehearse a program by hand before building it."
+    }
+  ]
+}
