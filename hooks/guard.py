@@ -78,8 +78,9 @@ def check_write(tool_input):
 BUILD = re.compile(r"\b(build|make|write|create|code|develop|implement|automate)\b", re.I)
 WORLD = re.compile(r"\b(scrap\w*|crawl\w*|bot|api|client|cli|tool|script|convert\w*|automation|integration|"
                    r"pipeline|sync\w*|webhook|fetch\w*|download\w*|monitor\w*|upload\w*|parser|extractor)\b", re.I)
-NUDGE = ("rehearse: this request builds a program that touches the outside world. Before writing any "
-         "code, invoke the `rehearse` skill and rehearse the program's job by hand first.")
+NUDGE = ("rehearse: this request builds a program that touches the outside world. Your FIRST action must be "
+         "to load the rehearse skill (Skill tool, skill \"rehearse:rehearse\") and follow it, even if another "
+         "workflow or mode was also triggered. Do not write program code until its rehearsal is done.")
 
 
 def nudge(prompt):
