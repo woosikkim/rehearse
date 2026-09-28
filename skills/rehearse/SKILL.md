@@ -1,11 +1,11 @@
 ---
 name: rehearse
-description: Use BEFORE writing code for any program that touches the outside world - scraper, crawler, bot, API client, CLI tool, file converter, automation, integration, sync job, data pipeline - even small or "quick" ones. Do not write a script and run it to see what happens. First do the program's job yourself by hand with direct tool calls (curl, browser tools, CLI commands, sqlite3), one step at a time, and log what really happens. Then build from the verified steps and replay the recorded evidence as tests.
+description: Use BEFORE writing code for any program that touches the outside world - scraper, crawler, bot, API client, CLI tool, file converter, automation, integration, sync job, data pipeline - even small or "quick" ones. Do not write a script and run it to see what happens. First do the program's job yourself by hand with direct tool calls (curl, browser tools, CLI commands, sqlite3), one step at a time, and log what really happens. Also scouts for existing tools, APIs and libraries that already do the job, so less gets built. Then build from the verified steps and replay the recorded evidence as tests.
 ---
 
 # Rehearse
 
-**Be the program before you write it.** Every plan hides assumptions about the outside world: "the page is static HTML", "the API returns JSON", "the CSV is UTF-8". Programs break on those assumptions. You check each one by doing the program's job yourself, by hand, before any code exists.
+**Be the program before you write it.** Every plan hides assumptions about the outside world: "the page is static HTML", "the API returns JSON", "the CSV is UTF-8". Programs break on those assumptions. You check each one by doing the program's job yourself, by hand, before any code exists. And you only build what nobody has built already.
 
 ## When to skip
 
@@ -15,10 +15,10 @@ description: Use BEFORE writing code for any program that touches the outside wo
 ## The loop
 
 ```
-1 Model → 2 Plan + label → 3 Rehearse (by hand) → 4 Revise plan → 5 Build → 6 Replay → 7 Report
+1 Model → 2 Scout → 3 Plan + label → 4 Rehearse (by hand) → 5 Revise plan → 6 Build → 7 Replay → 8 Report
 ```
 
-Do not write program code before phase 5. Rehearsal can change the plan, so the plan only becomes final after rehearsal.
+Do not write program code before phase 6. Rehearsal can change the plan, so the plan only becomes final after rehearsal.
 
 ---
 
@@ -31,19 +31,53 @@ Before planning, write this down (in `.rehearsal/REHEARSAL.md`, template below):
 - **Inputs / outputs**: what goes in, what comes out, and in which format
 - **Surfaces**: everything it touches outside its own memory. Choose from: web/HTTP, CLI/stdin, files, GUI/browser, database/state, time, external services, hardware/OS. Read the matching sections of [references/surfaces.md](references/surfaces.md) for each surface the program uses.
 - **State**: what it remembers between runs
+- **Needs**: the jobs inside the program (fetch pages, extract text, store rows, send alerts...)
 
-## 2. Plan and label
+## 2. Scout: what already exists?
 
-Write the plan as **concrete steps**. Each step names its tool, endpoint, file or command. A vague step ("get the data") hides its assumptions, so rewrite it until it names a source.
+Smart people have already built most of what programs need. Before planning to write anything, look for it. Go down this ladder for the whole program first, then for each need that is left. Stop at the first rung that holds:
+
+1. **The whole job already exists.** A CLI tool, app or service already does it (downloading media → `yt-dlp`, converting documents → `pandoc`, syncing files → `rclone`). Then the "program" may be one command, a config file or a cron line.
+2. **An official source replaces the hard part.** An API, RSS feed, sitemap, data export or bulk download instead of scraping; a webhook instead of polling.
+3. **A maintained library does the step.** For example text extraction, retries, CSV dialects, date parsing.
+4. **Only then write it yourself.**
+
+**Search in this order:**
+- What's already installed (`command -v ...`, `pip list`, `npm ls`, the project's dependency files). A tool already in the project beats a better one that isn't.
+- For web targets, the target itself: `/api`, `/feed`, `/sitemap.xml`, `robots.txt`, developer docs, and the network requests its own pages make.
+- Then outside: web search, package registries (`pip index versions <name>`, `npm view <name>`), GitHub (`curl -s "https://api.github.com/search/repositories?q=<topic>&sort=stars"`), `awesome-<topic>` lists. [references/surfaces.md](references/surfaces.md) lists good places to start for each surface.
+
+**Judge each candidate:**
+
+| Check | Good sign |
+|---|---|
+| Alive | A release or commit in the last ~12 months; issues get answered |
+| Used | Real adoption: stars, downloads, dependents |
+| Fits | Works in this language, OS and environment; its license allows this use |
+| Weight | Dependencies in proportion to the job; no framework pulled in for one function |
+| Real | The exact official name and repo; watch for typosquats and look-alike packages |
+
+Keep 2–3 candidates per need at most, and don't spend longer scouting than building would take.
+
+**A candidate is an assumption too.** Finding a tool doesn't prove it works on *your* target. Each chosen candidate becomes a plan step with its own assumption ("`yt-dlp` can read this site") and is rehearsed like any other step:
+- **CLI tools**: rehearse them directly, by hand, in phase 4 (`yt-dlp --dump-json URL`, `pandoc in.docx -t markdown | head`).
+- **Libraries** can't run without code. Save the real inputs as fixtures during rehearsal, and check the library against them in phase 7. If it fails there, fall back to the next candidate or the next rung.
+- **Installing** is 🟡: install into the project (venv, local `node_modules`), not globally, unless the user agrees.
+
+If the user wants it built from scratch (to learn, or to avoid a dependency), do that, and mention the alternative in the report.
+
+## 3. Plan and label
+
+Write the plan as **concrete steps**, using the tools you chose while scouting. Each step names its tool, endpoint, file or command. A vague step ("get the data") hides its assumptions, so rewrite it until it names a source.
 
 For each step, write down its hidden assumption(s) and give it a label:
 
-| Label | Meaning | What you do in phase 3 |
+| Label | Meaning | What you do in phase 4 |
 |---|---|---|
 | 🟢 Rehearse | Read-only and safe | Do it for real |
 | 🟡 Sandbox | Writes, but reversible | Do it in a temp dir, test DB or test account |
 | 🔴 Simulate / ask | Irreversible or external (sends, pays, deletes, posts publicly) | Never run it without the user's explicit OK. Verify everything up to the side effect, then ask or simulate |
-| ⚪ Skip | Pure logic, no outside world | Unit test it in phase 6 |
+| ⚪ Skip | Pure logic, no outside world | Unit test it in phase 7 |
 | ❓ Blocked | Needs an earlier step's result, a credential, or a missing tool | Rehearse it later, or ask the user |
 
 ### Flow grid
@@ -60,7 +94,7 @@ The happy path is not enough. For each surface the program uses, go through thes
 
 Rank the flows by **how likely × how bad if it breaks**, and rehearse from the top down.
 
-## 3. Rehearse, by hand
+## 4. Rehearse, by hand
 
 Start the rehearsal. This turns on the guard hook, if one is installed:
 
@@ -94,28 +128,31 @@ First check which tools exist (`command -v curl wget jq sqlite3 ...`, plus any b
 rm .rehearsal/active
 ```
 
-## 4. Revise the plan
+## 5. Revise the plan
 
 Go through the findings. Every surprise becomes a plan change, and every failure you saw becomes error handling. If rehearsal showed the plan was wrong (for example, the page is rendered by JavaScript, so plain HTTP won't work), rewrite those steps now.
 
-## 5. Build
+## 6. Build
 
+- Use the tools and libraries you chose while scouting. Write only the glue between them and the parts nothing else covers.
 - Each external call in the code does what a rehearsed step did: same endpoint, same headers, same parameters that actually worked.
 - Each failure in the log has handling in the code.
 - Copy the fixtures into the project's test folder (e.g. `tests/fixtures/`).
 - Do not add behavior that was never rehearsed without listing it as an unverified risk.
 
-## 6. Replay
+## 7. Replay
 
 1. **Fixture tests.** Saved input → the output you extracted by hand = expected result. Saved failure responses → tests that the program handles them.
 2. **Unit tests** for the ⚪ logic steps.
-3. **Live replay.** Run the program once on the same sample you rehearsed, and compare its output with your hand results.
-4. If they differ, fix the code, not the expectation. Change the expectation only if your rehearsal log was wrong, and say so.
+3. **Library checks.** Each library chosen while scouting must pass on the real fixtures. If one fails, switch to the next candidate.
+4. **Live replay.** Run the program once on the same sample you rehearsed, and compare its output with your hand results.
+5. If they differ, fix the code, not the expectation. Change the expectation only if your rehearsal log was wrong, and say so.
 
-## 7. Report
+## 8. Report
 
 Tell the user plainly:
 
+- **Reused vs built**: which existing tools and libraries do the work, and what was written by hand and why
 - **Verified for real**: the flows rehearsed live and replayed
 - **Sandboxed / simulated**: what was not done for real, and why
 - **Unverified risks**: things only time will show (scheduled runs over days, layout changes, memory growth), plus anything skipped
@@ -133,6 +170,12 @@ Tell the user plainly:
 - Inputs → outputs:
 - Surfaces:
 - State:
+- Needs:
+
+## Scout
+| Need | Rung | Candidate | Checks (alive/used/fits/weight/real) | Verdict |
+|------|------|-----------|--------------------------------------|---------|
+| Fetch page | 2 | site has /api/products JSON | docs + S1 | ✅ use API, no scraping |
 
 ## Plan
 | # | Step | Assumption | Label | Status |

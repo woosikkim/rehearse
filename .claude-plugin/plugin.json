@@ -1,6 +1,6 @@
 {
   "name": "rehearse",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Rehearse a program by hand before building it: do its job with direct tool calls, log what really happens, then build from verified steps and replay the evidence as tests.",
   "license": "MIT",
   "keywords": ["skill", "verification", "testing", "scraper", "agent"]

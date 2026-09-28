@@ -40,6 +40,13 @@ with tempfile.TemporaryDirectory() as d:
         "command -v curl wget jq sqlite3",
         "sqlite3 test.db 'SELECT 1'",
         "curl -s x 2>&1 | tee out.txt",
+        "npx some-cli --help",
+        "uvx trafilatura -u https://example.com",
+        "yt-dlp --dump-json https://example.com/v",
+        "pandoc in.docx -t markdown | head",
+        "pip index versions trafilatura",
+        "npm view csv-parse version",
+        "uv run trafilatura -u https://x.com",
     ]
     blocked = [
         "for i in 1 2 3; do curl x; done",
@@ -64,6 +71,11 @@ with tempfile.TemporaryDirectory() as d:
         "go run main.go",
         "seq 1 5 | xargs -I{} curl x/{}",
         "python3.11 x.py",
+        "npx tsx scrape.ts",
+        "npx node a.js",
+        "uv run python x.py",
+        "uv run x.py",
+        "pnpm dlx ts-node a.ts",
     ]
     for c in allowed:
         assert bash(c, d) == 0, f"should allow: {c}"

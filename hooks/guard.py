@@ -18,10 +18,12 @@ SHELL_TOOLS = {"Bash", "shell", "local_shell", "exec_command", "run_shell_comman
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "write_file", "replace", "edit_file"}
 LOOPS = {"for", "while", "until", "xargs", "parallel", "watch", "sleep", "nohup"}
 INTERPRETERS = {"python", "py", "node", "deno", "bun", "ruby", "perl", "php", "bash", "sh", "zsh",
-                "fish", "pwsh", "powershell", "npx", "tsx", "ts-node", "eval", "source", "."}
+                "fish", "pwsh", "powershell", "tsx", "ts-node", "eval", "source", "."}
 RUNNERS = {"npm": {"run", "start", "exec", "test"}, "pnpm": {"run", "start", "exec", "test"},
            "yarn": {"run", "start", "exec", "test"}, "go": {"run"}, "cargo": {"run"}}
 WRAPPERS = {"sudo", "env", "time", "nice", "command", "exec"}
+# Package launchers run a tool: allowed, but the tool they launch is checked too (npx tsx a.ts is still a script).
+LAUNCHERS = {"npx": None, "bunx": None, "uvx": None, "uv": "run", "pipx": "run", "pnpm": "dlx"}
 VERSION_ARGS = {"--version", "-V", "-v", "version"}
 
 
@@ -43,24 +45,33 @@ def check_shell(cmd):
     if re.search(r"(?<![&>|])&(?![&>])", bare):
         return "background job (&)"
     for seg in re.split(r"&&|\|\||[;|\n()`]|\$\(", bare):
-        toks = seg.split()
-        i = 0
-        while i < len(toks) and (re.fullmatch(r"\w+=\S*", toks[i]) or toks[i] in WRAPPERS or toks[i] == "timeout"):
+        reason = check_tokens(seg.split())
+        if reason:
+            return reason
+    return None
+
+
+def check_tokens(toks):
+    i = 0
+    while i < len(toks) and (re.fullmatch(r"\w+=\S*", toks[i]) or toks[i] in WRAPPERS or toks[i] == "timeout"):
+        i += 1
+        while toks[i - 1] == "timeout" and i < len(toks) and re.fullmatch(r"-\S*|\d[\w.]*", toks[i]):
             i += 1
-            while toks[i - 1] == "timeout" and i < len(toks) and re.fullmatch(r"-\S*|\d[\w.]*", toks[i]):
-                i += 1
-        if i >= len(toks):
-            continue
-        prog, args = toks[i], toks[i + 1:]
-        name = re.sub(r"[\d.]+$", "", os.path.basename(prog)) or prog
-        if name in LOOPS:
-            return f"loop/wait command '{name}'"
-        if name in INTERPRETERS and not (len(args) == 1 and args[0] in VERSION_ARGS):
-            return f"interpreter '{prog}' (scripts and inline code)"
-        if name in RUNNERS and args and args[0] in RUNNERS[name]:
-            return f"'{prog} {args[0]}' runs a script"
-        if prog.startswith("./") or os.path.splitext(prog)[1] in CODE_EXT:
-            return f"running script file '{prog}'"
+    if i >= len(toks):
+        return None
+    prog, args = toks[i], toks[i + 1:]
+    name = re.sub(r"[\d.]+$", "", os.path.basename(prog)) or prog
+    if name in LAUNCHERS and (LAUNCHERS[name] is None or args[:1] == [LAUNCHERS[name]]):
+        rest = args if LAUNCHERS[name] is None else args[1:]
+        return check_tokens([t for t in rest if not t.startswith("-")])
+    if name in LOOPS:
+        return f"loop/wait command '{name}'"
+    if name in INTERPRETERS and not (len(args) == 1 and args[0] in VERSION_ARGS):
+        return f"interpreter '{prog}' (scripts and inline code)"
+    if name in RUNNERS and args and args[0] in RUNNERS[name]:
+        return f"'{prog} {args[0]}' runs a script"
+    if prog.startswith("./") or os.path.splitext(prog)[1] in CODE_EXT:
+        return f"running script file '{prog}'"
     return None
 
 

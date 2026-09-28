@@ -4,14 +4,15 @@
 
 Ask an agent for a scraper and it usually writes `scrape.py`, runs it and hopes. Then it breaks on a 403, a JavaScript-rendered page, or a missing field on page 7.
 
-`rehearse` flips the order. The agent first **does the program's job itself, by hand**: one `curl`, one browser click, one `sqlite3` query at a time. It logs what really happens, and only then builds the program from the steps that actually worked. The responses it recorded become the program's tests.
+`rehearse` flips the order. The agent first **does the program's job itself, by hand**: one `curl`, one browser click, one `sqlite3` query at a time. It logs what really happens, and only then builds the program from the steps that actually worked. And before building anything, it checks whether someone already built it. The responses it recorded become the program's tests.
 
 ```
-1 Model → 2 Plan + label → 3 Rehearse (by hand) → 4 Revise plan → 5 Build → 6 Replay → 7 Report
+1 Model → 2 Scout → 3 Plan + label → 4 Rehearse (by hand) → 5 Revise plan → 6 Build → 7 Replay → 8 Report
 ```
 
 ## How it works
 
+- **Scout before building.** A ladder: does a tool already do the whole job (`yt-dlp`, `pandoc`, `rclone`)? Does an official API or feed replace the hard part? Does a maintained library do the step? Only then write code. Candidates are checked (alive, used, fits, weight, real name) and then rehearsed on the real target, because a tool found is still an assumption.
 - **Surfaces, not program types.** Any program is a mix of eight surfaces: web, CLI, files, GUI, database, time, external services, hardware. Each has a playbook ([surfaces.md](skills/rehearse/references/surfaces.md)), so one skill covers thousands of programs.
 - **Plan labels.** Each plan step's hidden assumption is labeled 🟢 rehearse, 🟡 sandbox, 🔴 simulate/ask, ⚪ pure logic, or ❓ blocked. Irreversible actions (sending, paying, deleting, posting) never run without the user's OK.
 - **A flow grid** of happy path, input variations, dependency failures, state and user mistakes, ranked by likelihood × damage.
