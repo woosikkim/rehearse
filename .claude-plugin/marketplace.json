@@ -2,7 +2,7 @@
   "name": "rehearse",
   "description": "Skills that make coding agents rehearse a program by hand before building it.",
   "owner": {
-    "name": "GITHUB_USER"
+    "name": "woosikkim"
   },
   "plugins": [
     {

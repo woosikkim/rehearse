@@ -1,6 +1,8 @@
 # Surface playbooks
 
-Read only the sections for the surfaces your program uses. Each one lists what to rehearse with, what to probe, the failures to look for, and where to look first while scouting (phase 2). The tools named are starting points, not a whitelist. Check that each is still maintained before using it.
+Read only the sections for the surfaces your program uses. Each one lists what to rehearse with, what to probe, the failures to look for, and where to look first while scouting. The tools named are starting points, not a whitelist. Check that each is still maintained before using it.
+
+No playbook matches? The rule still applies: find the real thing and poke it with the most direct tool you have.
 
 ## Web / HTTP (scrapers, API clients, webhooks)
 

@@ -1,204 +1,206 @@
 ---
 name: rehearse
-description: Use BEFORE writing code for any program that touches the outside world - scraper, crawler, bot, API client, CLI tool, file converter, automation, integration, sync job, data pipeline - even small or "quick" ones. Do not write a script and run it to see what happens. First do the program's job yourself by hand with direct tool calls (curl, browser tools, CLI commands, sqlite3), one step at a time, and log what really happens. Also scouts for existing tools, APIs and libraries that already do the job, so less gets built. Then build from the verified steps and replay the recorded evidence as tests.
+description: Use BEFORE writing or changing code that depends on something outside the code - a site, an API, a file, a database, a device, a service, or another part of the same program. Covers new programs (scraper, bot, API client, command-line tool, file converter, sync job, data pipeline) and fixes or changes to existing code, in any language, even small or "quick" ones. Do not write code and run it to see what happens. First size the job, then do it by hand one call at a time, act as the fixed file or the whole program, log what really happens, and scout for existing tools so less gets built. Then build from the verified steps and replay them as tests. The word "rehearse" in a prompt always means load this skill.
 ---
 
 # Rehearse
 
-**Be the program before you write it.** Every plan hides assumptions about the outside world: "the page is static HTML", "the API returns JSON", "the CSV is UTF-8". Programs break on those assumptions. You check each one by doing the program's job yourself, by hand, before any code exists. And you only build what nobody has built already.
+**Be the program before you write it.** Every plan and every fix hides assumptions about things outside the code: "the page is static HTML", "every date looks like 2024-03-04", "the next file can handle what this one sends". Programs break on those assumptions. You check each one by doing the job yourself, by hand, before any code is written or changed. And you only build what nobody has built already.
 
-## When to skip
+## Size it first
 
-- Pure logic with no outside world (an algorithm, a refactor, styling): write normal tests instead.
-- The user explicitly says to skip rehearsal.
+Answer four questions yourself, yes or no:
+
+1. Does the job touch the outside world (a site, a file, a service, a database, a device, another part of the program)?
+2. Is there a fast way to see the problem, like a test that fails in seconds?
+3. Is it one place, or a chain across files or services?
+4. Is feedback slow (long runs, deploys, live services) or the codebase big?
+
+| Size | When | What you do |
+|---|---|---|
+| skip | Nothing outside the code: pure logic, a refactor, styling | Write normal tests |
+| light | One place, and a fast way to see the problem | A few by-hand steps inline. The moment a second file or service is involved, switch to full: start the marker and the log |
+| full | Outside world, and no fast way to see it | The whole loop below, with a log |
+| helpers | A chain, with slow feedback or a big codebase | The whole loop, with helpers doing the looking |
+
+**Your first line of output is the size**, in exactly this shape, even when the size is skip. Then carry on without waiting. If the user later says light, skip or full, switch to that size.
+
+```
+Rehearse: <size>, because <reason>. Say light, skip or full to override.
+```
+
+**Light** means a few by-hand steps inline, no log file, no helper. When a fast failing test exists, a fast failing test beats rehearsing: fix-and-try against it is the right tool. You cannot size code you have not seen: for existing code, say the size you expect, start the marker (top of Look) before your first probe, and drop to light afterwards (`rm .rehearsal/active`) only if it turns out to be one place with a fast test.
 
 ## The loop
 
 ```
-1 Model → 2 Scout → 3 Plan + label → 4 Rehearse (by hand) → 5 Revise plan → 6 Build → 7 Replay → 8 Report
+Look → Act as it → Build → Replay
 ```
 
-Do not write program code before phase 6. Rehearsal can change the plan, so the plan only becomes final after rehearsal.
+It is the same loop whether you fix something that exists or make something new. Only the first step differs. A failure on replay starts the loop again (see Chains). Do not write or change program code before Build: acting as it can change the plan, so the plan is only final after it.
 
----
-
-## 1. Model the program
-
-Before planning, write this down (in `.rehearsal/REHEARSAL.md`, template below):
-
-- **Actors**: who or what uses it (a human at a CLI, cron, a webhook caller)
-- **Entry points**: how it starts (command and args, URL, schedule, event)
-- **Inputs / outputs**: what goes in, what comes out, and in which format
-- **Surfaces**: everything it touches outside its own memory. Choose from: web/HTTP, CLI/stdin, files, GUI/browser, database/state, time, external services, hardware/OS. Read the matching sections of [references/surfaces.md](references/surfaces.md) for each surface the program uses.
-- **State**: what it remembers between runs
-- **Needs**: the jobs inside the program (fetch pages, extract text, store rows, send alerts...)
-
-## 2. Scout: what already exists?
-
-Smart people have already built most of what programs need. Before planning to write anything, look for it. Go down this ladder for the whole program first, then for each need that is left. Stop at the first rung that holds:
-
-1. **The whole job already exists.** A CLI tool, app or service already does it (downloading media → `yt-dlp`, converting documents → `pandoc`, syncing files → `rclone`). Then the "program" may be one command, a config file or a cron line.
-2. **An official source replaces the hard part.** An API, RSS feed, sitemap, data export or bulk download instead of scraping; a webhook instead of polling.
-3. **A maintained library does the step.** For example text extraction, retries, CSV dialects, date parsing.
-4. **Only then write it yourself.**
-
-**Search in this order:**
-- What's already installed (`command -v ...`, `pip list`, `npm ls`, the project's dependency files). A tool already in the project beats a better one that isn't.
-- For web targets, the target itself: `/api`, `/feed`, `/sitemap.xml`, `robots.txt`, developer docs, and the network requests its own pages make.
-- Then outside: web search, package registries (`pip index versions <name>`, `npm view <name>`), GitHub (`curl -s "https://api.github.com/search/repositories?q=<topic>&sort=stars"`), `awesome-<topic>` lists. [references/surfaces.md](references/surfaces.md) lists good places to start for each surface.
-
-**Judge each candidate:**
-
-| Check | Good sign |
-|---|---|
-| Alive | A release or commit in the last ~12 months; issues get answered |
-| Used | Real adoption: stars, downloads, dependents |
-| Fits | Works in this language, OS and environment; its license allows this use |
-| Weight | Dependencies in proportion to the job; no framework pulled in for one function |
-| Real | The exact official name and repo; watch for typosquats and look-alike packages |
-
-Keep 2–3 candidates per need at most, and don't spend longer scouting than building would take.
-
-**A candidate is an assumption too.** Finding a tool doesn't prove it works on *your* target. Each chosen candidate becomes a plan step with its own assumption ("`yt-dlp` can read this site") and is rehearsed like any other step:
-- **CLI tools**: rehearse them directly, by hand, in phase 4 (`yt-dlp --dump-json URL`, `pandoc in.docx -t markdown | head`).
-- **Libraries** can't run without code. Save the real inputs as fixtures during rehearsal, and check the library against them in phase 7. If it fails there, fall back to the next candidate or the next rung.
-- **Installing** is 🟡: install into the project (venv, local `node_modules`), not globally, unless the user agrees.
-
-If the user wants it built from scratch (to learn, or to avoid a dependency), do that, and mention the alternative in the report.
-
-## 3. Plan and label
-
-Write the plan as **concrete steps**, using the tools you chose while scouting. Each step names its tool, endpoint, file or command. A vague step ("get the data") hides its assumptions, so rewrite it until it names a source.
-
-For each step, write down its hidden assumption(s) and give it a label:
-
-| Label | Meaning | What you do in phase 4 |
+| | Fixing something that exists | Making something new |
 |---|---|---|
-| 🟢 Rehearse | Read-only and safe | Do it for real |
-| 🟡 Sandbox | Writes, but reversible | Do it in a temp dir, test DB or test account |
-| 🔴 Simulate / ask | Irreversible or external (sends, pays, deletes, posts publicly) | Never run it without the user's explicit OK. Verify everything up to the side effect, then ask or simulate |
-| ⚪ Skip | Pure logic, no outside world | Unit test it in phase 7 |
-| ❓ Blocked | Needs an earlier step's result, a credential, or a missing tool | Rehearse it later, or ask the user |
+| Step 1: Look | Reproduce once, locate, pick the component to become | Scout for what exists, model the program, poke the real target |
+| Act as it | Be file 3 with its real rows; then be the fixed file 3 and hand its rows to files 4 and 5 | Be the scraper on three items: fetch each page, find the name and price, write the CSV row by hand |
+| Build | Change only what the hand-made fix showed | Transcribe the steps that worked |
+| Replay | Saved rows are the inputs; the hand outputs are the expected values | Saved pages are the inputs; the hand-written rows are the expected CSV |
+| Chains | The fixed rows make file 4 crash on "12,50": revealed by the date fix | The hand-written rows break the CSV writer on a name with a comma: revealed by the extract step |
+| Self-sizing | Light if a test already fails in seconds; full or helpers when the bug crosses files | Light if one call to a known API does the job; full for a real site |
+| Helpers | A helper becomes file 3; the session edits only after the log shows it working | A helper pokes the site and saves pages; the session builds from the log |
 
-### Flow grid
+## Look
 
-The happy path is not enough. For each surface the program uses, go through these categories and write down the flows that apply:
-
-| Category | Examples |
-|---|---|
-| Happy path | The main job works end to end |
-| Input variations | Each kind of input; empty, huge, unicode, wrong format |
-| Dependency failure | Down, slow, changed layout or schema, rate-limited, auth expired |
-| State | First run, second run, interrupted halfway and resumed, two copies running at once |
-| User mistakes | Wrong args, missing config, cancel midway |
-
-Rank the flows by **how likely × how bad if it breaks**, and rehearse from the top down.
-
-## 4. Rehearse, by hand
-
-Start the rehearsal. This turns on the guard hook, if one is installed:
+Start the rehearsal. Run this as its own call, before anything else. The guard checks each call only once the marker exists.
 
 ```
 mkdir -p .rehearsal/fixtures && touch .rehearsal/active
 ```
 
-First check which tools exist (`command -v curl wget jq sqlite3 ...`, plus any browser or MCP tools you have).
+**Fixing something that exists.**
+1. **Reproduce once.** Run what shows the problem one time and save the result as a fixture (a fixture is a saved real input or output): `python3 main.py > .rehearsal/fixtures/before.txt`.
+2. **Locate.** Follow the stack trace, the logs, or a search (`grep -n "def parse_date" *.py`) to where it goes wrong, and read the code there.
+3. **Pick the component to become**: the one where good input turns into wrong output. In the five-files story it is file 3, which drops three March rows because their dates are written `04/03/2024`.
 
-### Rules
+**Making something new.** *Scout first.* Most of what programs need already exists. Go down this ladder for the whole job, then for each need left, and stop at the first rung that holds:
 
-1. **One action per call. No scripts.** Every step is a single direct command or tool call. Do not write and run a file, do not write loops, and do not run inline code (`python -c`, `node -e`). A script bakes in the very assumptions you are trying to check.
-2. **Observe before you act.** After each step, write down what you saw, then choose the next step based on that. "Got 403 → retry with a browser User-Agent" is a decision *you* make by looking, and it later becomes code.
-3. **Match the program's tool.** Rehearse with the tool closest to what the program will use. If the program will use `requests` or `fetch`, rehearse with `curl` and the same headers, method and cookies, not with a fetch tool that renders or proxies the page. If the program drives a browser, rehearse with a browser tool.
-4. **Sample, don't loop.** For 1000 items, rehearse a few by hand: the first, one from the middle, the last, one that looks odd, and one that doesn't exist. Each is its own call. Looping is the program's job.
-5. **Leave evidence.** Log every step right away: command → raw output excerpt → what it means. Save raw responses as fixtures (`curl -s URL -o .rehearsal/fixtures/item1.html`). Saving output is fine; processing it with code is not.
-6. **Never fake a result.** If you are blocked (captcha, login, missing tool, a 🔴 step), stop and ask the user. A workaround you find is a finding: log it. If it changes the design (a new tool, a new dependency, a login requirement), mark it as a plan change.
+1. **The whole job exists**: a command-line tool, app or service (`yt-dlp`, `pandoc`, `rclone`). The "program" may be one command or a cron line.
+2. **An official source replaces the hard part**: an API, feed, sitemap, data export or webhook instead of scraping or polling.
+3. **A maintained library does the step**: text extraction, retries, CSV dialects, dates.
+4. **Only then write it yourself.**
 
-| ✅ Allowed | ❌ Not allowed |
-|---|---|
-| `curl -sI https://site.com/item/1` | writing `test.py` and running it |
-| `curl -s URL \| head -50` (pipes only to *view*) | `for i in 1 2 3; do curl ...; done` |
-| `curl -s URL -o .rehearsal/fixtures/p1.html` | `python -c "..."`, `node -e "..."` |
-| `jq '.items[0]' .rehearsal/fixtures/p1.json` | background jobs (`&`, `nohup`) and waiting |
-| `grep -o 'class="price"[^<]*' fixture.html` | `sleep` loops polling for a result |
-| browser tool: navigate, click, read | any code that makes decisions for you |
+Search what is installed first (`command -v`, `pip list`, `npm ls`, the project's dependency files), then the target itself (`/api`, `/feed`, `/sitemap.xml`, `robots.txt`), then outside (package registries, GitHub, `awesome-<topic>` lists). Keep 2–3 candidates per need and judge each:
 
-**You are done rehearsing** when every ranked flow has a status: rehearsed, sandboxed, simulated, or skipped with a reason. Then end the rehearsal:
+| Alive | Used | Fits | Weight | Real |
+|---|---|---|---|---|
+| A release or commit in ~12 months | Stars, downloads, dependents | Language, OS, license | Dependencies in proportion to the job | The exact official name, no look-alikes |
 
-```
-rm .rehearsal/active
-```
+A candidate is an assumption too. Rehearse command-line tools by hand; save fixtures to check libraries against in Replay. Install into the project, not globally (🟡). If the user wants it from scratch, do that and mention the alternative in the report.
 
-## 5. Revise the plan
+*Then model it* in the log: actors (who or what uses it), entry points (command, URL, schedule), inputs → outputs, surfaces (web/HTTP, command line, files, browser, database, time, external services, hardware; read the matching sections of [references/surfaces.md](references/surfaces.md)), state between runs, and needs (the jobs inside it). Write the plan as concrete steps that each name a tool, endpoint, file or command, with its hidden assumption and a label.
 
-Go through the findings. Every surprise becomes a plan change, and every failure you saw becomes error handling. If rehearsal showed the plan was wrong (for example, the page is rendered by JavaScript, so plain HTTP won't work), rewrite those steps now.
+## Rules of the hand
 
-## 6. Build
+1. **One action per call, no new logic.** Each step is one direct command or tool call: no script files, loops, conditions or new functions. To call code that already exists, use one console line `python3 -c '<import what exists; one call; print>'`:
+   ```
+   python3 -c 'import normalize; print(normalize.parse_date("04/03/2024"))'
+   python3 -c 'import sys, price; print(price.to_amount(sys.stdin.read()))' < .rehearsal/fixtures/price3.txt
+   ```
+   The same shape works with `node -e`, `node -p` and `ruby -e`. Single quotes only, at most two statements, and a fixture fed in with `< file`.
+2. **Hand-made data are literals.** Type the value you mean, `"12.50"`, not code that computes it: no comprehensions, no `.replace`. Save code-like fixtures as `.txt` (`app.js.txt`).
+3. **Observe before you act.** Write down what you saw, then choose the next step from that. "Got 403 → retry with a browser User-Agent" is your decision, and later it becomes code.
+4. **Match the program's tool.** If the program will use `requests` or `fetch`, rehearse with `curl` and the same headers, not a tool that renders the page. If it drives a browser, use a browser tool.
+5. **Sample, don't loop.** For 1000 items, try the first, one from the middle, the last, an odd one and one that doesn't exist, each as its own call.
+6. **Leave evidence.** Log each step right away with a quoted heredoc, and save raw responses as fixtures (`curl -s URL -o .rehearsal/fixtures/item1.html`):
+   ```
+   cat >> .rehearsal/REHEARSAL.md <<'EOF'
+   ### S2: be file 3 with a real March row
+   EOF
+   ```
+7. **Never fake a result.** Blocked by a captcha, a login, a missing tool or a 🔴 step? Stop and ask the user. A workaround you find is a finding: log it.
 
-- Use the tools and libraries you chose while scouting. Write only the glue between them and the parts nothing else covers.
-- Each external call in the code does what a rehearsed step did: same endpoint, same headers, same parameters that actually worked.
+| Label | Meaning | What you do |
+|---|---|---|
+| 🟢 Rehearse | Read-only and safe | Do it for real |
+| 🟡 Sandbox | Writes, but reversible | Do it in a temp dir, test database or test account |
+| 🔴 Simulate / ask | Irreversible or external (sends, pays, deletes, posts publicly) | Never run it without the user's explicit OK. Verify everything up to the side effect, then ask or simulate |
+| ⚪ Skip | Pure logic, no outside world | Unit test it in Replay |
+| ❓ Blocked | Needs an earlier result, a credential, or a missing tool | Rehearse it later, or ask the user |
+
+**The happy path is not enough.** For each surface, list the flows that apply: happy path; input variations (empty, huge, unicode, wrong format); dependency failure (down, slow, changed layout, rate-limited, auth expired); state (first run, second run, interrupted, two copies at once); user mistakes (wrong args, missing config). Rank them by how likely × how bad, and rehearse from the top. You are done when every ranked flow has a status: rehearsed, sandboxed, simulated, or skipped with a reason.
+
+## Act as it
+
+**Fixing something.** Become the component, then become its fix:
+1. **Be the broken component with its real input.** `parse_date("04/03/2024")` returns `None`, so file 3 drops the row.
+2. **Be the fixed component.** Write by hand, as literals, what it should output: the same row with the date 4 March 2024.
+3. **Feed that to the real neighbours, one call at a time**: file 4 gets the row's price, then file 5 gets the rows for its March total.
+4. **Those hand outputs become the expected values in Replay.**
+
+**Making something new.** Be the whole program on a small sample: fetch the list page, then three items; find each name and price by hand; write the CSV rows you expect.
+
+## Chains
+
+A neighbour that breaks on the corrected data is a chain link, whether you find it while acting as the fix or on replay. In the five-files story, the revived March rows reach file 4, and `price.to_amount("12,50")` crashes on the comma. That crash was hidden until the date fix let the rows through.
+
+A chain means the size is at least full: if you were light, start the marker and the log now. Log the link as its own flow with `Revealed by: <the fix that exposed it>`, for example "Revealed by: S3, file 3 date fix". Then rehearse that link the same way.
+
+More than 3 links means the first fix was wrong: undo it and re-diagnose from Look.
+
+## Helpers and the manager
+
+Send a helper when the size is **full** with slow feedback or a chain, or the size is **helpers**. The session is the manager. Helpers only look.
+
+1. **The manager starts the rehearsal** before spawning: `mkdir -p .rehearsal/fixtures && touch .rehearsal/active`.
+2. **Spawn `rehearse:rehearser`** with the Agent tool. Say what to become and whom to feed: "Become normalize.py with the 04/03/2024 rows from orders.csv. Act as the fixed file and feed its rows to price.py and report.py, one call at a time."
+3. **A helper may look, act as the fix, save fixtures and write the log.** It cannot write code. It returns exactly two lines: the log path and the fixture list. Read the log, not a summary.
+4. **Helpers pass data to each other only through files in `.rehearsal/fixtures/`**, never through prose.
+5. **The manager ends the rehearsal** after the last helper returns: `rm .rehearsal/active`.
+6. **Edit code only when the log shows the hand-made chain working end to end.** Then replay against the fixtures, or send a helper to call the neighbours by hand. Never run the whole thing and hope.
+
+No subagents? Then the session rehearses by itself under the same rules, and owns the marker.
+
+## Build and Replay
+
+Now write the code, and test it with what you saw.
+
+- **End the rehearsal first: `rm .rehearsal/active`.**
+- **Transcribe what worked by hand.** Use the tools and libraries from Scout and write only the glue.
+- Each external call does what a rehearsed step did: same endpoint, headers and parameters.
 - Each failure in the log has handling in the code.
-- Copy the fixtures into the project's test folder (e.g. `tests/fixtures/`).
-- Do not add behavior that was never rehearsed without listing it as an unverified risk.
+- Copy the fixtures into the project's tests (e.g. `tests/fixtures/`). The hand results are the expected values.
+- If the code and the expectation differ, fix the code, not the expectation. Change an expectation only if the log was wrong, and say so.
+- Each library from Scout must pass on the fixtures. If one fails, switch to the next candidate.
+- **Live replay**: run the program once on the same sample you rehearsed and compare with your hand results. A new failure here is a chain link.
+- Behaviour that was never rehearsed goes on the list of unverified risks.
 
-## 7. Replay
-
-1. **Fixture tests.** Saved input → the output you extracted by hand = expected result. Saved failure responses → tests that the program handles them.
-2. **Unit tests** for the ⚪ logic steps.
-3. **Library checks.** Each library chosen while scouting must pass on the real fixtures. If one fails, switch to the next candidate.
-4. **Live replay.** Run the program once on the same sample you rehearsed, and compare its output with your hand results.
-5. If they differ, fix the code, not the expectation. Change the expectation only if your rehearsal log was wrong, and say so.
-
-## 8. Report
+## Report
 
 Tell the user plainly:
-
-- **Reused vs built**: which existing tools and libraries do the work, and what was written by hand and why
-- **Verified for real**: the flows rehearsed live and replayed
+- **Reused vs built**: which existing tools and libraries do the work, and what was written and why
+- **Verified for real**: the flows rehearsed by hand and replayed
 - **Sandboxed / simulated**: what was not done for real, and why
-- **Unverified risks**: things only time will show (scheduled runs over days, layout changes, memory growth), plus anything skipped
-
----
+- **Unverified risks**: what only time will show (runs over days, layout changes), plus anything skipped
 
 ## Log template: `.rehearsal/REHEARSAL.md`
 
+Keep this file as you go; the manager and the tests read it.
+
 ```markdown
-# Rehearsal: <program>
+# Rehearsal: <program or fix>
 
 ## Model
-- Actors:
-- Entry points:
-- Inputs → outputs:
-- Surfaces:
-- State:
-- Needs:
+- Actors / entry points / inputs → outputs / surfaces / state / needs:
 
 ## Scout
 | Need | Rung | Candidate | Checks (alive/used/fits/weight/real) | Verdict |
 |------|------|-----------|--------------------------------------|---------|
-| Fetch page | 2 | site has /api/products JSON | docs + S1 | ✅ use API, no scraping |
 
 ## Plan
 | # | Step | Assumption | Label | Status |
 |---|------|------------|-------|--------|
-| 1 | Fetch product page with curl (as requests) | Static HTML, no bot block | 🟢 | ✅ / ❌ / changed |
 
 ## Flows
-| Flow | Category | Rank | Result | Evidence |
-|------|----------|------|--------|----------|
-| Normal product page | happy | 1 | ✅ price "$1,299.00" | S2, fixtures/item1.html |
+| Flow | Category | Rank | Result | Revealed by | Evidence |
+|------|----------|------|--------|-------------|----------|
+| 04/03/2024 rows kept | happy | 1 | ✅ March total includes them | | S3 |
+| Comma price "12,50" | input | 1 | ❌ to_amount crashes | S3, file 3 date fix | S4, fixtures/price3.txt |
 
 ## Steps
 ### S1: <what you tried>
-- cmd: `curl -sI https://...`
-- saw: `HTTP/2 403`
-- means: blocks default UA
-- next: retry with a browser UA
+- cmd: `python3 -c 'import normalize; print(normalize.parse_date("04/03/2024"))'`
+- saw: `None`
+- means: file 3 cannot read day/month/year dates, so it drops the row
+- next: be the fixed file 3 and feed the row to file 4
 
 ## Plan changes
-- S1 → program must send a browser User-Agent
+- S4 → price.py must accept a comma as the decimal mark
+
+## What I'd change and why
+- normalize.py: read 04/03/2024 as 4 March 2024 (S1, S3)
 
 ## Unverified risks
-- 
+-
 ```
 
 ## Without a guard hook
