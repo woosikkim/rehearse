@@ -170,7 +170,7 @@ with tempfile.TemporaryDirectory() as d:
         "python3 -c 'import runpy; runpy.run_path(\".rehearsal/x.py\")'",
         "python3 -c 'import sys; sys.path.insert(0,\".rehearsal\"); import x'",
         "python3 -c 'getattr(__builtins__, \"exec\")(\"x\")'",
-        "python3 -c 'a=1; b=2; c=3; d=4; e=5; f=6; g=7; h=8; print(a+h)'",
+        "python3 -c 'a=1; b=2; c=3; d=4; e=5; f=6; g=7; h=8; i=9; j=10; k=11; l=12; print(a+l)'",
         "python3 -c 'print(1)'\"; __import__('os').system('x')\"",
         "python3 -I -c 'print(1)'",
         "ruby -r 'json' -e 'loop{}'",
