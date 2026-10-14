@@ -228,6 +228,8 @@ with tempfile.TemporaryDirectory() as d:
     assert run("Write", {"file_path": "/p/scraper.py", "content": ""}, d) == 2
     assert run("Edit", {"file_path": "/p/app.ts", "old_string": "a", "new_string": "b"}, d) == 2
     assert run("Write", {"file_path": "/p/.rehearsal/REHEARSAL.md", "content": ""}, d) == 0
+    assert "writes .rehearsal/log.md itself" in call({"tool_name": "Write", "tool_input": {"file_path": ".rehearsal/log.md"}, "cwd": d}).stderr
+    assert "writes .rehearsal/log.md itself" in bash_err("echo '$ python3 -c x' >> .rehearsal/log.md", d)
     assert run("Write", {"file_path": "/p/.rehearsal/fixtures/a.json", "content": ""}, d) == 0
     assert run("Read", {"file_path": "/p/scraper.py"}, d) == 0
     # Other agents' shapes (best-effort).
@@ -265,10 +267,12 @@ with tempfile.TemporaryDirectory() as d:
     # Missing hook_event_name behaves as PreToolUse.
     assert call({"tool_name": "Bash", "tool_input": {"command": "python3 x.py"}, "cwd": d}).returncode == 2
 
-    # Empty log: marker gone, .rehearsal/ still there, no '### S' step logged yet.
+    # Empty log: marker gone, .rehearsal/ still there, nothing run yet according to the guard's own log.
+    os.remove(j(".rehearsal", "log.md"))
     os.remove(j(".rehearsal", "active"))
     assert run("Write", {"file_path": "a.py", "content": ""}, d) == 2
-    assert "no steps" in call({"tool_name": "Write", "tool_input": {"file_path": "a.py"}, "cwd": d}).stderr
+    assert "nothing has been run" in call({"tool_name": "Write", "tool_input": {"file_path": "a.py"}, "cwd": d}).stderr
+    assert "writes .rehearsal/log.md itself" in bash_err("cat >> .rehearsal/log.md <<'EOF'\n$ curl x\nEOF", d)
     assert bash("cat > a.py <<'EOF'\nx\nEOF", d) == 2
     assert bash("sed -i 's/a/b/' a.py", d) == 2
     assert bash("patch -p1 < x.diff", d) == 2
@@ -277,10 +281,17 @@ with tempfile.TemporaryDirectory() as d:
     assert bash("python3 new.py", d) == 0  # only write channels are checked without a marker
     assert run("Write", {"file_path": "notes.md", "content": ""}, d) == 0
     with open(j(".rehearsal", "REHEARSAL.md"), "w") as f:
-        f.write("# Rehearsal\n\n## Steps\n")
+        f.write("# Rehearsal\n\n### S1: read old.py\n")  # notes do not count
     assert run("Write", {"file_path": "a.py", "content": ""}, d) == 2
-    with open(j(".rehearsal", "REHEARSAL.md"), "a") as f:
-        f.write("### S1 fetch the page\n")
+    touch(j(".rehearsal", "active"))  # marker back up: the guard logs again
+    for reading in ("grep -n x old.py", "sed -n 1,20p old.py; cat notes.md", "ls -la", "git log --oneline -3",
+                    "cat >> .rehearsal/REHEARSAL.md <<'EOF'\n### S2: python3 -c x\nEOF"):
+        logged(reading, tool_response={"stdout": "", "stderr": ""})
+    os.remove(j(".rehearsal", "active"))
+    assert run("Write", {"file_path": "a.py", "content": ""}, d) == 2  # reading was logged, nothing ran
+    touch(j(".rehearsal", "active"))
+    logged("cd sub && /opt/env/bin/python -c 'import oldmod; print(oldmod.f(1))'", tool_response={"stdout": "1", "stderr": ""})
+    os.remove(j(".rehearsal", "active"))
     assert run("Write", {"file_path": "a.py", "content": ""}, d) == 0
     assert bash("cat > a.py <<'EOF'\nx\nEOF", d) == 0
     assert run("Write", {"file_path": "notes.md", "content": ""}, d) == 0

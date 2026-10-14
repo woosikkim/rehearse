@@ -29,7 +29,7 @@ Answer four questions yourself, yes or no:
 Rehearse: <size>, because <reason>. Say light, skip or full to override.
 ```
 
-**Light** is the smallest size, not an exit: the marker and the guard are on, you make at least one real by-hand call and log it as `### S1`, and only then remove the marker and fix-and-try against the fast test. No flows table, no helper. A step runs something and records what came back: a `python3 -c` call, a `curl`, a query. Reading a file is Look, not a step; a log whose only step is "read x.py" is not a rehearsal. You cannot size code you have not seen: for existing code, say the size you expect, start the marker (top of Look) before your first probe, and settle on light only if it turns out to be one place with a fast test.
+**Light** is the smallest size, not an exit: the marker and the guard are on, you make at least one real by-hand call and log it as `### S1`, and only then remove the marker and fix-and-try against the fast test. No flows table, no helper. A step runs something and records what came back: a `python3 -c` call, a `curl`, a query. Reading a file is Look, not a step. The guard enforces this: code edits open only once `.rehearsal/log.md`, which the guard writes, holds a call that ran while the marker was up. You cannot size code you have not seen: for existing code, say the size you expect, start the marker (top of Look) before your first probe, and settle on light only if it turns out to be one place with a fast test.
 
 ## The loop
 
@@ -144,7 +144,7 @@ No subagents? Then the session rehearses by itself under the same rules, and own
 
 Now write the code, and test it with what you saw.
 
-- **End the rehearsal first: `rm .rehearsal/active`.**
+- **End the rehearsal first: `rm .rehearsal/active`.** If the guard then says nothing has been run yet, put the marker back on its own, make one real call, and remove it again.
 - **Transcribe what worked by hand.** Use the tools and libraries from Scout and write only the glue.
 - Each external call does what a rehearsed step did: same endpoint, headers and parameters.
 - Each failure in the log has handling in the code.

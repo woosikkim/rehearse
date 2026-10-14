@@ -3,7 +3,8 @@
 
 SessionStart: print the standing rule. UserPromptSubmit: the word "rehearse" loads the skill.
 PreToolUse: while .rehearsal/active exists, run only what existed before the rehearsal began
-(no new scripts, no new logic, no code writes); once .rehearsal/ exists, code writes need a logged step.
+(no new scripts, no new logic, no code writes); once .rehearsal/ exists, code writes wait until the guard's own
+log shows one call that ran something (a one-liner, a client tool, an existing script); notes do not count.
 PostToolUse / PostToolUseFailure: while the marker exists, append each shell command and its output
 to .rehearsal/log.md.
 
@@ -29,6 +30,9 @@ ONELINER_LANGS = {"python", "py", "node", "ruby", "php"}
 RUNNERS = {"npm": {"run", "start", "exec", "test"}, "pnpm": {"run", "start", "exec", "test"},
            "yarn": {"run", "start", "exec", "test"}, "go": {"run"}, "cargo": {"run"}}
 WRAPPERS = {"sudo", "env", "time", "nice", "command", "exec"}
+# Logged commands that count as having run something; reading (cat, grep, sed, ls) and notes do not.
+EXEC_TOOLS = {"curl", "sqlite3", "psql", "mysql", "mongosh", "redis-cli", "http", "https", "grpcurl", "nc",
+              "ssh", "pytest", "make"}
 # Package launchers run a tool: allowed, but the tool they launch is checked too (npx tsx a.ts is still a script).
 LAUNCHERS = {"npx": None, "bunx": None, "uvx": None, "uv": "run", "pipx": "run", "pnpm": "dlx"}
 VERSION_ARGS = {"--version", "-V", "-v", "version"}
@@ -47,8 +51,11 @@ ACCESS = re.compile(r"\b(exec\w*|spawn\w*|eval|compile|__import__|__builtins__|g
                     r"append\w*|copy\w*|rename\w*|unlink\w*|utime|touch|rmtree|move|symlink|replace|send|Kernel|"
                     r"Open3|FileUtils|IO|File|mainModule|sys\.path|PYTHONPATH|NODE_PATH)\b|%x|require\(\s*[\"']node:|`|\n")
 ONE_SHAPE = "use python3 -c '<calls>' (single quotes, no other flags, optional < fixture; the interpreter may be a full path or follow PATH=...)"
-NO_STEPS = ("rehearsal started but the log has no steps; look first (one call at a time) and log it under "
-            "'### S1', or delete .rehearsal/ if no rehearsal is needed")
+NO_STEPS = ("rehearsal started but nothing has been run yet; while .rehearsal/active exists, make one real call "
+            "the guard can log (python3 -c '...' against existing code, curl, a query, an existing script or test), "
+            "then rm the marker. Reading files and writing notes do not count. If the marker is already down, put it "
+            "back on its own first. Or delete .rehearsal/ entirely if no rehearsal is needed")
+OWN_LOG = "the guard writes .rehearsal/log.md itself; put notes in .rehearsal/REHEARSAL.md"
 SESSION_RULE = ("Before building or fixing anything that depends on something outside the code (a site, a file, "
                 "a service, a database, a device, another part of the program), load the rehearse skill and let it "
                 "size the job. The word 'rehearse' in a prompt always means load it.")
@@ -110,6 +117,41 @@ def resolve_module(name, cur, js=False):
     return next((base + t for t in tails if os.path.isfile(base + t)), None)  # None: stdlib or installed
 
 
+def segments(cmd):
+    """Blank quoted text without changing its length, cut on separators found in the blanked text, return raw slices."""
+    bare = QUOTED.sub(lambda q: q.group(0)[0] + "_" * (len(q.group(0)) - 2) + q.group(0)[-1], cmd)
+    cuts = [0] + [x for s in SEPARATORS.finditer(bare) for x in s.span()] + [len(cmd)]
+    return bare, [cmd[a:b] for a, b in zip(cuts[::2], cuts[1::2])]
+
+
+def executed(cmd):
+    """True if some segment of a logged command ran something, as opposed to reading or taking notes."""
+    for seg in segments(HEREDOC.sub(r"<<\3", cmd))[1]:
+        if ONELINER.match(seg):
+            return True
+        try:
+            toks = tokens(seg)
+        except ValueError:
+            toks = seg.split()
+        i = prog_index(toks)
+        if i >= len(toks):
+            continue
+        prog = toks[i]
+        name = re.sub(r"[\d.]+$", "", os.path.basename(prog)) or prog
+        args = [a for a in toks[i + 1:] if not a.startswith("-")]
+        if {name, os.path.basename(prog)} & EXEC_TOOLS or prog.startswith("./") or os.path.splitext(prog)[1] in CODE_EXT:
+            return True
+        if name in INTERPRETERS and args and (os.path.splitext(args[0])[1] in CODE_EXT or toks[i + 1:i + 2] == ["-m"]):
+            return True
+        if name in RUNNERS and args and args[0] in RUNNERS[name]:
+            return True
+    return False
+
+
+def has_executed_step(d):
+    return any(executed(ln[2:]) for ln in read(os.path.join(d, "log.md")).splitlines() if ln.startswith("$ "))
+
+
 def tokens(seg):
     lx = shlex.shlex(seg, posix=True, punctuation_chars=True)
     lx.whitespace_split = True
@@ -135,14 +177,11 @@ def check_shell(cmd, cwd, m, full=True):
             return "unbalanced quotes; write the command as one plain line"
         if re.search(r'"(?:\\.|[^"\\])*?(?:\$\(|`)', cmd):
             return "command substitution inside double quotes; run the inner command on its own"
-    # Blank quoted text without changing its length, cut segments on the blanked text, check the raw slices.
-    bare = QUOTED.sub(lambda q: q.group(0)[0] + "_" * (len(q.group(0)) - 2) + q.group(0)[-1], cmd)
+    bare, segs = segments(cmd)
     if full and re.search(r"(?<![&>|])&(?![&>])", bare):
         return "background job (&); run one command at a time and wait for it"
-    cuts = [0] + [x for s in SEPARATORS.finditer(bare) for x in s.span()] + [len(cmd)]
     cur = cwd
-    for start, end in zip(cuts[::2], cuts[1::2]):
-        seg = cmd[start:end]
+    for seg in segs:
         try:
             toks = tokens(seg)
         except ValueError:
@@ -201,6 +240,8 @@ def check_shell_writes(toks):
     if prog == "curl" and any(re.fullmatch(r"-[A-Za-z]*O", a) for a in args):  # curl -O saves under the URL's file name
         targets += [a.rsplit("/", 1)[-1] for a in args if not a.startswith("-")]
     for t in targets:
+        if os.path.basename(t) == "log.md":
+            return OWN_LOG
         if t != "/dev/null" and os.path.splitext(t)[1] in CODE_EXT:
             return (f"writing code file '{t}' through the shell; code is written in the build phase, "
                     "after rm .rehearsal/active. Save a code-like fixture as .txt.")
@@ -279,6 +320,8 @@ def check_write(tool_input, m, empty_log):
     paths = [tool_input.get(k) for k in ("file_path", "path", "notebook_path")]
     paths += re.findall(r"\*\*\* (?:Add|Update) File: (\S+?)(?:\\n|\s)", text)  # apply_patch format
     for p in filter(None, paths):
+        if os.path.basename(str(p)) == "log.md":
+            return OWN_LOG
         if os.path.splitext(str(p))[1] not in CODE_EXT:
             continue
         if m:
@@ -332,7 +375,7 @@ def main():
     if event != "PreToolUse":
         return 0
     d = rehearsal_dir(payload)
-    empty_log = bool(d) and not re.search(r"^### S\d", read(os.path.join(d, "REHEARSAL.md")), re.M)
+    empty_log = bool(d) and not has_executed_step(d)
     cwd = payload.get("cwd") or os.getcwd()
     reason = None
     if tool in SHELL_TOOLS:
