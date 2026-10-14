@@ -40,13 +40,13 @@ QUOTED = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 SEPARATORS = re.compile(r"&&|\|\||;|\||\n|\$\(|\(|\)|`")
 # ponytail: one strict one-liner shape plus keyword filters, frozen as of 0.3.0;
 # upgrade path is ast.parse for Python, or "existing" = committed to git.
-ONELINER = re.compile(r"^\s*(?:(python3?(?:\.\d+)?)\s+-c|node\s+-[ep]|ruby\s+-e)\s+'([^']*)'\s*(?:<\s*\S+\s*)?$")
+ONELINER = re.compile(r"^\s*(?:PATH=\S+\s+)?(?:\S*/)?(?:(python3?(?:\.\d+)?)\s+-c|node\s+-[ep]|ruby\s+-e)\s+'([^']*)'\s*(?:<\s*\S+\s*)?$")
 CONTROL = re.compile(r"\b(for|while|if|elif|else|def|function|fn|class|lambda|try|except|catch|finally|with)\b|=>|\n")
 ACCESS = re.compile(r"\b(exec\w*|spawn\w*|eval|compile|__import__|__builtins__|getattr|importlib|runpy|subprocess|"
                     r"child_process|worker_threads|vm|os|fs|shutil|pathlib|system|popen|chdir|open|write\w*|"
                     r"append\w*|copy\w*|rename\w*|unlink\w*|utime|touch|rmtree|move|symlink|replace|send|Kernel|"
                     r"Open3|FileUtils|IO|File|mainModule|sys\.path|PYTHONPATH|NODE_PATH)\b|%x|require\(\s*[\"']node:|`|\n")
-ONE_SHAPE = "use python3 -c '<one call>' (single quotes, no other flags, optional < fixture)"
+ONE_SHAPE = "use python3 -c '<calls>' (single quotes, no other flags, optional < fixture; the interpreter may be a full path or follow PATH=...)"
 NO_STEPS = ("rehearsal started but the log has no steps; look first (one call at a time) and log it under "
             "'### S1', or delete .rehearsal/ if no rehearsal is needed")
 SESSION_RULE = ("Before building or fixing anything that depends on something outside the code (a site, a file, "

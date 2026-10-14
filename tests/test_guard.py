@@ -89,6 +89,9 @@ with tempfile.TemporaryDirectory() as d:
         "cd sub && python3 main.py",
         # Segmentation.
         "python3 -c 'from oldmod import f; print(f(1))'",
+        "/opt/env/bin/python -c 'from oldmod import f; print(f(1))'",
+        "PATH=/opt/env/bin:$PATH python3 -c 'from oldmod import f; print(f(1))'",
+        "$HOME/.venv/bin/python3.11 -c 'import oldmod; print(oldmod.f(1))'",
         "echo 'a; (b' && python3 old.py",
         "curl x -H 'a > b.py'",
         "cmd 2>&1",
@@ -144,6 +147,7 @@ with tempfile.TemporaryDirectory() as d:
         "python3 -c \"print(1)\" old.py",
         "node -e 'x' old.js",
         "PYTHONPATH=.rehearsal python3 -c 'import x'",
+        "PYTHONPATH=.rehearsal /opt/env/bin/python -c 'import x'",
         # Segmentation.
         "echo x > 'a b.py'",
         "echo x>probe.py",
