@@ -53,7 +53,7 @@ mkdir -p .rehearsal/fixtures && touch .rehearsal/active
 
 **Fixing something that exists.**
 1. **Reproduce once.** Run what shows the problem one time and save the result as a fixture (a fixture is a saved real input or output): `python3 main.py > .rehearsal/fixtures/before.txt`.
-2. **Locate.** Follow the stack trace, the logs, or a search (`grep -n "def parse_date" *.py`) to where it goes wrong, and read the code there.
+2. **Locate.** Follow the stack trace, the logs, or a search (`grep -n "def parse_date" *.py`) to where it goes wrong, and read the code there. If the report's recipe needs new code (a dummy class, a test app, a script), do not write it: find a question the existing code can answer about the same thing, such as building the real object and asking what type or value it has.
 3. **Pick the component to become**: the one where good input turns into wrong output. In the five-files story it is file 3, which drops three March rows because their dates are written `04/03/2024`.
 
 **Making something new.** *Scout first.* Most of what programs need already exists. Go down this ladder for the whole job, then for each need left, and stop at the first rung that holds:
@@ -103,7 +103,7 @@ A candidate is an assumption too. Rehearse command-line tools by hand; save fixt
 
 **The happy path is not enough.** For each surface, list the flows that apply: happy path; input variations (empty, huge, unicode, wrong format); dependency failure (down, slow, changed layout, rate-limited, auth expired); state (first run, second run, interrupted, two copies at once); user mistakes (wrong args, missing config). Rank them by how likely × how bad, and rehearse from the top. You are done when every ranked flow has a status: rehearsed, sandboxed, simulated, or skipped with a reason.
 
-**For a fix, the variations are the other shapes the same input can take.** The ticket's example is one shape. Before you call the cause found, type the same thing two or three more ways: the optional or nested form, the empty one, the one written at a different level. A variation you can name, you rehearse: if your report would say "untested" or "not covered" about something you could call in one line, go back and call it. "Not covered" is only for what needs a credential, a missing tool or a 🔴 step.
+**For a fix, the variations are the other shapes the same input can take.** The ticket's example is one shape. Before you call the cause found, type the same thing two or three more ways: the optional or nested form, the empty one, the one written at a different level. A variation you can name, you rehearse: if your report would say "untested" or "not covered" about something you could call in one line, go back and call it. A variation that gives the wrong answer is part of the bug, not a footnote: fix it too, or say in the report why you chose not to. "Not covered" is only for what needs a credential, a missing tool or a 🔴 step.
 
 ## Act as it
 
