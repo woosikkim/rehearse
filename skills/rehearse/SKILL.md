@@ -1,6 +1,6 @@
 ---
 name: rehearse
-description: Use BEFORE writing or changing code that depends on something outside the code - a site, an API, a file, a database, a device, a service, or another part of the same program. Covers new programs (scraper, bot, API client, command-line tool, file converter, sync job, data pipeline) and fixes or changes to existing code, in any language, even small or "quick" ones. Do not write code and run it to see what happens. First size the job, then do it by hand one call at a time, act as the fixed file or the whole program, log what really happens, and scout for existing tools so less gets built. Then build from the verified steps and replay them as tests. The word "rehearse" in a prompt always means load this skill.
+description: Use BEFORE writing or changing code that depends on something outside the code - a site, an API, a file, a database, a device, a service, or another part of the same program. Covers new programs (scraper, bot, API client, command-line tool, file converter, sync job, data pipeline) and fixes or changes to existing code, in any language, even small or "quick" ones. Do not write code and run it to see what happens. Say the size first (skip only when there is nothing to run), then do it by hand one call at a time, act as the fixed file or the whole program, log what really happens, and scout for existing tools so less gets built. Then build from the verified steps and replay them as tests. The word "rehearse" in a prompt always means load this skill.
 ---
 
 # Rehearse
@@ -9,27 +9,21 @@ description: Use BEFORE writing or changing code that depends on something outsi
 
 ## Size it first
 
-Answer four questions yourself, yes or no:
-
-1. Does the job touch the outside world (a site, a file, a service, a database, a device, another part of the program)?
-2. Is there a fast way to see the problem, like a test that fails in seconds?
-3. Is it one place, or a chain across files or services?
-4. Is feedback slow (long runs, deploys, live services) or the codebase big?
+One question decides it: **is there anything to run before the change?** A test, a command, a call, a page, a query, another file's function. If yes, the size is full. If there is truly nothing to run (a rename, styling, a comment, a type annotation), the size is skip. A reported bug or a change in behaviour always has something to run, so it is never skip.
 
 | Size | When | What you do |
 |---|---|---|
-| skip | Nothing outside the code: pure logic, a refactor, styling | Write normal tests |
-| light | One place, and a fast way to see the problem | The marker and the guard, at least one by-hand call run and logged, then fix-and-try. No flows table, no helper. A second file or service means full |
-| full | Outside world, and no fast way to see it | The whole loop below, with a log |
-| helpers | A chain, with slow feedback or a big codebase | The whole loop, with helpers doing the looking |
+| skip | Nothing to run: a rename, styling, docs, a type annotation | Write normal tests |
+| full | Everything else, including bugs that look like one line | The whole loop below, with a log |
+| helpers | Full, and Look shows a long chain, slow feedback or a big codebase | The whole loop, with helpers doing the looking. Decided after Look, never up front |
 
-**Your first line of output is the size**, in exactly this shape, even when the size is skip. Then carry on without waiting. If the user later says light, skip or full, switch to that size.
+**Your first line of output is the size**, in exactly this shape, even when the size is skip. Then carry on without waiting. If the user later says skip or full, switch to that size.
 
 ```
-Rehearse: <size>, because <reason>. Say light, skip or full to override.
+Rehearse: <size>, because <reason>. Say skip or full to override.
 ```
 
-**Light** is the smallest size, not an exit: the marker and the guard are on, you make at least one real by-hand call and log it as `### S1`, and only then remove the marker and fix-and-try against the fast test. No flows table, no helper. A step runs something and records what came back: a `python3 -c` call, a `curl`, a query. Reading a file is Look, not a step. The guard enforces this: code edits open only once `.rehearsal/log.md`, which the guard writes, holds a call that ran while the marker was up. You cannot size code you have not seen: for existing code, say the size you expect, start the marker (top of Look) before your first probe, and settle on light only if it turns out to be one place with a fast test.
+**There is no light size.** A bug that looks like one line still gets the whole loop: marker, reproduce by hand, log, fix, replay. The cost is a few extra calls. What it buys is a fix that answers what you saw run, not what you read: reading alone finds a plausible cause, and a plausible cause is often the neighbouring bug. A step runs something and records what came back: a `python3 -c` call, a `curl`, a query. Reading a file is Look, not a step. The guard enforces this: code edits open only once `.rehearsal/log.md`, which the guard writes, holds a call that ran while the marker was up. Start the marker before your first probe; you cannot judge code you have not run.
 
 ## The loop
 
@@ -46,7 +40,7 @@ It is the same loop whether you fix something that exists or make something new.
 | Build | Change only what the hand-made fix showed | Transcribe the steps that worked |
 | Replay | Saved rows are the inputs; the hand outputs are the expected values | Saved pages are the inputs; the hand-written rows are the expected CSV |
 | Chains | The fixed rows make file 4 crash on "12,50": revealed by the date fix | The hand-written rows break the CSV writer on a name with a comma: revealed by the extract step |
-| Self-sizing | Light if a test already fails in seconds; full or helpers when the bug crosses files | Light if one call to a known API does the job; full for a real site |
+| Size | Full, even when a test already fails in seconds; helpers when Look shows a long chain | Full, even for one call to a known API; helpers for a big site with many surfaces |
 | Helpers | A helper becomes file 3; the session edits only after the log shows it working | A helper pokes the site and saves pages; the session builds from the log |
 
 ## Look
@@ -123,13 +117,13 @@ A candidate is an assumption too. Rehearse command-line tools by hand; save fixt
 
 A neighbour that breaks on the corrected data is a chain link, whether you find it while acting as the fix or on replay. In the five-files story, the revived March rows reach file 4, and `price.to_amount("12,50")` crashes on the comma. That crash was hidden until the date fix let the rows through.
 
-A chain means the size is at least full: if you were light, start the marker and the log now. Log the link as its own flow with `Revealed by: <the fix that exposed it>`, for example "Revealed by: S3, file 3 date fix". Then rehearse that link the same way.
+Log the link as its own flow with `Revealed by: <the fix that exposed it>`, for example "Revealed by: S3, file 3 date fix". Then rehearse that link the same way.
 
 More than 3 links means the first fix was wrong: undo it and re-diagnose from Look.
 
 ## Helpers and the manager
 
-Send a helper when the size is **full** with slow feedback or a chain, or the size is **helpers**. The session is the manager. Helpers only look.
+Send a helper when Look shows a long chain, slow feedback or a big codebase: that is the **helpers** size, chosen after Look. The session is the manager. Helpers only look.
 
 1. **The manager starts the rehearsal** before spawning: `mkdir -p .rehearsal/fixtures && touch .rehearsal/active`.
 2. **Spawn `rehearse:rehearser`** with the Agent tool. Say what to become and whom to feed: "Become normalize.py with the 04/03/2024 rows from orders.csv. Act as the fixed file and feed its rows to price.py and report.py, one call at a time."
