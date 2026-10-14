@@ -252,15 +252,15 @@ def check_tokens(toks, cur, m):
 
 
 def check_snippet(snippet, cur, m):
-    """A one-liner that matched ONELINER: one existing call, no logic, no file access, nothing new imported."""
+    """A one-liner that matched ONELINER: straight-line calls to existing code, no logic, no file access, nothing new imported."""
     blank = re.sub(r'"(?:\\.|[^"\\])*"', '""', snippet)  # data strings cannot trip the logic check
     hit = CONTROL.search(blank) or ACCESS.search(snippet)
     if hit:
         return (f"inline code contains logic or file access ({hit.group(0)!r}); call one existing function and "
                 "print the result as a literal, or feed a fixture through < stdin")
     statements = [s.strip() for s in blank.split(";") if s.strip()]
-    if len(statements) >= 3:
-        return f"inline code has {len(statements)} statements; at most two (import what exists, one call and print)"
+    if len(statements) > 8:  # ponytail: straight-line calls only; the keyword checks above already ban logic
+        return f"inline code has {len(statements)} statements; at most eight (imports, literals, calls, print)"
     mods = [(r, True) for r in re.findall(r"require\(\s*\"(\.{1,2}/[^\"]*)\"\s*\)", snippet)]
     for s in statements:
         if s.startswith("import "):

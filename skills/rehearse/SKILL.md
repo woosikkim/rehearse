@@ -19,7 +19,7 @@ Answer four questions yourself, yes or no:
 | Size | When | What you do |
 |---|---|---|
 | skip | Nothing outside the code: pure logic, a refactor, styling | Write normal tests |
-| light | One place, and a fast way to see the problem | The marker and the guard, at least one by-hand step logged, then fix-and-try. No flows table, no helper. A second file or service means full |
+| light | One place, and a fast way to see the problem | The marker and the guard, at least one by-hand call run and logged, then fix-and-try. No flows table, no helper. A second file or service means full |
 | full | Outside world, and no fast way to see it | The whole loop below, with a log |
 | helpers | A chain, with slow feedback or a big codebase | The whole loop, with helpers doing the looking |
 
@@ -29,7 +29,7 @@ Answer four questions yourself, yes or no:
 Rehearse: <size>, because <reason>. Say light, skip or full to override.
 ```
 
-**Light** is the smallest size, not an exit: the marker and the guard are on, you make at least one real by-hand call and log it as `### S1`, and only then remove the marker and fix-and-try against the fast test. No flows table, no helper. You cannot size code you have not seen: for existing code, say the size you expect, start the marker (top of Look) before your first probe, and settle on light only if it turns out to be one place with a fast test.
+**Light** is the smallest size, not an exit: the marker and the guard are on, you make at least one real by-hand call and log it as `### S1`, and only then remove the marker and fix-and-try against the fast test. No flows table, no helper. A step runs something and records what came back: a `python3 -c` call, a `curl`, a query. Reading a file is Look, not a step; a log whose only step is "read x.py" is not a rehearsal. You cannot size code you have not seen: for existing code, say the size you expect, start the marker (top of Look) before your first probe, and settle on light only if it turns out to be one place with a fast test.
 
 ## The loop
 
@@ -81,12 +81,12 @@ A candidate is an assumption too. Rehearse command-line tools by hand; save fixt
 
 ## Rules of the hand
 
-1. **One action per call, no new logic.** Each step is one direct command or tool call: no script files, loops, conditions or new functions. To call code that already exists, use one console line `python3 -c '<import what exists; one call; print>'`:
+1. **One action per call, no new logic.** Each step is one direct command or tool call: no script files, loops, conditions or new functions. To call code that already exists, use one console line `python3 -c '<import what exists; set literals; call; print>'`:
    ```
    python3 -c 'import normalize; print(normalize.parse_date("04/03/2024"))'
    python3 -c 'import sys, price; print(price.to_amount(sys.stdin.read()))' < .rehearsal/fixtures/price3.txt
    ```
-   The same shape works with `node -e`, `node -p` and `ruby -e`. Single quotes only, at most two statements, and a fixture fed in with `< file`.
+   The same shape works with `node -e`, `node -p` and `ruby -e`. Single quotes only, straight-line statements (up to eight: imports, literal values, calls, print; no `for`, `if`, `def`, `with`), and a fixture fed in with `< file`. A setup that needs more than that is a sign to save a fixture and call the next layer down.
 2. **Hand-made data are literals.** Type the value you mean, `"12.50"`, not code that computes it: no comprehensions, no `.replace`. Save code-like fixtures as `.txt` (`app.js.txt`).
 3. **Observe before you act.** Write down what you saw, then choose the next step from that. "Got 403 → retry with a browser User-Agent" is your decision, and later it becomes code.
 4. **Match the program's tool.** If the program will use `requests` or `fetch`, rehearse with `curl` and the same headers, not a tool that renders the page. If it drives a browser, use a browser tool.
