@@ -80,7 +80,7 @@ A candidate is an assumption too. Rehearse command-line tools by hand; save fixt
    python3 -c 'import normalize; print(normalize.parse_date("04/03/2024"))'
    python3 -c 'import sys, price; print(price.to_amount(sys.stdin.read()))' < .rehearsal/fixtures/price3.txt
    ```
-   The same shape works with `node -e`, `node -p` and `ruby -e`, and the interpreter may be a full path (`/opt/env/bin/python -c '…'`) or follow `PATH=…` when the project lives in a virtualenv or conda env. Single quotes only, straight-line statements (up to eight: imports, literal values, calls, print; no `for`, `if`, `def`, `with`), and a fixture fed in with `< file`. A setup that needs more than that is a sign to save a fixture and call the next layer down.
+   The same shape works with `node -e`, `node -p` and `ruby -e`, and the interpreter may be a full path (`/opt/env/bin/python -c '…'`) or follow `PATH=…` when the project lives in a virtualenv or conda env. If the bare interpreter lacks the project's dependencies, find the one that has them first (`.venv/bin/python`, `ls /opt/*/envs`, `conda env list`) and use it by full path for every call, including the tests. Single quotes only, straight-line statements (up to eight: imports, literal values, calls, print; no `for`, `if`, `def`, `with`), and a fixture fed in with `< file`. A setup that needs more than that is a sign to save a fixture and call the next layer down.
 2. **Hand-made data are literals.** Type the value you mean, `"12.50"`, not code that computes it: no comprehensions, no `.replace`. Save code-like fixtures as `.txt` (`app.js.txt`).
 3. **Observe before you act.** Write down what you saw, then choose the next step from that. "Got 403 → retry with a browser User-Agent" is your decision, and later it becomes code.
 4. **Match the program's tool.** If the program will use `requests` or `fetch`, rehearse with `curl` and the same headers, not a tool that renders the page. If it drives a browser, use a browser tool.
@@ -102,6 +102,8 @@ A candidate is an assumption too. Rehearse command-line tools by hand; save fixt
 | ❓ Blocked | Needs an earlier result, a credential, or a missing tool | Rehearse it later, or ask the user |
 
 **The happy path is not enough.** For each surface, list the flows that apply: happy path; input variations (empty, huge, unicode, wrong format); dependency failure (down, slow, changed layout, rate-limited, auth expired); state (first run, second run, interrupted, two copies at once); user mistakes (wrong args, missing config). Rank them by how likely × how bad, and rehearse from the top. You are done when every ranked flow has a status: rehearsed, sandboxed, simulated, or skipped with a reason.
+
+**For a fix, the variations are the other shapes the same input can take.** The ticket's example is one shape. Before you call the cause found, type the same thing two or three more ways: the optional or nested form, the empty one, the one written at a different level. A variation you can name, you rehearse: if your report would say "untested" or "not covered" about something you could call in one line, go back and call it. "Not covered" is only for what needs a credential, a missing tool or a 🔴 step.
 
 ## Act as it
 
@@ -146,7 +148,8 @@ Now write the code, and test it with what you saw.
 - If the code and the expectation differ, fix the code, not the expectation. Change an expectation only if the log was wrong, and say so.
 - Each library from Scout must pass on the fixtures. If one fails, switch to the next candidate.
 - **Live replay**: run the program once on the same sample you rehearsed and compare with your hand results. A new failure here is a chain link.
-- Behaviour that was never rehearsed goes on the list of unverified risks.
+- Behaviour that was never rehearsed goes on the list of unverified risks. Anything you could still call in one line does not belong there: call it.
+- **Leave `.rehearsal/` in place when you are done.** The log is the evidence; the user decides when to delete it.
 
 ## Report
 
@@ -154,7 +157,7 @@ Tell the user plainly:
 - **Reused vs built**: which existing tools and libraries do the work, and what was written and why
 - **Verified for real**: the flows rehearsed by hand and replayed
 - **Sandboxed / simulated**: what was not done for real, and why
-- **Unverified risks**: what only time will show (runs over days, layout changes), plus anything skipped
+- **Unverified risks**: what only time will show (runs over days, layout changes), plus anything skipped with its reason. Never a variation you could have typed
 
 ## Log template: `.rehearsal/REHEARSAL.md`
 
