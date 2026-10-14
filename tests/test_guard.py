@@ -333,6 +333,8 @@ with tempfile.TemporaryDirectory() as d:
     assert ran("python3 -m pytest tests -q", "5 passed, 1 xfailed in 0.4s").returncode == 0
     assert stop() == ""  # last run is green
     assert ran("pytest -k foo", "Ran 3 tests\n\nOK").returncode == 0 and stop() == ""
+    assert ran("git stash -q; pytest -q | tail -2; git stash pop -q", "2 failed in 0.3s").returncode == 0
+    assert stop() == ""  # a red baseline run with the change stashed is deliberate
     assert "tests.log" in os.listdir(os.path.join(d, ".rehearsal"))
     shutil.rmtree(os.path.join(d, ".rehearsal"))
     assert stop() == ""  # no rehearsal folder: never blocks

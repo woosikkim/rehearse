@@ -397,7 +397,8 @@ def main():
         return 0
     if event == "Stop":
         last = None if payload.get("stop_hook_active") or not d else last_test_run(d)
-        if last and RED.search(last[1]):
+        # A baseline check (git stash ... run tests ... git stash pop) is red on purpose: not a hand-back.
+        if last and RED.search(last[1]) and "git stash" not in last[0]:
             print(json.dumps({"decision": "block", "reason": NOT_DONE.format(cmd=last[0][:200])}))
         return 0
     if event != "PreToolUse":
