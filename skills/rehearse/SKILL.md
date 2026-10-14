@@ -19,7 +19,7 @@ Answer four questions yourself, yes or no:
 | Size | When | What you do |
 |---|---|---|
 | skip | Nothing outside the code: pure logic, a refactor, styling | Write normal tests |
-| light | One place, and a fast way to see the problem | A few by-hand steps inline. The moment a second file or service is involved, switch to full: start the marker and the log |
+| light | One place, and a fast way to see the problem | The marker and the guard, at least one by-hand step logged, then fix-and-try. No flows table, no helper. A second file or service means full |
 | full | Outside world, and no fast way to see it | The whole loop below, with a log |
 | helpers | A chain, with slow feedback or a big codebase | The whole loop, with helpers doing the looking |
 
@@ -29,7 +29,7 @@ Answer four questions yourself, yes or no:
 Rehearse: <size>, because <reason>. Say light, skip or full to override.
 ```
 
-**Light** means a few by-hand steps inline, no log file, no helper. When a fast failing test exists, a fast failing test beats rehearsing: fix-and-try against it is the right tool. You cannot size code you have not seen: for existing code, say the size you expect, start the marker (top of Look) before your first probe, and drop to light afterwards (`rm .rehearsal/active`) only if it turns out to be one place with a fast test.
+**Light** is the smallest size, not an exit: the marker and the guard are on, you make at least one real by-hand call and log it as `### S1`, and only then remove the marker and fix-and-try against the fast test. No flows table, no helper. You cannot size code you have not seen: for existing code, say the size you expect, start the marker (top of Look) before your first probe, and settle on light only if it turns out to be one place with a fast test.
 
 ## The loop
 
@@ -51,7 +51,7 @@ It is the same loop whether you fix something that exists or make something new.
 
 ## Look
 
-Start the rehearsal. Run this as its own call, before anything else. The guard checks each call only once the marker exists.
+Start the rehearsal, for every size except skip. Run this as its own call, before anything else. The guard checks each call only once the marker exists.
 
 ```
 mkdir -p .rehearsal/fixtures && touch .rehearsal/active
