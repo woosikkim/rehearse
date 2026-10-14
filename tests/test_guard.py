@@ -1,6 +1,7 @@
 """Self-check for hooks/guard.py. Run: python3 tests/test_guard.py"""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -311,6 +312,31 @@ assert nudged("Rehearse: fix the missing March orders")
 assert not nudged("Build me a small scraper for example.com")
 assert not nudged("what does this function do?")
 assert not nudged("fix the typo in README")
+# Stop hook: while .rehearsal/ exists, a red last test run blocks finishing once; green or no run never blocks.
+with tempfile.TemporaryDirectory() as d:
+    os.makedirs(os.path.join(d, ".rehearsal"))
+    def ran(cmd, out):
+        return call({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": d,
+                     "tool_response": {"stdout": out, "stderr": ""}})
+    def stop(**extra):
+        return call({"hook_event_name": "Stop", "cwd": d, **extra}).stdout
+    assert stop() == ""  # no test run yet
+    assert ran("grep -n x old.py", "FAILED to find").returncode == 0  # not a test command, not logged
+    assert stop() == ""
+    assert ran("python3 -m pytest tests -q", "3 passed, 2 failed in 0.5s").returncode == 0
+    assert '"block"' in stop() and "2 failed" not in stop() and "pytest" in stop()
+    assert stop(stop_hook_active=True) == ""  # one forced retry only
+    assert ran("python tests/runtests.py admin_filters", "Ran 10 tests\n\nFAILED (failures=1)").returncode == 0
+    assert '"block"' in stop()
+    assert ran("npm test", "Tests:       1 failed, 4 total").returncode == 0 and '"block"' in stop()
+    assert ran("go test ./...", "--- FAIL: TestX\nFAIL").returncode == 0 and '"block"' in stop()
+    assert ran("python3 -m pytest tests -q", "5 passed, 1 xfailed in 0.4s").returncode == 0
+    assert stop() == ""  # last run is green
+    assert ran("pytest -k foo", "Ran 3 tests\n\nOK").returncode == 0 and stop() == ""
+    assert "tests.log" in os.listdir(os.path.join(d, ".rehearsal"))
+    shutil.rmtree(os.path.join(d, ".rehearsal"))
+    assert stop() == ""  # no rehearsal folder: never blocks
+
 # Fail open: a payload we do not understand never blocks and never exits 1.
 assert call("not json").returncode == 0
 assert call("42").returncode == 0

@@ -6,7 +6,8 @@ PreToolUse: while .rehearsal/active exists, run only what existed before the reh
 (no new scripts, no new logic, no code writes); once .rehearsal/ exists, code writes wait until the guard's own
 log shows one call that ran something (a one-liner, a client tool, an existing script); notes do not count.
 PostToolUse / PostToolUseFailure: while the marker exists, append each shell command and its output
-to .rehearsal/log.md.
+to .rehearsal/log.md; while .rehearsal/ exists, append test runs to .rehearsal/tests.log.
+Stop: while .rehearsal/ exists and the last logged test run shows failures, refuse to finish, once.
 
 Reads a hook payload (JSON) on stdin. Exit 2 = block (reason on stderr), 0 = allow. Never exits 1.
 Tool names cover Claude Code; the others are best-effort for agents with similar hooks.
@@ -56,6 +57,15 @@ NO_STEPS = ("rehearsal started but nothing has been run yet; while .rehearsal/ac
             "then rm the marker. Reading files and writing notes do not count. If the marker is already down, put it "
             "back on its own first. Or delete .rehearsal/ entirely if no rehearsal is needed")
 OWN_LOG = "the guard writes .rehearsal/log.md itself; put notes in .rehearsal/REHEARSAL.md"
+# Test runners whose output the Stop hook reads, and what a red run looks like in that output.
+TEST_CMD = re.compile(r"(?:^|[\s;&|/])(?:pytest|py\.test|runtests\.py|manage\.py test|-m unittest|-m pytest|tox|nose2?|"
+                      r"npm test|pnpm test|yarn test|jest|mocha|vitest|go test|cargo test|make test|rspec|rake test|"
+                      r"phpunit|mvn test|gradle test|dotnet test)\b")
+RED = re.compile(r"\b[1-9]\d* (?:failed|errors?)\b|FAILED \(|^FAILED\b|^FAIL\b|--- FAIL|Tests:\s+[1-9]\d* failed|"
+                 r"error during collection|^ERROR[: ]|AssertionError|Traceback \(most recent call last\)", re.M)
+NOT_DONE = ("rehearse: your last test run shows failures: `{cmd}`. A test that passed before your change and fails after it "
+            "means the fix is not done. Fix the cause or undo your change (git stash, git checkout -- <file>), run the "
+            "tests again, and only then report what is and is not fixed.")
 SESSION_RULE = ("Before building or fixing anything that depends on something outside the code (a site, a file, "
                 "a service, a database, a device, another part of the program), load the rehearse skill and let it "
                 "size the job. The word 'rehearse' in a prompt always means load it.")
@@ -331,7 +341,7 @@ def check_write(tool_input, m, empty_log):
     return None
 
 
-def log_command(payload, m):
+def log_command(payload, path):
     cmd = shell_text((payload.get("tool_input") or {}).get("command"))
     out = payload.get("tool_response")
     if payload.get("hook_event_name") == "PostToolUseFailure":
@@ -344,9 +354,18 @@ def log_command(payload, m):
         cmd, out = rx.sub(sub, cmd), rx.sub(sub, out)
     cmd = REDACT_USER[0].sub(REDACT_USER[1], cmd)
     cmd, out = REDACT_URL[0].sub(REDACT_URL[1], cmd), REDACT_URL[0].sub(REDACT_URL[1], out)
-    lines = [ln[:400] for ln in out.splitlines()[:40]]
-    with open(os.path.join(os.path.dirname(m), "log.md"), "a", encoding="utf-8") as f:
+    lines = [ln[:400] for ln in out.splitlines() if ln.strip()][:40]  # no blank lines: entries are blank-line separated
+    with open(path, "a", encoding="utf-8") as f:
         f.write("\n".join([f"$ {cmd}"] + lines) + "\n\n")
+
+
+def last_test_run(d):
+    """(command, output) of the last entry in .rehearsal/tests.log, or None."""
+    entries = [e for e in read(os.path.join(d, "tests.log")).split("\n\n") if e.startswith("$ ")]
+    if not entries:
+        return None
+    cmd, _, out = entries[-1].partition("\n")
+    return cmd[2:], out
 
 
 def main():
@@ -368,13 +387,21 @@ def main():
         return 0
     tool = str(payload.get("tool_name") or "")
     tin = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    d = rehearsal_dir(payload)
     if event in {"PostToolUse", "PostToolUseFailure"}:
-        if m and tool in SHELL_TOOLS:
-            log_command(payload, m)
+        if tool in SHELL_TOOLS:
+            if m:
+                log_command(payload, os.path.join(os.path.dirname(m), "log.md"))
+            if d and TEST_CMD.search(shell_text(tin.get("command"))):
+                log_command(payload, os.path.join(d, "tests.log"))
+        return 0
+    if event == "Stop":
+        last = None if payload.get("stop_hook_active") or not d else last_test_run(d)
+        if last and RED.search(last[1]):
+            print(json.dumps({"decision": "block", "reason": NOT_DONE.format(cmd=last[0][:200])}))
         return 0
     if event != "PreToolUse":
         return 0
-    d = rehearsal_dir(payload)
     empty_log = bool(d) and not has_executed_step(d)
     cwd = payload.get("cwd") or os.getcwd()
     reason = None
