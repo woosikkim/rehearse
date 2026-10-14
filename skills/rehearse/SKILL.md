@@ -54,7 +54,7 @@ mkdir -p .rehearsal/fixtures && touch .rehearsal/active
 **Fixing something that exists.**
 1. **Reproduce once.** Run what shows the problem one time and save the result as a fixture (a fixture is a saved real input or output): `python3 main.py > .rehearsal/fixtures/before.txt`.
 2. **Locate.** Follow the stack trace, the logs, or a search (`grep -n "def parse_date" *.py`) to where it goes wrong, and read the code there. If the report's recipe needs new code (a dummy class, a test app, a script), do not write it: find a question the existing code can answer about the same thing, such as building the real object and asking what type or value it has.
-3. **Pick the component to become**: the one where good input turns into wrong output. In the five-files story it is file 3, which drops three March rows because their dates are written `04/03/2024`.
+3. **Pick the component to become**: the one where good input turns into wrong output. In the five-files story it is file 3, which drops three March rows because their dates are written `04/03/2024`. **Chase the wrong value upstream first.** If the wrong value arrives from a call into other code, call that code by hand with the same input, and keep going until you reach the call whose inputs are right and whose output is wrong. Fix there, where the value is first made wrong, not where it is first noticed; a patch at the point of noticing leaves every other caller broken.
 
 **Making something new.** *Scout first.* Most of what programs need already exists. Go down this ladder for the whole job, then for each need left, and stop at the first rung that holds:
 
@@ -145,7 +145,8 @@ Now write the code, and test it with what you saw.
 - Each external call does what a rehearsed step did: same endpoint, headers and parameters.
 - Each failure in the log has handling in the code.
 - Copy the fixtures into the project's tests (e.g. `tests/fixtures/`). The hand results are the expected values.
-- If the code and the expectation differ, fix the code, not the expectation. Change an expectation only if the log was wrong, and say so.
+- If the code and the expectation differ, fix the code, not the expectation. Change an expectation only if the log was wrong, and say so. Never loosen an existing test's tolerance or assertion to make your change fit.
+- **A test that was green before your change and is red after it means you are not done.** Find the cause or undo the change (`git stash`, `git checkout -- <file>`), and say the bug is not fixed. A report that lists tests you broke is not a fix report.
 - Each library from Scout must pass on the fixtures. If one fails, switch to the next candidate.
 - **Live replay**: run the program once on the same sample you rehearsed and compare with your hand results. A new failure here is a chain link.
 - Behaviour that was never rehearsed goes on the list of unverified risks. Anything you could still call in one line does not belong there: call it.
