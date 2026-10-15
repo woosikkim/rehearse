@@ -378,7 +378,15 @@ with tempfile.TemporaryDirectory() as d:
     assert "no search" in stop() and "no new by-hand call" in stop()
     assert ran("grep -rn 'parse_date' .", "a.py:1") == 0
     assert "no search" not in stop() and "no new by-hand call" in stop()
-    assert ran("python3 -c 'import oldmod; print(oldmod.g(1))'", "ok") == 0  # a sibling, called by hand
+    assert ran("cd sub && /opt/env/bin/python -W ignore -c 'import oldmod; print(oldmod.g(1))' 2>&1 | tail -3", "ok") == 0  # a sibling, called by hand, build-phase shape
+    assert stop() == ""
+    # The marker coming back during the sweep must not hide the sweep's calls.
+    shutil.rmtree(os.path.join(d, ".rehearsal")); os.makedirs(os.path.join(d, ".rehearsal"))
+    touch(os.path.join(d, ".rehearsal", "active")); assert ran(repro, "None") == 0
+    os.remove(os.path.join(d, ".rehearsal", "active"))
+    assert run("Write", {"file_path": os.path.join(d, "oldmod.py"), "content": "y"}, d) == 0
+    touch(os.path.join(d, ".rehearsal", "active"))
+    assert ran("grep -rn f oldmod.py", "x") == 0 and ran("python3 -c 'import oldmod; print(oldmod.h(2))'", "ok") == 0
     assert stop() == ""
     assert stop(stop_hook_active=True) == ""
     # A shell edit counts as the first edit too.

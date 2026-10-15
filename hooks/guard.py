@@ -164,6 +164,8 @@ def executed(cmd):
             return True
         if name in INTERPRETERS and args and (os.path.splitext(args[0])[1] in CODE_EXT or toks[i + 1:i + 2] == ["-m"]):
             return True
+        if name in INTERPRETERS and {"-c", "-e", "-p"} & set(toks[i + 1:]):  # inline code with any flags or redirections
+            return True
         if name in RUNNERS and args and args[0] in RUNNERS[name]:
             return True
     return False
@@ -435,10 +437,11 @@ def main():
     d = rehearsal_dir(payload)
     if event in {"PostToolUse", "PostToolUseFailure"}:
         if tool in SHELL_TOOLS:
-            if m:
-                log_command(payload, os.path.join(os.path.dirname(m), "log.md"))
-            elif d:
+            building = d and (not m or os.path.exists(os.path.join(d, "build.log")))  # once edits begin, even if the marker comes back
+            if building:
                 log_command(payload, os.path.join(d, "build.log"))
+            elif m:
+                log_command(payload, os.path.join(os.path.dirname(m), "log.md"))
             if d and TEST_CMD.search(shell_text(tin.get("command"))):
                 log_command(payload, os.path.join(d, "tests.log"))
         return 0
