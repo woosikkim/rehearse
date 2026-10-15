@@ -1,0 +1,13 @@
+{
+ "task": "sphinx-9229",
+ "fixed": true,
+ "broke_others": 0,
+ "hidden_tests_failing": 0,
+ "announce": "full",
+ "real_run_before_edit": false,
+ "guard_blocks": 3,
+ "turns": 37,
+ "cost_usd": 0.29,
+ "minutes": 7.5,
+ "final": "I replaced the reproduction in `.rehearsal/REHEARSAL.md` with one that does show the bug. It forces a full rebuild (`-E -a`) into a fresh output directory and prints `index.txt`. The earlier command reused a stale `.rehearsal/out`, so both runs looked the same.\n\nI ran it on the original code (via `git stash`) and on the fixed code:\n\n- **Original code:** the output is only `alias of \"pathlib.PurePath\"` and `alias of \"collections.OrderedDict\"`.\n- **Fixed code:** the output is `Alias doc.` and `Alias2 doc. More.`.\n\nThe fix is back in place. `git status` shows only `CHANGES` and `sphinx/ext/autodoc/__init__.py` modified, plus the untracked `.rehearsal/` folder."
+}

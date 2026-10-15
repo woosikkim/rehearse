@@ -1,0 +1,13 @@
+{
+ "task": "sphinx-8548",
+ "fixed": true,
+ "broke_others": 0,
+ "hidden_tests_failing": 0,
+ "announce": "full",
+ "real_run_before_edit": false,
+ "guard_blocks": 4,
+ "turns": 42,
+ "cost_usd": 0.24,
+ "minutes": 6.7,
+ "final": "The reproduction I gave before only wrote its output to a file and printed nothing, so it looked identical on the old and new code. I've replaced it with one that builds the docs and then prints the result. It's logged as the `repro:` line in `.rehearsal/REHEARSAL.md`.\n\nThe new command gives different output before and after the change:\n\n- **Original code:** only `class target.Derived`, with no `attr`.\n- **Fixed code:** `attr = 1` followed by \"base attr doc\".\n\nI ran it on both versions to confirm. The fix itself is unchanged from my earlier summary."
+}

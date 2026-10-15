@@ -1,0 +1,210 @@
+$ rm -f /app/.rehearsal/active; ls /app/.rehearsal
+commands.jsonl
+fixtures
+log.md
+scaffold
+trace.jsonl
+trace.offset
+written
+
+$ cd /tmp/p3src && tar xzf p3.tgz && cd primer3-2.6.1/src && make -j4 oligotm >/dev/null 2>&1; ls -la oligotm && ./oligotm -tp 1 -sc 1 -mv 50 -dv 2 -n 0.8 -d 500 ATGAGCAAGGGCGAGGAGC
+Exit code 2
+/bin/bash: line 1: cd: /tmp/p3src: No such file or directory
+ls: cannot access 'oligotm': No such file or directory
+
+$ mkdir -p /tmp/p3src && cd /tmp/p3src && curl -sL -m 120 https://github.com/primer3-org/primer3/archive/refs/tags/v2.6.1.tar.gz -o p3.tgz && tar xzf p3.tgz && cd primer3-2.6.1/src && make -j4 oligotm >/dev/null 2>&1; ls -la oligotm && ./oligotm -tp 1 -sc 1 -mv 50 -dv 2 -n 0.8 -d 500 ATGAGCAAGGGCGAGGAGC
+-rwxr-xr-x 1 root root 60048 Oct 15 12:26 oligotm
+66.399841
+Shell cwd was reset to /app
+
+$ mkdir -p /tmp/work && cat > /tmp/work/design.py <<'EOF'
+import subprocess,re
+S={};n=None
+for l in open('/app/sequences.fasta'):
+    l=l.strip()
+    if l.startswith('>'): n=l[1:];S[n]=''
+    elif l: S[n]+=l.upper()
+rc=lambda s:s[::-1].translate(str.maketrans('ACGT','TGCA'))
+def tm(s):
+    return float(subprocess.check_output(['/tmp/p3src/primer3-2.6.1/src/oligotm','-tp','1','-sc','1','-mv','50','-dv','2','-n','0.8','-d','500',s]))
+for k,v in S.items(): print(k,len(v),'BsaI sites',len(re.findall('GGTCTC|GAGACC',v)))
+inp=S['input']
+# anchors
+i_fwd=inp.index('TGAGGATCCCGGG'); i_rev_end=inp.index('ACATATGATCAG')+6  # end after ...ACATAT
+print(i_fwd,i_rev_end)
+PAD='TTGCAT';SITE='GGTCTC'
+def fwd_cands(t,start):
+    return [t[start:start+L] for L in range(15,46)]
+def rev_cands(t,end):
+    return [rc(t[end-L:end]) for L in range(15,46)]
+spec={ # name: (template, fwd start, rev end, rev tail overhang rc)
+ 'input':(inp,i_fwd,i_rev_end,'TCAT'),
+ 'egfp':(S['egfp'],0,len(S['egfp'])-3,'TACC'),
+ 'flag':(S['flag'],3,S['flag'].index('GGTTCATAA')+6,'TGTC'),
+ 'snap':(S['snap'],3,len(S['snap']),'CTCA'),
+}
+# egfp end: remove TAA
+for name,(t,fs,re_,tail) in spec.items():
+    F=fwd_cands(t,fs);R=rev_cands(t,re_)
+    best=None
+    for a in F:
+        for b in R:
+            ta,tb=tm(a),tm(b)
+            if 58<=ta<=72 and 58<=tb<=72 and abs(ta-tb)<=5:
+                sc=abs(ta-62)+abs(tb-62)+abs(ta-tb)
+                if best is None or sc<best[0]: best=(sc,a,b,ta,tb)
+    _,a,b,ta,tb=best
+    print(name,a,round(ta,2),b,round(tb,2))
+    spec[name]=(a,b,tail)
+out=''
+for name,(a,b,tail) in spec.items():
+    f=PAD+SITE+'A'+a if name!='x' else ''
+    r=PAD+SITE+'A'+tail+b
+    out+=f'>{name}_fwd\n{f}\n>{name}_rev\n{r}\n'
+open('/app/primers.fasta','w').write(out)
+print(out)
+EOF
+python3 -I /tmp/work/design.py
+input 2727 BsaI sites 0
+egfp 717 BsaI sites 0
+flag 90 BsaI sites 0
+snap 549 BsaI sites 0
+output 3591 BsaI sites 0
+690 212
+input TGAGGATCCCGGGAATTCTC 62.46 ATATGTATATCTCCTTCTTAAAGTTAAACAAAATTATTTCT 62.33
+egfp ATGAGCAAGGGCGAGGA 62.22 TTTGTACAGCTCGTCCATGC 62.31
+flag GGTAGTGGCTCCGGTAGC 63.3 TGAACCACTACCTGAACCAGA 62.06
+snap GACAAAGACTGCGAAATGAAGC 62.18 TTAACCCAGCCCAGGCT 62.09
+>input_fwd
+TTGCATGGTCTCATGAGGATCCCGGGAATTCTC
+>input_rev
+TTGCATGGTCTCATCATATATGTATATCTCCTTCTTAAAGTTAAACAAAATTATTTCT
+>egfp_fwd
+TTGCATGGTCTCAATGAGCAAGGGCGAGGA
+>egfp_rev
+TTGCATGGTCTCATACCTTTGTACAGCTCGTCCATGC
+>flag_fwd
+TTGCATGGTCTCAGGTAGTGGCTCCGGTAGC
+>flag_rev
+TTGCATGGTCTCATGTCTGAACCACTACCTGAACCAGA
+>snap_fwd
+TTGCATGGTCTCAGACAAAGACTGCGAAATGAAGC
+>snap_rev
+TTGCATGGTCTCACTCATTAACCCAGCCCAGGCT
+
+$ cat > /tmp/work/sim.py <<'EOF'
+import re
+S={};n=None
+for l in open('/app/sequences.fasta'):
+    l=l.strip()
+    if l.startswith('>'): n=l[1:];S[n]=''
+    elif l: S[n]+=l.upper()
+P={};n=None
+for l in open('/app/primers.fasta'):
+    l=l.strip()
+    if l.startswith('>'): n=l[1:]
+    else: P[n]=l.upper()
+rc=lambda s:s[::-1].translate(str.maketrans('ACGT','TGCA'))
+def pcr(name,circ=False):
+    t=S[name]; f=P[name+'_fwd']; r=P[name+'_rev']
+    fa=f[f.index('GGTCTC')+7:]  # after N
+    # find 3' annealing: longest suffix of primer that matches
+    def anneal(p,t):
+        for L in range(len(p),10,-1):
+            if p[-L:] in t: return L
+    Lf=anneal(f,t); Lr=anneal(r,rc(t) if False else t+t if False else t) 
+    return None
+def prod(name):
+    t=S[name]; tt=t+t if name=='input' else t
+    f=P[name+'_fwd']; r=P[name+'_rev']
+    def ann(p,tt):
+        for L in range(len(p),10,-1):
+            if p[-L:] in tt or False: return L
+    Lf=0
+    for L in range(len(f),10,-1):
+        if f[-L:] in tt: Lf=L;break
+    rr=rc(r); Lr=0
+    for L in range(len(rr),10,-1):
+        if rr[:L] in tt: Lr=L;break
+    # 5' tails
+    ftail=f[:len(f)-Lf]; rtail=rc(r[:len(r)-Lr])
+    s=tt.index(f[-Lf:]); 
+    e=tt.index(rr[:Lr],s)+Lr
+    return ftail+tt[s:e]+rtail
+frags=[]
+for k in ['input','egfp','flag','snap']:
+    p=prod(k)
+    assert len(re.findall('GGTCTC|GAGACC',p))==2,(k,len(re.findall('GGTCTC|GAGACC',p)))
+    a=p.index('GGTCTC')+7; b=p.rindex('GAGACC')-5  # top strand: after N1 ; rev site: GAGACC then N then 4... 
+    # top strand cut after N1 of fwd site; right end top cut is 5 before GAGACC reversed: bottom cut after N1 -> top overhang ends at pos of GAGACC-1-1
+    b=p.rindex('GAGACC')-1
+    frags.append((k,p[a:b]))   # includes 4nt overhangs both ends
+    print(k,len(p),p[a:a+4],p[b-4:b])
+# ligate in order input->egfp->flag->snap->input
+asm=''
+for i,(k,s) in enumerate(frags):
+    asm+= s[:-4]
+print(len(asm), asm==S['output'], any(asm==S['output'][i:]+S['output'][:i] for i in range(len(asm))) if len(asm)==len(S['output']) else None)
+EOF
+python3 -I /tmp/work/sim.py
+input 2279 TGAG ATGA
+egfp 744 ATGA GGTA
+flag 114 GGTA GACA
+snap 576 GACA TGAG
+3593 False None
+
+$ cd /tmp/work && cat >> sim.py <<'EOF'
+o=S['output']
+i=0
+while i<len(o) and asm[i]==o[i]: i+=1
+print(i, asm[i-20:i+20], o[i-20:i+20])
+EOF
+python3 -I sim.py | tail -1
+0
+Shell cwd was reset to /app
+
+$ cd /tmp/work && cat >> sim.py <<'EOF'
+k=asm.index(o[:30]) if o[:30] in asm else -1
+print('k',k)
+r=asm[k:]+asm[:k]
+j=0
+while j<len(o) and r[j]==o[j]: j+=1
+print(j, r[j-15:j+25]); print(o[j-15:j+25])
+EOF
+python3 -I sim.py | tail -3
+k 2037
+212 AGGAGATATACATATATGAGCAAGGGCGAGGAGCTGTTCA
+AGGAGATATACATATGAGCAAGGGCGAGGAGCTGTTCACC
+Shell cwd was reset to /app
+
+$ cd /tmp/work && sed -i "s/index('ACATATGATCAG')+6/index('ACATATGATCAG')+4/" design.py && python3 -I design.py | sed -n 6,30p && python3 -I sim.py | sed -n 5,20p
+690 210
+input TGAGGATCCCGGGAATTCTC 62.46 ATGTATATCTCCTTCTTAAAGTTAAACAAAATTATTTCT 62.35
+egfp ATGAGCAAGGGCGAGGA 62.22 TTTGTACAGCTCGTCCATGC 62.31
+flag GGTAGTGGCTCCGGTAGC 63.3 TGAACCACTACCTGAACCAGA 62.06
+snap GACAAAGACTGCGAAATGAAGC 62.18 TTAACCCAGCCCAGGCT 62.09
+>input_fwd
+TTGCATGGTCTCATGAGGATCCCGGGAATTCTC
+>input_rev
+TTGCATGGTCTCATCATATGTATATCTCCTTCTTAAAGTTAAACAAAATTATTTCT
+>egfp_fwd
+TTGCATGGTCTCAATGAGCAAGGGCGAGGA
+>egfp_rev
+TTGCATGGTCTCATACCTTTGTACAGCTCGTCCATGC
+>flag_fwd
+TTGCATGGTCTCAGGTAGTGGCTCCGGTAGC
+>flag_rev
+TTGCATGGTCTCATGTCTGAACCACTACCTGAACCAGA
+>snap_fwd
+TTGCATGGTCTCAGACAAAGACTGCGAAATGAAGC
+>snap_rev
+TTGCATGGTCTCACTCATTAACCCAGCCCAGGCT
+3591 False True
+0  
+k 2037
+3591 ATGTTGAATACTCAT
+ATGTTGAATACTCAT
+Shell cwd was reset to /app
+
+replay: skipped: not a git repository
+

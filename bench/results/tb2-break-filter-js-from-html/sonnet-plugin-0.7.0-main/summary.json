@@ -1,0 +1,13 @@
+{
+ "task": "tb2-break-filter-js-from-html",
+ "fixed": true,
+ "broke_others": 0,
+ "hidden_tests_failing": 0,
+ "announce": "full",
+ "real_run_before_edit": false,
+ "guard_blocks": 5,
+ "turns": 79,
+ "cost_usd": 0.91,
+ "minutes": 19.3,
+ "final": "The deliverable still works end-to-end: filter.py leaves the payload byte-for-byte unchanged (exit 0), and loading the filtered output in real headless Chromium fires `alert(\"1\")` automatically, no interaction. `/app/out.html` is unchanged and correct \u2014 nothing needs fixing or reverting."
+}

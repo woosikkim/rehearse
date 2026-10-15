@@ -1,0 +1,13 @@
+{
+ "task": "pytest-10356",
+ "fixed": true,
+ "broke_others": 0,
+ "hidden_tests_failing": 0,
+ "announce": "full",
+ "real_run_before_edit": false,
+ "guard_blocks": 6,
+ "turns": 36,
+ "cost_usd": 0.17,
+ "minutes": 7.4,
+ "final": "Sweep results:\n\n- **Callers:** the only ones are `src/_pytest/python.py:314` (classes and modules) and `:1717` (functions). Both read `self.obj`. Modules and functions still use the old path.\n- **By-hand calls with non-class inputs:** `get_unpacked_marks(int)`, `get_unpacked_marks(len)` and `get_unpacked_marks(None)` all return `[]`, so the new class branch breaks nothing.\n- **Real-collection check:** on the scaffold, `-m foo` still selects `TestDings::test_dings`. `-m bar` selected it after the fix.\n- **Siblings:** `config/__init__.py:354` reads `method.pytestmark` directly, but only on functions to detect already-known marks, so MRO doesn't apply there. `terminal.py:1351` only looks at keyword names.\n\nI found nothing else that needs fixing. The fix is complete and the earlier test results stand. I left `.rehearsal/` in place."
+}

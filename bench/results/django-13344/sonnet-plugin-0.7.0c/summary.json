@@ -1,0 +1,13 @@
+{
+ "task": "django-13344",
+ "fixed": true,
+ "broke_others": 0,
+ "hidden_tests_failing": 0,
+ "announce": "full",
+ "real_run_before_edit": false,
+ "guard_blocks": 4,
+ "turns": 53,
+ "cost_usd": 0.31,
+ "minutes": 8.7,
+ "final": "I replaced the reproduction in `.rehearsal/REHEARSAL.md`. It now gives different output before and after the fix, and the fix is back in place.\n\nThe new `repro:` line builds `SecurityMiddleware` around an async `get_response` and prints whether Django sees it as a coroutine function. I ran it against both versions:\n- **Original code** (fix stashed): prints `False`, so the middleware is wrongly treated as sync, which is the bug.\n- **Fixed code:** prints `True`.\n\nThe fix is unchanged. It adds `_async_check()` to `SecurityMiddleware` and the three cache middlewares, plus the new regression test."
+}

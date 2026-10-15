@@ -1,0 +1,13 @@
+{
+ "task": "django-13344",
+ "fixed": true,
+ "broke_others": 0,
+ "hidden_tests_failing": 0,
+ "announce": "full",
+ "real_run_before_edit": false,
+ "guard_blocks": 4,
+ "turns": 50,
+ "cost_usd": 0.28,
+ "minutes": 9.1,
+ "final": "I've recorded a one-line reproduction as `repro:` in `.rehearsal/REHEARSAL.md` and run it on the fixed code.\n\nIt loads the ASGI middleware chain with only `SecurityMiddleware` and prints whether the chain is async. It prints `True` with the fix. Before the fix it printed `False`. I saw that `False` earlier with this same single-middleware setup, but I haven't re-run the new command on the original code.\n\nThe cause and the fix are unchanged. `SecurityMiddleware.__init__` and the three cache middlewares now call `_async_check()`, so the first middleware gets an `HttpResponse` instead of a coroutine."
+}

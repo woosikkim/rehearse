@@ -1,0 +1,13 @@
+{
+ "task": "sphinx-9229",
+ "fixed": true,
+ "broke_others": 0,
+ "hidden_tests_failing": 0,
+ "announce": "full",
+ "real_run_before_edit": false,
+ "guard_blocks": 3,
+ "turns": 46,
+ "cost_usd": 0.29,
+ "minutes": 6.1,
+ "final": "I've updated the repro line in `.rehearsal/REHEARSAL.md`. It builds the scaffold and counts how many times `Bar alias doc` appears in the output. The earlier repro only wrote to a file, so the hook saw no difference in output. The new one prints that count.\n\nOn the fixed code the count is 1. I didn't rerun it on the original code this turn. The earlier check, before the fix, showed only `alias of \"collections.OrderedDict\"` for `Bar`, so the count there should be 0.\n\nThe fix itself is unchanged and is described in my previous message."
+}

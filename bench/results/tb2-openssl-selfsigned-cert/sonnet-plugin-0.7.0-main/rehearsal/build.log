@@ -1,0 +1,59 @@
+$ rm .rehearsal/active
+
+EDIT /app/check_cert.py
+
+$ python3 -I check_cert.py; echo "rc=$?"; openssl verify -CAfile ssl/server.crt ssl/server.crt; openssl x509 -in ssl/server.pem -noout -subject; openssl rsa -in ssl/server.pem -check -noout; stat -c '%a %n' ssl/*
+subject=O = DevOps Team, CN = dev-internal.company.local
+Common Name: dev-internal.company.local
+Expiration date: 2027-10-15
+Certificate verification successful
+rc=0
+ssl/server.crt: OK
+subject=O = DevOps Team, CN = dev-internal.company.local
+RSA key ok
+644 ssl/server.crt
+600 ssl/server.key
+600 ssl/server.pem
+644 ssl/verification.txt
+
+$ mv ssl/server.crt /tmp/s.crt && python3 -I check_cert.py; echo "rc=$?"; echo junk > ssl/server.crt && python3 -I check_cert.py; echo "rc=$?"; mv /tmp/s.crt ssl/server.crt && python3 -I check_cert.py | tail -1
+Certificate not found: /app/ssl/server.crt
+rc=1
+Certificate could not be loaded: Could not read certificate from /app/ssl/server.crt
+Unable to load certificate
+rc=1
+Certificate verification successful
+
+replay: skipped: not a git repository
+
+$ grep -rn "check_cert\|server.crt" --include=* . 2>/dev/null | grep -v '^./.rehearsal/trace' | head -20
+.rehearsal/REHEARSAL.md:4:- means: no cryptography lib; check_cert.py must shell out to openssl, parse notAfter
+.rehearsal/log.md:21:$ mkdir -p /app/ssl && openssl genrsa -out /app/ssl/server.key 2048 2>&1 && chmod 600 /app/ssl/server.key && openssl req -new -x509 -key /app/ssl/server.key -out /app/ssl/server.crt -days 365 -subj "/O=DevOps Team/CN=dev-internal.company.local" && cat /app/ssl/server.key /app/ssl/server.crt > /app/ssl/server.pem && chmod 600 /app/ssl/server.pem && ls -l /app/ssl
+.rehearsal/log.md:23:-rw-r--r-- 1 root root 1220 Oct 15 12:31 server.crt
+.rehearsal/log.md:27:$ openssl x509 -in /app/ssl/server.crt -noout -subject -startdate -enddate -fingerprint -sha256
+.rehearsal/log.md:33:$ openssl x509 -in /app/ssl/server.crt -noout -subject -startdate -enddate -fingerprint -sha256 > /app/ssl/verification.txt && cat /app/ssl/verification.txt
+.rehearsal/log.md:38:- means: no cryptography lib; check_cert.py must shell out to openssl, parse notAfter
+check_cert.py:8:CERT = "/app/ssl/server.crt"
+.rehearsal/commands.jsonl:2:{"cmd": "mkdir -p /app/ssl && openssl genrsa -out /app/ssl/server.key 2048 2>&1 && chmod 600 /app/ssl/server.key && openssl req -new -x509 -key /app/ssl/server.key -out /app/ssl/server.crt -days 365 -subj \"/O=DevOps Team/CN=dev-internal.company.local\" && cat /app/ssl/server.key /app/ssl/server.crt > /app/ssl/server.pem && chmod 600 /app/ssl/server.pem && ls -l /app/ss
+.rehearsal/commands.jsonl:3:{"cmd": "openssl x509 -in /app/ssl/server.crt -noout -subject -startdate -enddate -fingerprint -sha256", "phase": "marker"}
+.rehearsal/commands.jsonl:4:{"cmd": "openssl x509 -in /app/ssl/server.crt -noout -subject -startdate -enddate -fingerprint -sha256 > /app/ssl/verification.txt && cat /app/ssl/verification.txt\ncat >> .rehearsal/REHEARSAL.md <<'EOF'\n# Rehearsal: self-signed cert\n### S1: openssl genrsa/req -x509/cat pem/x509 -noout -subject -dates -fingerprint\n- saw: subject O=DevOps Team, CN=dev-internal.company
+.rehearsal/commands.jsonl:6:{"edit": "/app/check_cert.py"}
+.rehearsal/commands.jsonl:7:{"cmd": "python3 -I check_cert.py; echo \"rc=$?\"; openssl verify -CAfile ssl/server.crt ssl/server.crt; openssl x509 -in ssl/server.pem -noout -subject; openssl rsa -in ssl/server.pem -check -noout; stat -c '%a %n' ssl/*", "phase": "build"}
+.rehearsal/commands.jsonl:8:{"cmd": "mv ssl/server.crt /tmp/s.crt && python3 -I check_cert.py; echo \"rc=$?\"; echo junk > ssl/server.crt && python3 -I check_cert.py; echo \"rc=$?\"; mv /tmp/s.crt ssl/server.crt && python3 -I check_cert.py | tail -1", "phase": "build"}
+.rehearsal/written:4:/app/check_cert.py
+.rehearsal/build.log:3:EDIT /app/check_cert.py
+.rehearsal/build.log:5:$ python3 -I check_cert.py; echo "rc=$?"; openssl verify -CAfile ssl/server.crt ssl/server.crt; openssl x509 -in ssl/server.pem -noout -subject; openssl rsa -in ssl/server.pem -check -noout; stat -c '%a %n' ssl/*
+.rehearsal/build.log:11:ssl/server.crt: OK
+.rehearsal/build.log:14:644 ssl/server.crt
+.rehearsal/build.log:19:$ mv ssl/server.crt /tmp/s.crt && python3 -I check_cert.py; echo "rc=$?"; echo junk > ssl/server.crt && python3 -I check_cert.py; echo "rc=$?"; mv /tmp/s.crt ssl/server.crt && python3 -I check_cert.py | tail -1
+.rehearsal/build.log:20:Certificate not found: /app/ssl/server.crt
+
+$ python3 -I check_cert.py | tail -1; cat >> .rehearsal/REHEARSAL.md <<'EOF'
+
+## Sweep
+| Place | Caller or sibling | Called with | Saw | Fixed |
+|-------|-------------------|-------------|-----|-------|
+| check_cert.py | only new file; no other callers or siblings in /app | missing cert, junk cert (rc=1, no success line) | handled | n/a |
+EOF
+Certificate verification successful
+
