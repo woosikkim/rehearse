@@ -84,9 +84,9 @@ def baseline(s, tests):
 
 def sources(s):
     # a `rehearse ending` or `rehearse run` step echoes the expected values, so it can never be a source for them;
-    # judged by its result line, so the command's spelling ($R ending, a path) does not matter
+    # judged by the result kind the logger recorded, so the command's spelling ($R ending, a path) does not matter
     steps = {r["step"]: r.get("out", "") for r in L.records(s["run_folder"])
-             if "step" in r and not re.search(r'^REHEARSE-RESULT .*"kind": "(ending|run)"', r.get("out", ""), re.M)}
+             if "step" in r and r.get("result") not in ("ending", "run")}
     fixtures = {}
     for name in s.get("fixtures", []):
         try:

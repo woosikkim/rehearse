@@ -28,11 +28,11 @@ LOCKED = ("observe", "confirm", "rework-observe")
 EDIT_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 AFFIRMATIVE = {"yes", "y", "ok", "correct", "confirmed", "네", "예", "응", "맞아", "맞아요", "네 맞아요"}
 ACTIVATE = re.compile(r"^(?:/rehearse(?::rehearse)?(?:\s+|$)|rehearse(?:\s*:\s*|\s+))(.*)$", re.I | re.S)
-LONG_RUN = re.compile(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:ending|run)\b")
+LONG_RUN = re.compile(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:ending|run|stage\s+step)\b")
 BIN = os.path.join(os.path.dirname(HERE), "bin", "rehearse")
 BASH_CAP_MS = 600000  # Claude Code's largest Bash timeout; rehearse ending/run get it so a slow baseline is not cut off
 NEED_ENDING = "register and confirm an ending first"
-NEED_LOOK = ("edits are locked after two failing rounds with no direct look; look directly (a stage step that "
+NEED_LOOK = ("edits are locked after repeated failing rounds with no direct look; look directly (a stage step that "
              "calls project code, or rehearse fetch to a known host) or make rehearse run pass")
 URL = re.compile(r"https?://([^/\s'\"<>:]+)")
 DIRECTOR = ("rehearse:director", "director")

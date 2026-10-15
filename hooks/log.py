@@ -57,8 +57,10 @@ def records(folder):
 def log_command(folder, cmd, output, phase):
     """Append one Bash command and the head of its output; return its step id (S1, S2, ...)."""
     step = "S%d" % (1 + sum(1 for r in records(folder) if "step" in r))
+    # the plugin's own result kind, read before the trim can cut the last line (bin/rehearse excludes ending/run steps)
+    kinds = re.findall(r'^REHEARSE-RESULT .*?"kind": "([\w-]+)"', output, re.M)
     cmd, out = redact(cmd, command=True), trim(redact(output))
-    record(folder, {"step": step, "cmd": cmd, "phase": phase, "out": out})
+    record(folder, {"step": step, "cmd": cmd, "phase": phase, "out": out, "result": kinds[-1] if kinds else None})
     with open(os.path.join(folder, "log.md"), "a", encoding="utf-8") as f:
         f.write("\n".join(["%s [%s] $ %s" % (step, phase, cmd)] + ([out] if out else [])) + "\n\n")
     return step

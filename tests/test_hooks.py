@@ -285,7 +285,8 @@ try:
     p.bash("cd sub && rehearse ending", "REHEARSE-RESULT {}\n" + line)
     assert p.state()["phase"] == "confirm"
     # rehearse ending / run may take minutes (the program, then the tests): they get the Bash tool's longest timeout
-    for cmd in ("rehearse ending --cmd x", "R=/opt/plugin/bin/rehearse\n$R run", "cd sub && rehearse run --as-director"):
+    for cmd in ("rehearse ending --cmd x", "R=/opt/plugin/bin/rehearse\n$R run", "cd sub && rehearse run --as-director",
+                "rehearse stage step 'x'"):
         out = p.pre("Bash", command=cmd)
         assert out["hookSpecificOutput"]["updatedInput"]["timeout"] == 600000, (cmd, out)
     assert p.pre("Bash", command="rehearse status") is None and p.pre("Bash", command="python3 run.py") is None
