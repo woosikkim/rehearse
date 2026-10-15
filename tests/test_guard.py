@@ -230,6 +230,16 @@ with tempfile.TemporaryDirectory() as d:
     assert run("Write", {"file_path": "/p/.rehearsal/REHEARSAL.md", "content": ""}, d) == 0
     assert "writes .rehearsal/log.md itself" in call({"tool_name": "Write", "tool_input": {"file_path": ".rehearsal/log.md"}, "cwd": d}).stderr
     assert "writes .rehearsal/log.md itself" in bash_err("echo '$ python3 -c x' >> .rehearsal/log.md", d)
+    # Scaffold: specimens a real tool reads may be created under .rehearsal/scaffold/, but never run or imported.
+    assert run("Write", {"file_path": os.path.join(d, ".rehearsal", "scaffold", "conf.py"), "content": "x"}, d) == 0
+    assert run("Write", {"file_path": ".rehearsal/scaffold/pkg/mod.py", "content": "x"}, d) == 0
+    assert bash("cat > .rehearsal/scaffold/file.py <<'EOF'\nX = 1\nEOF", d) == 0
+    assert bash("cd .rehearsal/scaffold && cat > index.py <<'EOF'\nX = 1\nEOF", d) == 0
+    assert "scaffold" in bash_err("cat > .rehearsal/fixtures/file.py <<'EOF'\nX = 1\nEOF", d)
+    assert "scaffold" in call({"tool_name": "Write", "tool_input": {"file_path": "repro.py"}, "cwd": d}).stderr
+    touch(j(".rehearsal", "scaffold", "conf.py"))
+    assert "written during this rehearsal" in bash_err("python3 .rehearsal/scaffold/conf.py", d)
+    assert bash("sphinx-build -b html .rehearsal/scaffold out", d) == 0  # an existing tool reading the specimen
     assert run("Write", {"file_path": "/p/.rehearsal/fixtures/a.json", "content": ""}, d) == 0
     assert run("Read", {"file_path": "/p/scraper.py"}, d) == 0
     # Other agents' shapes (best-effort).

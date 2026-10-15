@@ -61,6 +61,13 @@ NO_STEPS = ("rehearsal started but nothing has been run yet; while .rehearsal/ac
             "then rm the marker. Reading files and writing notes do not count. If the marker is already down, put it "
             "back on its own first. Or delete .rehearsal/ entirely if no rehearsal is needed")
 OWN_LOG = "the guard writes .rehearsal/log.md itself; put notes in .rehearsal/REHEARSAL.md"
+SCAFFOLD_HINT = ("A specimen a real tool reads (a docs project, a sample package, a settings module, a dummy class) goes "
+                 "under .rehearsal/scaffold/; you still cannot run or import it yourself")
+
+
+def in_scaffold(path, cur=""):
+    p = os.path.abspath(os.path.join(cur, os.path.expanduser(str(path)))).replace("\\", "/")
+    return "/.rehearsal/scaffold/" in p
 # Test runners whose output the Stop hook reads, and what a red run looks like in that output.
 TEST_CMD = re.compile(r"(?:^|[\s;&|/])(?:pytest|py\.test|runtests\.py|manage\.py test|-m unittest|-m pytest|tox|nose2?|"
                       r"npm test|pnpm test|yarn test|jest|mocha|vitest|go test|cargo test|make test|rspec|rake test|"
@@ -212,7 +219,7 @@ def check_shell(cmd, cwd, m, full=True):
         if toks[:1] == ["cd"] and len(toks) == 2:
             cur = os.path.join(cur, os.path.expanduser(toks[1]))
             continue
-        reason = check_shell_writes(toks)
+        reason = check_shell_writes(toks, cur)
         if reason:
             return reason
         if not full:
@@ -238,7 +245,7 @@ def check_marker_start(cmd):
     return None
 
 
-def check_shell_writes(toks):
+def check_shell_writes(toks, cur=""):
     i = prog_index(toks)
     prog = os.path.basename(toks[i]) if i < len(toks) else ""
     args = toks[i + 1:]
@@ -265,9 +272,9 @@ def check_shell_writes(toks):
     for t in targets:
         if os.path.basename(t) == "log.md":
             return OWN_LOG
-        if t != "/dev/null" and os.path.splitext(t)[1] in CODE_EXT:
+        if t != "/dev/null" and os.path.splitext(t)[1] in CODE_EXT and not in_scaffold(t, cur):
             return (f"writing code file '{t}' through the shell; code is written in the build phase, "
-                    "after rm .rehearsal/active. Save a code-like fixture as .txt.")
+                    f"after rm .rehearsal/active. {SCAFFOLD_HINT}, or save a code-like fixture as .txt.")
     return None
 
 
@@ -347,8 +354,8 @@ def check_write(tool_input, m, empty_log):
             return OWN_LOG
         if os.path.splitext(str(p))[1] not in CODE_EXT:
             continue
-        if m:
-            return f"writing code file '{p}'; code is written in the build phase, after rm .rehearsal/active"
+        if m and not in_scaffold(p):
+            return f"writing code file '{p}'; code is written in the build phase, after rm .rehearsal/active. {SCAFFOLD_HINT}"
         if empty_log and ".rehearsal" not in str(p).replace("\\", "/").split("/"):
             return NO_STEPS
     return None
@@ -376,6 +383,7 @@ def start_marker(cwd):
     """Create .rehearsal/fixtures and the marker, only when no marker exists. Failure is not a reason to block."""
     try:
         os.makedirs(os.path.join(cwd, ".rehearsal", "fixtures"), exist_ok=True)
+        os.makedirs(os.path.join(cwd, ".rehearsal", "scaffold"), exist_ok=True)
         with open(os.path.join(cwd, FLAG), "a", encoding="utf-8"):
             pass
     except OSError:
