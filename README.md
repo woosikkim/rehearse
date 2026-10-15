@@ -2,15 +2,7 @@
 
 **A Claude Code plugin that makes the AI see a bug fail before it fixes it, then check every place the fix should reach.**
 
-Think of a mechanic. Most AI coding tools read your complaint, open the hood and replace the part that looks wrong. With `rehearse`, the AI has to drive the car first and hear the noise, replace the part, drive it again, and then check the other wheels for the same wear. Only then does it hand you the keys, with a written note of everything it tried.
-
-1. **See it fail.** Make the bug happen by hand and write down what happened.
-2. **Fix the cause.** Change the code where the problem starts, not where it shows.
-3. **Check the siblings.** Find every other place with the same cause and test each one.
-4. **Prove it.** Run it all again; what was seen by hand becomes the tests.
-
-A guard watches every command and will not let the AI skip a step.
-
+- [How it works](#how-it-works)
 - [What it does](#what-it-does)
 - [What it looks like](#what-it-looks-like)
 - [The loop](#the-loop)
@@ -19,13 +11,19 @@ A guard watches every command and will not let the AI skip a step.
 - [Install](#install)
 - [For developers](#for-developers)
 
+## How it works
+
+**The AI becomes the broken file.** A program is usually a chain of files handing work to each other, like people on a production line. When one of them is broken, `rehearse` makes the AI stand in that person's spot and do the job by hand before it changes anything.
+
+Say five files turn a spreadsheet of orders into a monthly report, and the March total is wrong. The AI takes the place of file 3: it feeds in the real March rows one at a time and sees which one gets dropped, and why (the date is written `04/03/2024`). Then it acts as the *fixed* file 3: it hands the corrected rows to file 4 by hand, and sees file 4 choke on a price written `12,50`. Two bugs found, the second one hidden behind the first, and not a line of code written yet. Only now does it fix both, then runs the whole chain and checks the total it already worked out by hand: 162.50.
+
+A guard watches every command. The AI cannot write a script to do this for it, cannot edit code before it has seen the bug happen, cannot finish with failing tests, and cannot finish without checking the other places the same bug could live.
+
 ## What it does
 
-Most coding agents read the bug report, read some code, write a fix that looks right, and hand it back. Often it fixes the example in the report and leaves the same bug alive somewhere else. Sometimes it fixes the wrong bug.
+Most coding agents read the bug report, read some code, write a fix that looks right, and hand it back. Often that fixes the example in the report and leaves the same bug alive somewhere else. Sometimes it fixes the wrong bug.
 
-`rehearse` changes the order. Before the agent may touch code, it has to make the bug happen by hand and write down what it saw. After the fix, it has to look for every other place the same cause lives and check each one. It cannot hand back work while its own tests are red.
-
-These are not requests. A guard watches every command and refuses the shortcuts.
+`rehearse` makes the AI see the bug fail by hand before it may touch code, fix the cause where it starts rather than where it shows, check every sibling of the fix, and prove the result with tests made from what it saw. These are not requests; the guard refuses the shortcuts.
 
 ## What it looks like
 
