@@ -67,7 +67,6 @@ with tempfile.TemporaryDirectory() as d:
         "grep -o 'class=\"price\"[^<]*' f.html",
         "curl -d 'for=1&while=2' https://x.com",
         "python3 --version",
-        "mkdir -p .rehearsal/fixtures && touch .rehearsal/active",
         "rm .rehearsal/active",
         "command -v curl wget jq sqlite3",
         "sqlite3 test.db 'SELECT 1'",
@@ -312,6 +311,24 @@ assert nudged("Rehearse: fix the missing March orders")
 assert not nudged("Build me a small scraper for example.com")
 assert not nudged("what does this function do?")
 assert not nudged("fix the typo in README")
+# Loading the skill creates the marker once; an existing marker is never touched; other skills do nothing.
+with tempfile.TemporaryDirectory() as d:
+    def load(skill):
+        return call({"hook_event_name": "PreToolUse", "tool_name": "Skill", "tool_input": {"skill": skill}, "cwd": d})
+    assert load("oh-my-claudecode:plan").returncode == 0 and not os.path.exists(os.path.join(d, ".rehearsal"))
+    assert load("rehearse:rehearse").returncode == 0
+    assert os.path.isdir(os.path.join(d, ".rehearsal", "fixtures")) and os.path.isfile(os.path.join(d, ".rehearsal", "active"))
+    old = time.time() - 3600
+    os.utime(os.path.join(d, ".rehearsal", "active"), (old, old))
+    assert load("rehearse").returncode == 0
+    assert abs(os.path.getmtime(os.path.join(d, ".rehearsal", "active")) - old) < 2  # not refreshed
+    # The first probe after loading is guarded without any marker command.
+    assert call({"tool_name": "Bash", "tool_input": {"command": "python3 new.py"}, "cwd": d}).returncode == 2
+    # Typing the marker command anyway is refused, so the marker's time is never re-stamped.
+    assert "already started" in bash_err("mkdir -p .rehearsal/fixtures && touch .rehearsal/active && ls", d)
+    assert "already started" in bash_err("touch .rehearsal/active", d)
+    assert bash("echo 'touch .rehearsal/active'", d) == 0  # quoted text is data
+
 # Stop hook: while .rehearsal/ exists, a red last test run blocks finishing once; green or no run never blocks.
 with tempfile.TemporaryDirectory() as d:
     os.makedirs(os.path.join(d, ".rehearsal"))

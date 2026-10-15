@@ -2,7 +2,8 @@
 """Rehearsal hooks, one script for every event.
 
 SessionStart: print the standing rule. UserPromptSubmit: the word "rehearse" loads the skill.
-PreToolUse: while .rehearsal/active exists, run only what existed before the rehearsal began
+PreToolUse: loading the rehearse skill creates .rehearsal/active if none exists (so the first probe is
+already guarded); while .rehearsal/active exists, run only what existed before the rehearsal began
 (no new scripts, no new logic, no code writes); once .rehearsal/ exists, code writes wait until the guard's own
 log shows one call that ran something (a one-liner, a client tool, an existing script); notes do not count.
 PostToolUse / PostToolUseFailure: while the marker exists, append each shell command and its output
@@ -359,6 +360,16 @@ def log_command(payload, path):
         f.write("\n".join([f"$ {cmd}"] + lines) + "\n\n")
 
 
+def start_marker(cwd):
+    """Create .rehearsal/fixtures and the marker, only when no marker exists. Failure is not a reason to block."""
+    try:
+        os.makedirs(os.path.join(cwd, ".rehearsal", "fixtures"), exist_ok=True)
+        with open(os.path.join(cwd, FLAG), "a", encoding="utf-8"):
+            pass
+    except OSError:
+        pass
+
+
 def last_test_run(d):
     """(command, output) of the last entry in .rehearsal/tests.log, or None."""
     entries = [e for e in read(os.path.join(d, "tests.log")).split("\n\n") if e.startswith("$ ")]
@@ -387,6 +398,10 @@ def main():
         return 0
     tool = str(payload.get("tool_name") or "")
     tin = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    if event == "PreToolUse" and tool == "Skill":
+        if re.fullmatch(r"(rehearse:)?rehearse", str(tin.get("skill") or "")) and not m:
+            start_marker(payload.get("cwd") or os.getcwd())  # never touch an existing marker: its mtime is the age line
+        return 0
     d = rehearsal_dir(payload)
     if event in {"PostToolUse", "PostToolUseFailure"}:
         if tool in SHELL_TOOLS:
@@ -409,6 +424,9 @@ def main():
     if tool in SHELL_TOOLS:
         cmd = shell_text(tin.get("command"))
         reason = None if m else check_marker_start(cmd)
+        if m and re.search(r"touch\s+\S*\.rehearsal/active", QUOTED.sub("''", HEREDOC.sub(r"<<\3", cmd))):
+            reason = ("the rehearsal is already started (the guard created the marker when the skill loaded); "
+                      "do not touch .rehearsal/active again, just rehearse")
         if not reason and (m or empty_log):
             reason = check_shell(cmd, cwd, m, full=bool(m))
             if reason and not m:

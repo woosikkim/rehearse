@@ -45,7 +45,7 @@ It is the same loop whether you fix something that exists or make something new.
 
 ## Look
 
-Start the rehearsal, for every size except skip. Run this as its own call, before anything else. The guard checks each call only once the marker exists.
+The rehearsal is already started: loading this skill made the guard create `.rehearsal/fixtures/` and the marker `.rehearsal/active`, so your first probe is already guarded. For skip, delete it before you write code: `rm -rf .rehearsal`. Without a guard hook, create it yourself as its own call, before anything else:
 
 ```
 mkdir -p .rehearsal/fixtures && touch .rehearsal/active

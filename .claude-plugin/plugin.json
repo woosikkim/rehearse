@@ -1,6 +1,6 @@
 {
   "name": "rehearse",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Be the program before you write it: look at the real thing by hand, act as the fix or the program by hand, build to match, replay the hand results as tests. One loop for new programs and changes to existing code, a helper that can only look, and a guard that tells existing code from code written mid-rehearsal.",
   "license": "MIT",
   "keywords": [
