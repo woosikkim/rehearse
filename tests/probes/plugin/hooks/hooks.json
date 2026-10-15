@@ -1,0 +1,87 @@
+{
+ "hooks": {
+  "UserPromptSubmit": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/log.py"
+     }
+    ]
+   }
+  ],
+  "PreToolUse": [
+   {
+    "matcher": "Bash|Write|Agent|AskUserQuestion",
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/log.py"
+     }
+    ]
+   }
+  ],
+  "PostToolUse": [
+   {
+    "matcher": "Bash|AskUserQuestion",
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/log.py"
+     }
+    ]
+   }
+  ],
+  "SubagentStop": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/log.py"
+     }
+    ]
+   }
+  ],
+  "Stop": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/log.py",
+      "timeout": 900
+     }
+    ]
+   }
+  ],
+  "StopFailure": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/log.py"
+     }
+    ]
+   }
+  ],
+  "SessionEnd": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/log.py"
+     }
+    ]
+   }
+  ],
+  "UserPromptExpansion": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/log.py"
+     }
+    ]
+   }
+  ]
+ }
+}

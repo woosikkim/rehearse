@@ -1,0 +1,2 @@
+{"name": "probe", "version": "0.0.1", "description": "throwaway probe plugin",
+ "userConfig": {"probe_flag": {"type": "boolean", "title": "Probe flag", "description": "probe", "default": true}}}
