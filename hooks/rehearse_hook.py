@@ -1,0 +1,360 @@
+#!/usr/bin/env python3
+"""rehearse: the single hook entry. Reads one Claude Code hook payload on stdin, dispatches on hook_event_name.
+
+UserPromptSubmit: activation, `rehearse stop`, the confirmation answer, later prompts.
+PreToolUse: the edit gate in observe, confirm and rework-observe; created files may not run there.
+PostToolUse(Failure): the log, REHEARSE-RESULT lines from bin/rehearse, edit rounds and the loop breaker.
+Fails open: any error or malformed input exits 0 with no decision. Agent, SubagentStop and Stop: story 4.
+"""
+import json
+import os
+import re
+import sys
+import time
+import urllib.parse
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import ending as E  # noqa: E402
+import fingerprint as F  # noqa: E402
+import log as L  # noqa: E402
+import provenance as P  # noqa: E402
+import state as S  # noqa: E402
+
+LOCKED = ("observe", "confirm", "rework-observe")
+EDIT_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+AFFIRMATIVE = {"yes", "y", "ok", "correct", "confirmed", "네", "예", "응", "맞아", "맞아요", "네 맞아요"}
+ACTIVATE = re.compile(r"^(?:/rehearse(?::rehearse)?(?:\s+|$)|rehearse(?:\s*:\s*|\s+))(.*)$", re.I | re.S)
+LOOP_ROUNDS = 2
+NEED_ENDING = "register and confirm an ending first"
+NEED_LOOK = ("edits are locked after two failing rounds with no direct look; look directly (a stage step that "
+             "calls project code, or rehearse fetch to a known host) or make rehearse run pass")
+URL = re.compile(r"https?://([^/\s'\"<>:]+)")
+
+
+def status_line(s):
+    return "[rehearse] run %s, phase %s" % (s["run_id"], s["phase"])
+
+
+def context(event, text):
+    return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}
+
+
+def deny(s, why):
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                   "permissionDecisionReason": "rehearse: %s.\n%s" % (why, status_line(s))}}
+
+
+def block(s, why):
+    return {"decision": "block", "reason": "rehearse: %s.\n%s" % (why, status_line(s))}
+
+
+# ---------- UserPromptSubmit ----------
+
+def instructions(mode, run_id):
+    path = os.path.join(HERE, "instructions", "%s.md" % (mode or "rehearse"))
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read().replace("${CLAUDE_PLUGIN_ROOT}", os.path.dirname(HERE))
+    except OSError:
+        text = "[rehearse] instructions pending"
+    return text.rstrip() + "\n[rehearse] run %s activated" % run_id
+
+
+def on_prompt(p, sid):
+    prompt = str(p.get("prompt") or "").strip()
+    m = ACTIVATE.match(prompt)
+    rest = m.group(1).strip() if m else None
+    is_stop = rest is not None and rest.lower() == "stop"
+    s = S.current(sid)
+    if s and not s["phase"].startswith("done"):
+        with S.locked(s) as cur:
+            if is_stop:
+                cur["phase"] = "done.cancelled"
+                cur["notes"].append("cancelled by user")
+            elif cur["phase"] == "confirm":
+                yes = prompt.lower().rstrip(".!") in AFFIRMATIVE
+                cur["confirmation"] = {"by": "user", "answer": prompt, "affirmative": yes, "at": time.time()}
+                if yes:
+                    cur["phase"] = "work"
+            else:
+                cur["prompts"].append(prompt)
+        if is_stop:
+            return {"systemMessage": "rehearse stopped (run %s cancelled)" % s["run_id"]}
+        if cur["phase"] == "work" and s["phase"] == "confirm":
+            return context("UserPromptSubmit", "[rehearse] the user confirmed the ending; edits are open.")
+        return None
+    if rest is None or is_stop:
+        return None
+    word = re.match(r"(fix|build)\b", rest, re.I)
+    mode = word.group(1).lower() if word else None
+    root = p.get("cwd") or os.getcwd()
+    s = S.new_run(sid, root, mode, prompt, F.fingerprint(root))
+    return dict(context("UserPromptSubmit", instructions(mode, s["run_id"])),
+                systemMessage="rehearse is on — type `rehearse stop` to stop")
+
+
+# ---------- PreToolUse ----------
+
+def new_code_file(s, path):
+    """A project code file present now and absent at activation, that no program produced."""
+    if not F.is_code(path) or path in s["produced"] or F.kind(s["root"], path) != "code":
+        return False
+    rel = os.path.relpath(path, s["root"])
+    if rel in s["fp_activation"]["files"]:
+        return False
+    if s["fp_activation"].get("git"):
+        tracked = F._git(s["root"], "ls-files", "--error-unmatch", "--", rel)
+        if tracked and tracked.returncode == 0:
+            return False
+    return os.path.isfile(path) and os.path.getmtime(path) >= s["created_at"] - 1
+
+
+def on_pre(p, sid):
+    s = S.current(sid)
+    if not s or s["phase"].startswith("done"):
+        return None
+    tool = p.get("tool_name")
+    tin = p.get("tool_input") if isinstance(p.get("tool_input"), dict) else {}
+    cwd = p.get("cwd") or s["root"]
+    why = NEED_LOOK if s["phase"] == "rework-observe" else NEED_ENDING
+    if tool in EDIT_TOOLS:
+        path = tin.get("file_path") or tin.get("notebook_path")
+        if not path:
+            return None
+        real = P.realpath(cwd, path)
+        if s["phase"] in LOCKED and F.kind(s["root"], real):
+            return deny(s, "%s; %s is project code" % (why, path))
+        if tool == "Write" and not os.path.exists(real):
+            with S.locked(s) as cur:
+                cur["created"].append(real)
+        return None
+    if tool != "Bash":
+        return None
+    segs = P.parse(str(tin.get("command") or ""), cwd)
+    if s["phase"] in LOCKED:
+        for seg in segs:
+            for t in seg["targets"]:
+                if F.kind(s["root"], t) == "code":
+                    return deny(s, "%s; this command writes the code file %s" % (why, t))
+        made = set()  # outputs of earlier segments of this same command (cc -o prog x.c && ./prog)
+        created = set(s["created"])
+        for seg in segs:
+            pp = seg["pp"]
+            if pp and os.path.isabs(pp) and pp not in made and (pp in created or new_code_file(s, pp)):
+                return deny(s, "%s was created during this run; it may not run while edits are locked. Run "
+                               "programs that existed at activation, or look through the stage" % pp)
+            made.update(seg["outputs"])
+    targets = [t for seg in segs for t in seg["targets"]]
+    outputs = [o for seg in segs for o in seg["outputs"]]
+    if targets or outputs:
+        with S.locked(s) as cur:
+            cur["created"] += [t for t in targets if t not in cur["created"]]
+            cur["produced"] += [o for o in outputs if o not in cur["produced"]]
+    return None
+
+
+# ---------- PostToolUse ----------
+
+def ending_marks(s):
+    """Program positions and test runners whose direct run closes an edit round."""
+    e = s.get("ending") or {}
+    pps, runners = set(), set()
+    for cmd in (e.get("cmd"), e.get("tests_effective")):
+        for seg in P.parse(cmd or "", s["root"]):
+            if seg["runner"]:
+                runners.add(seg["runner"])
+            elif seg["pp"] and cmd == e.get("cmd"):
+                pps.add(seg["pp"])
+    return pps, runners
+
+
+def known_host(s, host=None):
+    """With host: is it named in the request, the ending command or a project file. Without: is any host known."""
+    texts = [s.get("request") or ""] + s.get("prompts", []) + [(s.get("ending") or {}).get("cmd") or ""]
+    def hit(text):
+        return (host in text) if host else bool(URL.search(text))
+    if any(hit(t) for t in texts):
+        return True
+    for rel in F.project_files(s["root"]):
+        try:
+            with open(os.path.join(s["root"], rel), encoding="utf-8", errors="replace") as f:
+                if hit(f.read(F.BIG)):
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def runs_python(s):
+    segs = P.parse((s.get("ending") or {}).get("cmd") or "", s["root"])
+    return any(P.base_name(seg["prog"]) == "python" or seg["runner"] in ("pytest", "unittest")
+               or str(seg["pp"]).endswith(".py") for seg in segs)
+
+
+def leave_locked(cur, base):
+    """The exit check: the code files that changed since base, or [] (and the phase moves on)."""
+    return F.code_change(base, F.fingerprint(cur["root"]))
+
+
+def unlock_rework(cur, msgs, why):
+    changed = leave_locked(cur, cur["fp_phase_entry"])
+    if changed:
+        msgs.append("code changed during Observe: %s; put them back, then try again" % ", ".join(changed))
+        return
+    cur["phase"] = "work"
+    cur["failing_rounds"] = 0
+    msgs.append("edits are open again (%s)" % why)
+
+
+def close_round(cur, passing, by, msgs):
+    cur["round_open"] = False
+    cur["rounds"].append({"passing": passing, "by": by, "at": time.time()})
+    cur["failing_rounds"] = 0 if passing else cur["failing_rounds"] + 1
+    if cur["failing_rounds"] < LOOP_ROUNDS:
+        return
+    if runs_python(cur) or known_host(cur):
+        cur["phase"] = "rework-observe"
+        cur["fp_phase_entry"] = F.fingerprint(cur["root"])
+        msgs.append("%d failing rounds with no direct look: edits are locked. Look at what the code really does "
+                    "(a stage step that calls project code, or rehearse fetch to a known host), or make "
+                    "rehearse run pass" % cur["failing_rounds"])
+    else:
+        if "loop breaker not enforced: no stage for this language" not in cur["notes"]:
+            cur["notes"].append("loop breaker not enforced: no stage for this language")
+        msgs.append("reminder: %d failing rounds with no direct look. Stop guessing; look at what the code "
+                    "really does before the next edit" % cur["failing_rounds"])
+
+
+def direct_look(cur, msgs):
+    cur["direct_looks"] += 1
+    cur["failing_rounds"] = 0
+    if cur["phase"] == "rework-observe":
+        unlock_rework(cur, msgs, "direct look")
+
+
+def apply_result(cur, res, msgs):
+    kind = res.get("kind")
+    if kind == "ending" and res.get("ok"):
+        if cur["phase"] not in ("observe", "confirm"):
+            msgs.append("an ending is registered in observe or confirm, not in %s" % cur["phase"])
+            return True
+        changed = leave_locked(cur, cur["fp_activation"])
+        if changed:
+            msgs.append("code changed during Observe: %s; put them back, then register" % ", ".join(changed))
+            return True
+        if res.get("all_pass"):
+            msgs.append("the ending shows nothing wrong: every expectation already passes against the code as it "
+                        "was at activation. An ending must fail before the fix (a build fails because the program "
+                        "does not exist yet)")
+            return True
+        e = dict(res["ending"], before=res.get("before"), after=None, baseline=res.get("baseline"),
+                 tests_effective=(res.get("baseline") or {}).get("cmd"))
+        cur["ending"] = e
+        cur["phase"] = "confirm"
+        msgs.append("ending registered. Ask the user to confirm it in one plain sentence, with the command and "
+                    "the expected values beneath")
+        return False
+    if kind == "run" and res.get("ok") and cur.get("ending"):
+        cur["ending"]["after"] = {k: res.get(k) for k in ("rc", "stdout", "stderr", "results", "all_pass")}
+        passing = bool(res.get("all_pass"))
+        if cur["phase"] == "work" and cur["round_open"]:
+            close_round(cur, passing, "rehearse run", msgs)
+        elif passing:
+            cur["failing_rounds"] = 0
+            if cur["phase"] == "rework-observe":
+                unlock_rework(cur, msgs, "rehearse run passed")
+        return False
+    if kind == "fetch" and res.get("ok") and res.get("fixture"):
+        cur["fixtures"].append(res["fixture"])
+        if cur["phase"] in ("work", "rework-observe") and res.get("host") and known_host(cur, res["host"]):
+            direct_look(cur, msgs)
+        return False
+    if kind == "stage-step":
+        files = [P.realpath(cur["root"], f) for f in res.get("project_files") or []]
+        if any(F.kind(cur["root"], f) for f in files) and cur["phase"] in ("work", "rework-observe"):
+            direct_look(cur, msgs)
+    return False
+
+
+def last_result(text):
+    lines = [ln for ln in text.splitlines() if ln.startswith("REHEARSE-RESULT ")]
+    if not lines:
+        return None
+    try:
+        res = json.loads(lines[-1][len("REHEARSE-RESULT "):])
+        return res if isinstance(res, dict) else None
+    except ValueError:
+        return None
+
+
+def on_post(p, sid):
+    s = S.current(sid)
+    if not s:
+        return None
+    tool = p.get("tool_name")
+    tin = p.get("tool_input") if isinstance(p.get("tool_input"), dict) else {}
+    cwd = p.get("cwd") or s["root"]
+    msgs, refused = [], False
+    if tool in EDIT_TOOLS:
+        path = tin.get("file_path") or tin.get("notebook_path")
+        k = F.kind(s["root"], P.realpath(cwd, path)) if path else None
+        if not k:
+            return None
+        with S.locked(s) as cur:
+            L.log_edit(cur["run_folder"], tool, path, cur["phase"])
+            if k == "data":
+                cur["config_edits"].append({"path": path, "phase": cur["phase"], "at": time.time()})
+            if cur["phase"] in ("judge", "done.passed"):
+                cur["phase"] = "work"
+                cur["notes"].append("PASS voided: %s edited afterwards" % path)
+                msgs.append("project code changed after the verdict; back to work")
+            if cur["phase"] == "work":
+                cur["round_open"] = True
+        return context("PostToolUse", "\n".join("rehearse: " + m for m in msgs)) if msgs else None
+    if tool != "Bash":
+        return None
+    cmd = str(tin.get("command") or "")
+    out = L.output_text(p)
+    segs = P.parse(cmd, cwd)
+    with S.locked(s) as cur:
+        L.log_command(cur["run_folder"], cmd, out, cur["phase"])
+        if any(seg["prog"] == "rehearse" for seg in segs):
+            res = last_result(out)
+            if res is None:
+                msgs.append("result line missing; rerun without a pipe")
+            elif res.get("run") == cur["run_id"]:
+                refused = apply_result(cur, res, msgs)
+        elif cur["phase"] == "work":
+            pps, runners = ending_marks(cur)
+            if cur["round_open"] and any(seg["pp"] in pps or (seg["runner"] and seg["runner"] in runners)
+                                         for seg in segs):
+                close_round(cur, False, "direct run", msgs)
+            elif any(F.kind(cur["root"], t) for seg in segs for t in seg["targets"]):
+                cur["round_open"] = True
+    if not msgs:
+        return None
+    return block(cur, "\n".join(msgs)) if refused else context("PostToolUse", "\n".join("rehearse: " + m for m in msgs))
+
+
+def main():
+    try:
+        p = json.loads(sys.stdin.read())
+    except ValueError:
+        return
+    if not isinstance(p, dict) or not p.get("hook_event_name"):
+        return
+    sid = str(p.get("session_id") or "no-session")
+    handler = {"UserPromptSubmit": on_prompt, "PreToolUse": on_pre,
+               "PostToolUse": on_post, "PostToolUseFailure": on_post}.get(p["hook_event_name"])
+    out = handler(p, sid) if handler else None
+    if out:
+        print(json.dumps(out, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:  # a hook bug must never block the user
+        pass
+    sys.exit(0)

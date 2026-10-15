@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""rehearse: the plugin's commands. They read the run's state, never write it; the last line they print is
+REHEARSE-RESULT <json>, which the plugin's hook records.
+
+  rehearse ending --cmd '<cmd>' [--tests '<cmd>'] --expect '<requirement>' <check> <value> --cite <citation> ...
+  rehearse run
+  rehearse fetch <url> [curl args]
+  rehearse status
+
+checks: equals, contains, regex, exit_code, fixture_equals. citations: fixture:<name>, step:S<n>, request.
+"""
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.parse
+
+PLUGIN = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, os.path.join(PLUGIN, "hooks"))
+import ending as E  # noqa: E402
+import log as L  # noqa: E402
+import state as S  # noqa: E402
+
+TIMEOUT = float(os.environ.get("REHEARSE_RUN_TIMEOUT", "600"))
+
+
+def result(run, kind, **kw):
+    print("REHEARSE-RESULT " + json.dumps(dict(run=run, kind=kind, **kw), ensure_ascii=False))
+
+
+def clip(text, n=4000):
+    return text if len(text) <= n else text[:n] + "\n... (%d more characters)" % (len(text) - n)
+
+
+def sh(cmd, cwd, env=None):
+    """(rc, stdout, stderr); rc is None on a timeout."""
+    try:
+        p = subprocess.run(cmd, shell=True, executable="/bin/bash", cwd=cwd, capture_output=True, text=True,
+                           errors="replace", timeout=TIMEOUT, env=env)
+        return p.returncode, p.stdout, p.stderr
+    except subprocess.TimeoutExpired as x:
+        dec = lambda b: (b or b"").decode("utf-8", "replace") if isinstance(b, bytes) else (b or "")  # noqa: E731
+        return None, dec(x.stdout), dec(x.stderr)
+
+
+def run_ending(s):
+    """Run the ending command from the root with the tracer attached; print and return the outcome."""
+    e = s["ending"]
+    trace = os.path.join(s["run_folder"], "trace.jsonl")
+    since = os.path.getsize(trace) if os.path.exists(trace) else 0
+    pp = os.environ.get("PYTHONPATH")
+    env = dict(os.environ, REHEARSE_TRACE=trace, REHEARSE_ROOT=s["root"],
+               PYTHONPATH=os.path.join(PLUGIN, "tracer") + (os.pathsep + pp if pp else ""))
+    rc, out, err = sh(e["cmd"], s["root"], env)
+    results = E.evaluate(e["expectations"], rc, out, err, os.path.join(s["run_folder"], "fixtures"))
+    print("$ " + e["cmd"])
+    print("rc: " + ("timed out after %ds" % TIMEOUT if rc is None else str(rc)))
+    print("stdout:\n" + clip(out).rstrip())
+    print("stderr:\n" + clip(err).rstrip())
+    trace_lines = L.trace_lines(trace, since)
+    if trace_lines:
+        print("trace:\n" + "\n".join(trace_lines))
+    for r in results:
+        print("%s  %s: %s %r" % ("PASS" if r["passed"] else "FAIL", r["requirement"], r["check"], r["value"]))
+    return {"rc": rc, "stdout": clip(out), "stderr": clip(err), "results": results,
+            "all_pass": all(r["passed"] for r in results)}
+
+
+def baseline(s, tests):
+    """Run the relevant tests once while the code is the activation state (plan 2.5)."""
+    cmd = E.relevant_tests(s["ending"]["cmd"], tests, s["root"])
+    if not cmd:
+        return {"cmd": None, "note": "no tests found"}
+    rc, out, err = sh(cmd, s["root"])
+    both = out + "\n" + err
+    if rc is None:
+        return {"cmd": cmd, "note": "timed out; narrow with --tests"}
+    note = E.could_not_start(rc, both)
+    tail = "\n".join([ln for ln in both.splitlines() if ln.strip()][-20:])
+    return {"cmd": cmd, "note": note} if note else {"cmd": cmd, "rc": rc, "tail": tail}
+
+
+def sources(s):
+    # a `rehearse ending` step echoes its own expected values, so it can never be a source for them
+    steps = {r["step"]: r.get("out", "") for r in L.records(s["run_folder"])
+             if "step" in r and not re.search(r"(^|[\s;&|/])rehearse\s+ending\b", r.get("cmd", ""))}
+    fixtures = {}
+    for name in s.get("fixtures", []):
+        try:
+            with open(os.path.join(s["run_folder"], "fixtures", name), encoding="utf-8", errors="replace") as f:
+                fixtures[name] = f.read()
+        except OSError:
+            pass
+    return {"request": "\n".join([s.get("request") or ""] + s.get("prompts", [])), "steps": steps, "fixtures": fixtures}
+
+
+def cmd_ending(s, argv):
+    ap = argparse.ArgumentParser(prog="rehearse ending")
+    ap.add_argument("--cmd", required=True)
+    ap.add_argument("--tests")
+    ap.add_argument("--expect", nargs=3, action="append", default=[], metavar=("REQUIREMENT", "CHECK", "VALUE"))
+    ap.add_argument("--cite", action="append", default=[])
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        return result(s["run_id"], "ending", ok=False, error="bad arguments; see the usage above")
+    if s["phase"] not in ("observe", "confirm"):
+        print("an ending is registered in observe or confirm; the run is in %s" % s["phase"])
+        return result(s["run_id"], "ending", ok=False, error="wrong phase")
+    if len(a.cite) != len(a.expect):
+        print("every --expect needs its own --cite")
+        return result(s["run_id"], "ending", ok=False, error="every --expect needs its own --cite")
+    exps = [{"requirement": r, "check": c, "value": v, "cite": cite} for (r, c, v), cite in zip(a.expect, a.cite)]
+    problems = E.validate(exps, sources(s))
+    if problems:
+        print("ending refused:\n" + "\n".join("  " + p for p in problems))
+        return result(s["run_id"], "ending", ok=False, error="; ".join(problems))
+    s = dict(s, ending={"cmd": a.cmd, "tests": a.tests, "expectations": exps})
+    before = run_ending(s)
+    base = None
+    if not before["all_pass"]:
+        base = baseline(s, a.tests)
+        print("baseline: %s -> %s" % (base["cmd"], base.get("note") or "rc %s" % base.get("rc")))
+    return result(s["run_id"], "ending", ok=True, ending=s["ending"], before=before, baseline=base,
+                  all_pass=before["all_pass"])
+
+
+def cmd_run(s, argv):
+    if not s.get("ending"):
+        print("no ending registered yet; run rehearse ending first")
+        return result(s["run_id"], "run", ok=False, error="no ending")
+    r = run_ending(s)
+    print("all expectations pass" if r["all_pass"] else "not every expectation passes")
+    return result(s["run_id"], "run", ok=True, **r)
+
+
+def cmd_fetch(s, argv):
+    if not argv:
+        print("usage: rehearse fetch <url> [curl args]")
+        return result(s["run_id"], "fetch", ok=False, error="no url")
+    url, extra = argv[0], argv[1:]
+    u = urllib.parse.urlsplit(url)
+    folder = os.path.join(s["run_folder"], "fixtures")
+    stem = re.sub(r"[^\w.-]+", "_", (u.netloc + u.path).strip("/"))[:60] or "fetch"
+    name, n = stem, 1
+    while os.path.exists(os.path.join(folder, name)):
+        n += 1
+        name = "%s-%d" % (stem, n)
+    path = os.path.join(folder, name)
+    p = subprocess.run(["curl", "-sS", "-L", "-o", path] + extra + [url], capture_output=True, text=True,
+                       errors="replace", timeout=TIMEOUT)
+    ok = p.returncode == 0 and os.path.exists(path)
+    body = open(path, encoding="utf-8", errors="replace").read() if ok else ""
+    print("fixture: %s (%d bytes)" % (name, len(body)) if ok else "fetch failed: " + p.stderr.strip())
+    print("\n".join(body.splitlines()[:40]))
+    return result(s["run_id"], "fetch", ok=ok, url=url, host=u.hostname, fixture=name if ok else None,
+                  rc=p.returncode, bytes=len(body))
+
+
+def cmd_status(s, argv):
+    print("run %s: phase %s, failing rounds %d, direct looks %d"
+          % (s["run_id"], s["phase"], s.get("failing_rounds", 0), s.get("direct_looks", 0)))
+    return result(s["run_id"], "status", ok=True, phase=s["phase"])
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] not in ("ending", "run", "fetch", "status"):
+        print(__doc__)
+        return result(None, "usage", ok=False)
+    kind = sys.argv[1]
+    s = S.find_for_cwd(os.getcwd())
+    if not s:
+        print("no active rehearse run in this directory or above it")
+        return result(None, kind, ok=False, error="no run")
+    {"ending": cmd_ending, "run": cmd_run, "fetch": cmd_fetch, "status": cmd_status}[kind](s, sys.argv[2:])
+
+
+if __name__ == "__main__":
+    main()
