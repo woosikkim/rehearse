@@ -612,7 +612,8 @@ def pick_repro(d):
     first = first_edit_record(recs)
     cmds = [r["cmd"] for r in recs[:first if first is not None else len(recs)]
             if "cmd" in r and executed(r["cmd"]) and not is_suite(r["cmd"])]
-    return cmds[-1] if cmds else None
+    safe = [c for c in cmds if not UNSAFE_REPLAY.search(QUOTED.sub("''", c))]  # a run with a notes-append chained on is not replayable
+    return (safe or cmds)[-1] if cmds else None
 
 
 GUARD_FILES = GUARD_OWNED | {"active", "REHEARSAL.md"}  # not part of what a run "leaves behind"

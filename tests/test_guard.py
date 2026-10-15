@@ -658,6 +658,13 @@ edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")
 logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; print(old.g())'", "g")
 assert stop_in(d) == "", stop_in(d)
 assert "replay: differs" in open(os.path.join(d, ".rehearsal", "build.log")).read()
+# The pick prefers the last replayable run: a later run with a notes-append chained on is not chosen over it.
+d = git_repo(); assert logged_in(d, repro, "1") == 0
+assert logged_in(d, "python3 -c 'import old; print(old.g())'; cat >> .rehearsal/REHEARSAL.md <<'EOF'\n### S2\nEOF", "g") == 0
+edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")
+logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; print(old.g(), 2)'", "g 2")
+assert stop_in(d) == "", stop_in(d)
+assert "replay: differs" in open(os.path.join(d, ".rehearsal", "build.log")).read()
 # A reproduction that writes is never replayed.
 d = git_repo(); assert logged_in(d, repro, "1") == 0
 assert logged_in(d, "python3 -c 'import old; print(old.f())' > out.txt", "") == 0
