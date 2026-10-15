@@ -121,12 +121,30 @@ def option(name, default):
     return os.environ.get("CLAUDE_PLUGIN_OPTION_" + name) or os.environ.get("REHEARSE_" + name) or default
 
 
-def spawn_director(s, tin):
-    """Replace the director's prompt and model; take the spawn fingerprint and enter judge."""
+def attended():
+    return option("CONFIRM_ENDING", "true").lower() not in ("false", "0", "no")
+
+
+def updated(tin, name, extra):
     try:
-        with open(os.path.join(HERE, "instructions", "director.md"), encoding="utf-8") as f:
+        with open(os.path.join(HERE, "instructions", name), encoding="utf-8") as f:
             text = f.read().rstrip()
     except OSError:
+        return None
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": dict(
+        tin, prompt=text + "\n\nThis run:\n" + extra, model=option("DIRECTOR_MODEL", "opus"))}}
+
+
+def spawn_review(s, tin):
+    """Unattended confirm: the director reviews the ending against the request."""
+    with S.locked(s) as cur:
+        cur["review_spawned"] = True
+    return updated(tin, "director-review.md", "- state file (request, prompts, ending): %s\n" % s["path"])
+
+
+def spawn_director(s, tin):
+    """Replace the director's prompt and model; take the spawn fingerprint and enter judge."""
+    if not os.path.exists(os.path.join(HERE, "instructions", "director.md")):
         return None
     with S.locked(s) as cur:
         fpath = FD.write(cur)
@@ -134,10 +152,8 @@ def spawn_director(s, tin):
         cur["spawn_at"] = time.time()
         cur["spawn_from"] = cur["phase"]
         cur["phase"] = "judge"
-    prompt = ("%s\n\nThis run:\n- run folder: %s\n- ending record: %s (the \"ending\" key)\n- findings: %s\n"
-              "- project root: %s\n" % (text, cur["run_folder"], cur["path"], fpath, cur["root"]))
-    return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                   "updatedInput": dict(tin, prompt=prompt, model=option("DIRECTOR_MODEL", "opus"))}}
+    return updated(tin, "director.md", "- run folder: %s\n- ending record: %s (the \"ending\" key)\n- findings: %s\n"
+                   "- project root: %s\n" % (cur["run_folder"], cur["path"], fpath, cur["root"]))
 
 
 def on_pre(p, sid):
@@ -150,6 +166,8 @@ def on_pre(p, sid):
     if tool == "Agent":
         if tin.get("subagent_type") in DIRECTOR and s["phase"] in ("work", "rework-observe", "judge"):
             return spawn_director(s, tin)
+        if tin.get("subagent_type") in DIRECTOR and s["phase"] == "confirm" and not attended():
+            return spawn_review(s, tin)
         return None
     if p.get("agent_type") in DIRECTOR and tool in EDIT_TOOLS:
         path = tin.get("file_path") or tin.get("notebook_path")
@@ -290,6 +308,7 @@ def apply_result(cur, res, msgs):
                  tests_effective=(res.get("baseline") or {}).get("cmd"))
         cur["ending"] = e
         cur["phase"] = "confirm"
+        cur["uncovered"] = []
         msgs.append("ending registered. Ask the user to confirm it in one plain sentence, with the command and "
                     "the expected values beneath")
         return False
@@ -401,8 +420,8 @@ def on_post(p, sid):
 
 # ---------- SubagentStop: the verdict ----------
 
-def last_json(text):
-    """The last JSON object in text, or None."""
+def last_json(text, key="verdict"):
+    """The last JSON object in text carrying key, or None."""
     dec = json.JSONDecoder()
     for i in range(len(text) - 1, -1, -1):
         if text[i] == "{":
@@ -410,13 +429,32 @@ def last_json(text):
                 obj, _ = dec.raw_decode(text, i)
             except ValueError:
                 continue
-            if isinstance(obj, dict) and "verdict" in obj:
+            if isinstance(obj, dict) and key in obj:
                 return obj
     return None
 
 
+def on_review(s, text):
+    v = last_json(text, "review") or {}
+    review = str(v.get("review") or "").lower()
+    with S.locked(s) as cur:
+        cur["review_spawned"] = False
+        if review == "confirmed":
+            cur["confirmation"] = {"by": "director", "answer": "confirmed", "affirmative": True, "at": time.time()}
+            cur["uncovered"] = []
+            cur["phase"] = "work"
+            msg = "the director confirmed the ending; edits are open"
+        else:
+            cur["uncovered"] = [str(u) for u in v.get("uncovered") or []] or ["no JSON review in the final message"]
+            msg = ("uncovered: %s. Register the uncovered requirements with rehearse ending, then spawn the review "
+                   "again" % "; ".join(cur["uncovered"]))
+    return {"systemMessage": "rehearse: " + msg}
+
+
 def on_subagent_stop(p, sid):
     s = S.current(sid)
+    if s and p.get("agent_type") in DIRECTOR and s["phase"] == "confirm" and s.get("review_spawned"):
+        return on_review(s, str(p.get("last_assistant_message") or ""))
     if not s or p.get("agent_type") not in DIRECTOR or not s.get("spawn_fingerprint"):
         return None
     v = last_json(str(p.get("last_assistant_message") or "")) or {}
@@ -518,11 +556,13 @@ def on_stop(p, sid):
         elif first.startswith("fixed") and not verified(s):
             nxt = "say built, not verified against the real target"
     if nxt is None and ph not in ("done.passed", "done.not_fixed") and not s.get("stop_here"):
-        attended = option("CONFIRM_ENDING", "true").lower() not in ("false", "0", "no")
         if ph == "observe":
             nxt = "register an ending with rehearse ending"
+        elif ph == "confirm" and s.get("uncovered"):
+            nxt = ("register the uncovered requirements with rehearse ending, then spawn the review again (uncovered: "
+                   "%s)" % "; ".join(s["uncovered"]))
         elif ph == "confirm":
-            nxt = None if attended else "spawn rehearse:director"
+            nxt = None if attended() else "spawn rehearse:director to review the ending"
         else:
             nxt = "spawn rehearse:director"
             with S.locked(s) as cur:

@@ -293,6 +293,33 @@ try:
     assert p.state()["stop_here"] and p.state()["phase"] == "confirm"
     print("confirmation via question: ok")
 
+    # ---------------- unattended review ----------------
+    UN = {"REHEARSE_CONFIRM_ENDING": "false"}
+    REVIEW = open(os.path.join(ROOT, "hooks", "instructions", "director-review.md")).read().rstrip()
+    p = in_confirm()
+    assert blocked(p.stop(**UN), "next: spawn rehearse:director to review the ending")
+    ui = p.spawn(UN)["hookSpecificOutput"]["updatedInput"]
+    assert ui["prompt"].startswith(REVIEW) and p.state()["path"] in ui["prompt"] and ui["model"] == "opus"
+    assert p.state()["phase"] == "confirm" and not p.state()["spawn_fingerprint"]
+    out = p.verdict('{"review": "uncovered", "uncovered": ["the total includes tax"]}')
+    s = p.state()
+    assert s["phase"] == "confirm" and s["uncovered"] == ["the total includes tax"] and not s["confirmation"]
+    assert "spawn the review again" in out["systemMessage"]
+    out = p.stop(**UN)
+    assert blocked(out, "register the uncovered requirements with rehearse ending") and "tax" in out["reason"]
+    p.rehearse(*ENDING)  # a new registration clears the uncovered list
+    assert blocked(p.stop(**UN), "next: spawn rehearse:director to review the ending")
+    p.spawn(UN)
+    p.verdict('Read both.\n{"review": "confirmed"}')
+    s = p.state()
+    assert s["phase"] == "work" and s["confirmation"]["by"] == "director" and s["confirmation"]["at"]
+
+    p = in_confirm()  # attended: no review spawn, no review verdict, Stop allowed
+    assert p.spawn() is None and p.stop() is None
+    p.verdict('{"review": "confirmed"}')
+    assert p.state()["phase"] == "confirm" and not p.state()["confirmation"]
+    print("unattended review: ok")
+
     # ---------------- shortcut findings ----------------
     tests = {"tests/test_main.py": "def test_total():\n    assert True\n",
              "tests/test_other.py": "import pytest\n\ndef test_other():\n    assert True\n"}
