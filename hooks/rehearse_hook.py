@@ -13,11 +13,9 @@ import re
 import traceback
 import sys
 import time
-import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import ending as E  # noqa: E402
 import findings as FD  # noqa: E402
 import fingerprint as F  # noqa: E402
 import log as L  # noqa: E402

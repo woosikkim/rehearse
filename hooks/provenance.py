@@ -147,7 +147,3 @@ def parse(command, cwd):
         out.append({"prog": os.path.basename(prog), "pp": pp, "runner": runner,
                     "targets": targets, "outputs": outputs, "cwd": cur})
     return out
-
-
-def program_position(command, cwd):
-    return [s["pp"] for s in parse(command, cwd)]
