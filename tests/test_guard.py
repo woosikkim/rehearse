@@ -356,6 +356,36 @@ with tempfile.TemporaryDirectory() as d:
     shutil.rmtree(os.path.join(d, ".rehearsal"))
     assert stop() == ""  # no rehearsal folder: never blocks
 
+# Sweep wall: after the first code edit, finishing needs a codebase search and a new by-hand call.
+with tempfile.TemporaryDirectory() as d:
+    os.makedirs(os.path.join(d, ".rehearsal"))
+    touch(os.path.join(d, "oldmod.py"), time.time() - 3600)
+    touch(os.path.join(d, ".rehearsal", "active"))
+    def ran(cmd, out=""):
+        return call({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": d,
+                     "tool_response": {"stdout": out, "stderr": ""}}).returncode
+    def stop(**extra):
+        return call({"hook_event_name": "Stop", "cwd": d, **extra}).stdout
+    repro = "python3 -c 'import oldmod; print(oldmod.f(1))'"
+    assert ran(repro, "None") == 0  # marker up: the reproduction, logged in log.md
+    os.remove(os.path.join(d, ".rehearsal", "active"))
+    assert stop() == ""  # no edit yet: nothing to sweep
+    assert run("Write", {"file_path": os.path.join(d, "oldmod.py"), "content": "x"}, d) == 0  # gate open: edit allowed
+    assert "EDIT " in open(os.path.join(d, ".rehearsal", "build.log")).read()
+    assert '"block"' in stop() and "no search" in stop() and "no new by-hand call" in stop()
+    assert ran(repro, "12.5") == 0  # replaying the same reproduction does not count as a sweep
+    assert ran("python3 -m pytest -q", "3 passed") == 0  # test runs do not count either
+    assert "no search" in stop() and "no new by-hand call" in stop()
+    assert ran("grep -rn 'parse_date' .", "a.py:1") == 0
+    assert "no search" not in stop() and "no new by-hand call" in stop()
+    assert ran("python3 -c 'import oldmod; print(oldmod.g(1))'", "ok") == 0  # a sibling, called by hand
+    assert stop() == ""
+    assert stop(stop_hook_active=True) == ""
+    # A shell edit counts as the first edit too.
+    shutil.rmtree(os.path.join(d, ".rehearsal")); os.makedirs(os.path.join(d, ".rehearsal"))
+    assert ran("sed -i 's/a/b/' oldmod.py") == 0
+    assert "no search" in stop()
+
 # Fail open: a payload we do not understand never blocks and never exits 1.
 assert call("not json").returncode == 0
 assert call("42").returncode == 0

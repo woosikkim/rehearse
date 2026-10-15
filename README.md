@@ -7,7 +7,7 @@ Ask an agent for a scraper and it usually writes `scrape.py`, runs it and hopes.
 `rehearse` flips the order. The agent first **does the program's job itself, by hand**: one `curl`, one browser click, one `sqlite3` query at a time. It logs what really happens, and only then builds the program from the steps that actually worked. And before building anything, it checks whether someone already built it. The responses it recorded become the program's tests.
 
 ```
-Look (by hand) → Act as it (by hand) → Build (transcribe) → Replay (hand results are the tests)
+Look (by hand) → Act as it (by hand) → Build (transcribe) → Sweep (callers and siblings, by hand) → Replay (hand results are the tests)
 ```
 
 The same loop covers a new program and a change to existing code. For a bug, the agent *becomes the broken file*: it feeds the real input to the real neighbours one call at a time, finds where things go wrong, then acts as the fixed file by hand before any code is written.
@@ -37,7 +37,7 @@ Full details are in [SKILL.md](skills/rehearse/SKILL.md).
 | `UserPromptSubmit` | **Force word.** A prompt containing the word `rehearse` always loads the skill. |
 | `PreToolUse` | **Guard.** Loading the skill creates `.rehearsal/fixtures/` and the marker `.rehearsal/active` when none exists, so the first probe is already guarded. While `.rehearsal/active` exists: anything that existed before the marker may run; anything written since may not. One-line calls to existing code (`python3 -c '…'`, `node -e`, `node -p`, `ruby -e`, single quotes) are allowed when they contain no logic or file access. Loops, background jobs, new scripts, shell writes to code files, in-place editors and command substitution inside double quotes are blocked, each with a message naming the alternative. Once the marker is gone, code edits stay blocked until the guard's own log holds one call that ran something (a one-liner, `curl`, a query, an existing script or test); reading files and writing notes do not count, and the log cannot be written by hand. |
 | `PostToolUse` / `PostToolUseFailure` | **Automatic evidence.** While the marker exists, every shell command and the first lines of its output are appended to `.rehearsal/log.md`, with common secrets redacted. While `.rehearsal/` exists, test runs are also appended to `.rehearsal/tests.log`. |
-| `Stop` | **No red hand-back.** While `.rehearsal/` exists and the last logged test run shows failures, the agent is refused once when it tries to finish, with the instruction to fix the cause or undo the change and run the tests again. |
+| `Stop` | **No red hand-back, no narrow fix.** While `.rehearsal/` exists, the agent is refused once when it tries to finish if the last logged test run shows failures, or if code was edited and no sweep followed: a search of the codebase plus a new by-hand call after the first edit. Build-phase commands and edits are recorded in `.rehearsal/build.log`. |
 
 All four run [`hooks/guard.py`](hooks/guard.py), which needs only the Python 3 standard library. The plugin also ships one agent, [`agents/rehearser.md`](agents/rehearser.md).
 

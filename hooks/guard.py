@@ -8,7 +8,10 @@ already guarded); while .rehearsal/active exists, run only what existed before t
 log shows one call that ran something (a one-liner, a client tool, an existing script); notes do not count.
 PostToolUse / PostToolUseFailure: while the marker exists, append each shell command and its output
 to .rehearsal/log.md; while .rehearsal/ exists, append test runs to .rehearsal/tests.log.
-Stop: while .rehearsal/ exists and the last logged test run shows failures, refuse to finish, once.
+While .rehearsal/ exists and the marker is down (build phase), every shell command goes to
+.rehearsal/build.log and each code edit is noted there.
+Stop: while .rehearsal/ exists, refuse to finish, once, if the last logged test run shows failures, or if code
+was edited and no sweep followed (a codebase search plus a new by-hand call after the first edit).
 
 Reads a hook payload (JSON) on stdin. Exit 2 = block (reason on stderr), 0 = allow. Never exits 1.
 Tool names cover Claude Code; the others are best-effort for agents with similar hooks.
@@ -64,6 +67,13 @@ TEST_CMD = re.compile(r"(?:^|[\s;&|/])(?:pytest|py\.test|runtests\.py|manage\.py
                       r"phpunit|mvn test|gradle test|dotnet test)\b")
 RED = re.compile(r"\b[1-9]\d* (?:failed|errors?)\b|FAILED \(|^FAILED\b|^FAIL\b|--- FAIL|Tests:\s+[1-9]\d* failed|"
                  r"error during collection|^ERROR[: ]|AssertionError|Traceback \(most recent call last\)", re.M)
+SEARCH_CMD = re.compile(r"(?:^|[\s;&|(])(?:grep|rg|ag|ack|git\s+grep|find)\s")
+EDIT_SHELL = re.compile(r"(?:sed|perl)\s+-[^\s]*i|(?:^|[\s;&|])patch\s|(?:>>?|tee)\s*\S+\.(?:" +
+                        "|".join(e[1:] for e in sorted(CODE_EXT)) + r")\b")
+SWEEP = ("rehearse: you changed code, and the record shows no sweep after your first edit: {missing}. A fix that "
+         "answers only the reported example leaves its siblings broken. Search the codebase for every caller of what "
+         "you changed and every other place that does the same job (grep -rn <name>), call each by hand with the bad "
+         "input, fix what fails, then finish.")
 NOT_DONE = ("rehearse: your last test run shows failures: `{cmd}`. A test that passed before your change and fails after it "
             "means the fix is not done. Fix the cause or undo your change (git stash, git checkout -- <file>), run the "
             "tests again, and only then report what is and is not fixed.")
@@ -370,6 +380,26 @@ def start_marker(cwd):
         pass
 
 
+def build_entries(d):
+    return [e for e in read(os.path.join(d, "build.log")).split("\n\n") if e.startswith(("$ ", "EDIT "))]
+
+
+def sweep_missing(d):
+    """What the sweep still lacks after the first code edit, or None if no edit happened or the sweep is complete."""
+    entries = build_entries(d)
+    first = next((i for i, e in enumerate(entries)
+                  if e.startswith("EDIT ") or EDIT_SHELL.search(e.partition("\n")[0])), None)
+    if first is None:
+        return None
+    before = {ln[2:] for ln in read(os.path.join(d, "log.md")).splitlines() if ln.startswith("$ ")}
+    after = [e.partition("\n")[0][2:] for e in entries[first + 1:] if e.startswith("$ ")]
+    searched = any(SEARCH_CMD.search(c) for c in after)
+    new_call = any(executed(c) and not TEST_CMD.search(c) and c not in before for c in after)
+    missing = [x for x, ok in (("no search of the codebase", searched),
+                               ("no new by-hand call (the original reproduction and test runs do not count)", new_call)) if not ok]
+    return " and ".join(missing) or None
+
+
 def last_test_run(d):
     """(command, output) of the last entry in .rehearsal/tests.log, or None."""
     entries = [e for e in read(os.path.join(d, "tests.log")).split("\n\n") if e.startswith("$ ")]
@@ -407,6 +437,8 @@ def main():
         if tool in SHELL_TOOLS:
             if m:
                 log_command(payload, os.path.join(os.path.dirname(m), "log.md"))
+            elif d:
+                log_command(payload, os.path.join(d, "build.log"))
             if d and TEST_CMD.search(shell_text(tin.get("command"))):
                 log_command(payload, os.path.join(d, "tests.log"))
         return 0
@@ -415,6 +447,10 @@ def main():
         # A baseline check (git stash ... run tests ... git stash pop) is red on purpose: not a hand-back.
         if last and RED.search(last[1]) and "git stash" not in last[0]:
             print(json.dumps({"decision": "block", "reason": NOT_DONE.format(cmd=last[0][:200])}))
+            return 0
+        missing = None if payload.get("stop_hook_active") or not d else sweep_missing(d)
+        if missing:
+            print(json.dumps({"decision": "block", "reason": SWEEP.format(missing=missing)}))
         return 0
     if event != "PreToolUse":
         return 0
@@ -433,6 +469,11 @@ def main():
                 reason = f"{NO_STEPS} ({reason})"
     elif tool in WRITE_TOOLS or "patch" in tool.lower():
         reason = check_write(tin, m, empty_log)
+        if not reason and d and not m:
+            for p in (tin.get(k) for k in ("file_path", "path", "notebook_path")):
+                if p and os.path.splitext(str(p))[1] in CODE_EXT:
+                    with open(os.path.join(d, "build.log"), "a", encoding="utf-8") as f:
+                        f.write(f"EDIT {p}\n\n")
     if not reason:
         return 0
     if m and marker_age_hours(m) > 24:

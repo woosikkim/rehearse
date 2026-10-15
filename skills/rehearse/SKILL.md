@@ -28,16 +28,17 @@ Rehearse: <size>, because <reason>. Say skip or full to override.
 ## The loop
 
 ```
-Look → Act as it → Build → Replay
+Look → Act as it → Build → Sweep → Replay
 ```
 
-It is the same loop whether you fix something that exists or make something new. Only the first step differs. A failure on replay starts the loop again (see Chains). Do not write or change program code before Build: acting as it can change the plan, so the plan is only final after it.
+It is the same loop whether you fix something that exists or make something new. Only the first step differs. Sweep is what makes a fix whole: the reported example is one place the cause shows; the sweep finds the others. A failure on replay starts the loop again (see Chains). Do not write or change program code before Build: acting as it can change the plan, so the plan is only final after it.
 
 | | Fixing something that exists | Making something new |
 |---|---|---|
 | Step 1: Look | Reproduce once, locate, pick the component to become | Scout for what exists, model the program, poke the real target |
 | Act as it | Be file 3 with its real rows; then be the fixed file 3 and hand its rows to files 4 and 5 | Be the scraper on three items: fetch each page, find the name and price, write the CSV row by hand |
-| Build | Change only what the hand-made fix showed | Transcribe the steps that worked |
+| Build | Change only what the hand-made fix showed, where the value is first made wrong | Transcribe the steps that worked |
+| Sweep | Every caller of what you changed and every other place that does the same job, each called by hand with the bad input | Every other item shape the site has, each fetched by hand |
 | Replay | Saved rows are the inputs; the hand outputs are the expected values | Saved pages are the inputs; the hand-written rows are the expected CSV |
 | Chains | The fixed rows make file 4 crash on "12,50": revealed by the date fix | The hand-written rows break the CSV writer on a name with a comma: revealed by the extract step |
 | Size | Full, even when a test already fails in seconds; helpers when Look shows a long chain | Full, even for one call to a known API; helpers for a big site with many surfaces |
@@ -55,6 +56,7 @@ mkdir -p .rehearsal/fixtures && touch .rehearsal/active
 1. **Reproduce once.** Run what shows the problem one time and save the result as a fixture (a fixture is a saved real input or output): `python3 main.py > .rehearsal/fixtures/before.txt`.
 2. **Locate.** Follow the stack trace, the logs, or a search (`grep -n "def parse_date" *.py`) to where it goes wrong, and read the code there. If the report's recipe needs new code (a dummy class, a test app, a script), do not write it: find a question the existing code can answer about the same thing, such as building the real object and asking what type or value it has.
 3. **Pick the component to become**: the one where good input turns into wrong output. In the five-files story it is file 3, which drops three March rows because their dates are written `04/03/2024`.
+4. **Chase the wrong value upstream.** If the wrong value arrives from a call into other code, call that code by hand with the same input, and keep going until you reach the call whose inputs are right and whose output is wrong. That is the component to become, and the fix belongs there, where the value is first made wrong, not where it is first noticed. A patch at the point of noticing leaves every other caller broken: the drop-down was unsorted because the field that produces its choices was unsorted; fix the field.
 
 **Making something new.** *Scout first.* Most of what programs need already exists. Go down this ladder for the whole job, then for each need left, and stop at the first rung that holds:
 
@@ -125,7 +127,7 @@ More than 3 links means the first fix was wrong: undo it and re-diagnose from Lo
 
 ## Helpers and the manager
 
-Send a helper when Look shows a long chain, slow feedback or a big codebase: that is the **helpers** size, chosen after Look. The session is the manager. Helpers only look.
+Send helpers when the sweep's list is long (more than three places, or places across files that each need their own reproduction), or when a sibling's fix breaks a third file. That is a count, not a guess. The session is the manager. Helpers only look.
 
 1. **The manager starts the rehearsal** before spawning: `mkdir -p .rehearsal/fixtures && touch .rehearsal/active`.
 2. **Spawn `rehearse:rehearser`** with the Agent tool. Say what to become and whom to feed: "Become normalize.py with the 04/03/2024 rows from orders.csv. Act as the fixed file and feed its rows to price.py and report.py, one call at a time."
@@ -151,11 +153,23 @@ Now write the code, and test it with what you saw.
 - Behaviour that was never rehearsed goes on the list of unverified risks. Anything you could still call in one line does not belong there: call it.
 - **Leave `.rehearsal/` in place when you are done.** The log is the evidence; the user decides when to delete it.
 
+## Sweep
+
+A fix that answers only the reported example is one third of the job. After Build, before Replay:
+
+1. **Find every caller** of what you changed: `grep -rn <function or class name>` across the project, tests included.
+2. **Find every sibling**: other places that do the same job their own way. The admin filter was fixed; the reverse-relation field builds choices too. One validator passes the value; the form fields that validate inline do not.
+3. **Call each one by hand with the bad input**, the same way you reproduced the first. Each is a flow in the log. Fix what fails, where its value is first made wrong.
+4. **Each becomes a test** in Replay.
+
+The guard enforces the sweep: once code has been edited, you cannot finish until the record shows a search of the codebase and at least one new by-hand call that is not the original reproduction. A long list, or a sibling whose fix breaks a third file, is the moment for helpers (below).
+
 ## Report
 
 Tell the user plainly:
 - **Reused vs built**: which existing tools and libraries do the work, and what was written and why
 - **Verified for real**: the flows rehearsed by hand and replayed
+- **Swept**: the callers and siblings you checked, and what each showed
 - **Sandboxed / simulated**: what was not done for real, and why
 - **Unverified risks**: what only time will show (runs over days, layout changes), plus anything skipped with its reason. Never a variation you could have typed
 
@@ -195,6 +209,10 @@ Keep this file as you go; the manager and the tests read it.
 
 ## What I'd change and why
 - normalize.py: read 04/03/2024 as 4 March 2024 (S1, S3)
+
+## Sweep
+| Place | Caller or sibling | Called with | Saw | Fixed |
+|-------|-------------------|-------------|-----|-------|
 
 ## Unverified risks
 -
