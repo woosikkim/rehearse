@@ -149,6 +149,8 @@ python3 tests/test_guard.py
 - The Stop rule reads test output as text (pytest, unittest, Django, jest, go, cargo and similar). A runner it does not recognise passes through. It cannot tell which tests were green before the change, only whether the last run is red. An agent can edit existing tests until they pass; the log shows it, the guard does not stop it.
 - The sweep rule makes the agent look for siblings; it cannot make it recognise one.
 - Bugs that need something the machine does not have (a particular database, a live service) cannot be rehearsed. The honest outcome is "not reproduced, not fixed", which the skill asks for and the agent does not always choose.
+- The call recorder is Python-only, traces the main thread only, records at most 2,000 calls per process, is not switched on for test runners, and shadows any later `sitecustomize` on the path. Other languages fall back to the command record.
+- The reproduction replay needs a git repository and skips commands that write; a reproduction that depends on timing or randomness may look the same twice and be refused once.
 - The auto-log redacts common secret patterns but is not a secrets filter.
 - Anything that fails only over time is reported as an unverified risk, not tested.
 
