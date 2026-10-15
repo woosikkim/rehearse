@@ -39,7 +39,7 @@ class RehearseClaudeCode(ClaudeCode):
                 f"rm -rf {PLUGIN_DIR} && "
                 f"git clone --quiet --depth 1 --branch {shlex.quote(REPO_REF)} "
                 f"{shlex.quote(REPO_URL)} {PLUGIN_DIR} && "
-                f"python3 {PLUGIN_DIR}/tests/test_guard.py"
+                f"python3 {PLUGIN_DIR}/tests/run_all.py"
             ),
         )
 
@@ -56,4 +56,5 @@ class RehearseClaudeCode(ClaudeCode):
         if env.get("CLAUDE_CODE_OAUTH_TOKEN") and "CLAUDE_FORCE_OAUTH" not in env:
             env["CLAUDE_FORCE_OAUTH"] = "1"
             env.pop("ANTHROPIC_API_KEY", None)
+        env["REHEARSE_CONFIRM_ENDING"] = "0"  # unattended: the director reviews the ending instead of a user
         return env

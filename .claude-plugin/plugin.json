@@ -1,7 +1,7 @@
 {
   "name": "rehearse",
-  "version": "0.7.0",
-  "description": "Make the agent see a bug fail before it fixes it, and check every place the fix should reach. Look by hand, act as the fix by hand, build to match, sweep the callers and siblings, replay the hand results as tests. A guard refuses scripts during the rehearsal, code edits before a real call, a red hand-back, and a fix with no sweep.",
+  "version": "2.0.0",
+  "description": "Makes the agent see a bug happen, or do a new program's job by hand, before it changes code. It registers the ending (the command and the result it must show), you confirm it in plain words, and an independent director checks the work before it may finish. Turn it on by starting a prompt with 'rehearse'.",
   "license": "MIT",
   "keywords": [
     "skill",
@@ -13,5 +13,31 @@
   "author": {
     "name": "woosikkim"
   },
-  "repository": "https://github.com/woosikkim/rehearse"
+  "repository": "https://github.com/woosikkim/rehearse",
+  "userConfig": {
+    "confirm_ending": {
+      "type": "boolean",
+      "title": "Confirm the ending",
+      "description": "Ask you to confirm the ending before any edit. Turn off for unattended runs; the director reviews it instead.",
+      "default": true
+    },
+    "max_rejections": {
+      "type": "number",
+      "title": "Director rejections",
+      "description": "How many times the director may send the work back before the run ends with a not fixed report.",
+      "default": 3
+    },
+    "loop_breaker_rounds": {
+      "type": "number",
+      "title": "Loop breaker rounds",
+      "description": "Failing edit rounds with no direct look before edits lock again.",
+      "default": 2
+    },
+    "director_model": {
+      "type": "string",
+      "title": "Director model",
+      "description": "The model the director runs on.",
+      "default": "opus"
+    }
+  }
 }
