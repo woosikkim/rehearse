@@ -118,7 +118,10 @@ def new_code_file(s, path):
 
 
 def option(name, default):
-    return os.environ.get("CLAUDE_PLUGIN_OPTION_" + name) or os.environ.get("REHEARSE_" + name) or default
+    # A saved plugin setting, else a plain variable, else the EVAL_ form (the only
+    # kind of variable `claude plugin eval` lets through), else the default.
+    return (os.environ.get("CLAUDE_PLUGIN_OPTION_" + name) or os.environ.get("REHEARSE_" + name)
+            or os.environ.get("EVAL_REHEARSE_" + name) or default)
 
 
 def attended():

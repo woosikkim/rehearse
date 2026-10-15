@@ -21,7 +21,7 @@ TEXT = open(os.path.join(ROOT, "hooks", "instructions", "director.md"), encoding
 TMP = os.path.realpath(tempfile.mkdtemp(prefix="rehearse-director-"))
 DATA = os.path.join(TMP, "plugin-data")
 ENV = {k: v for k, v in os.environ.items()
-       if not k.startswith(("CLAUDE_PLUGIN_OPTION_", "REHEARSE_"))}
+       if not k.startswith(("CLAUDE_PLUGIN_OPTION_", "REHEARSE_", "EVAL_REHEARSE_"))}
 ENV["CLAUDE_PLUGIN_DATA"] = DATA
 
 
@@ -220,6 +220,7 @@ try:
     assert p.stop() is None  # confirm, attended (the default)
     assert blocked(p.stop(REHEARSE_CONFIRM_ENDING="false"), "next: spawn rehearse:director")
     assert blocked(p.stop(CLAUDE_PLUGIN_OPTION_CONFIRM_ENDING="false"), "next:")
+    assert blocked(p.stop(EVAL_REHEARSE_CONFIRM_ENDING="0"), "next:")  # the eval tool's env form
     p.ev("UserPromptSubmit", prompt="rehearse stop")
     assert p.stop() is None  # done.cancelled
 
