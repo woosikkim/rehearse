@@ -7,7 +7,6 @@
 - [What it looks like](#what-it-looks-like)
 - [The loop](#the-loop)
 - [What the guard refuses](#what-the-guard-refuses)
-- [Does it work?](#does-it-work)
 - [Install](#install)
 - [For developers](#for-developers)
 
@@ -74,43 +73,6 @@ Only two things, and both say what to do instead:
 - **Finishing before the director passes.** The AI cannot hand back the work until the director has checked it, or until it writes an honest `not fixed` report.
 
 One more rule keeps the looking honest: while it is looking, the AI cannot run a file it has just written itself. It looks with the plugin's own tools instead, which log every step.
-
-## Does it work?
-
-Measured on the hardest part of the standard bug-fixing benchmark and on a standard terminal-task benchmark, with Claude Sonnet 5.5. Every run is in [`bench/`](bench/) and can be repeated.
-
-**SWE-bench Verified, the 45 tasks rated over one hour for a human.** Real bugs in Django, sympy, sphinx, astropy and others, graded by each project's own hidden tests.
-
-![Results on the 45 hardest SWE-bench Verified tasks](docs/swe-bench-results.svg)
-
-**Terminal-Bench 2.1, seeded sample:** 5 of 5 passed so far. Typical run on either benchmark: about 15 minutes, 20 cents.
-
-### Same bug, same model, before and after
-
-Django 13344. Claude Sonnet both times.
-
-<table>
-<tr><th width="50%">Before reproduction was enforced</th><th width="50%">After</th></tr>
-<tr><td valign="top">
-
-Read four files, wrote "S1: read deprecation.py", edited.
-
-Fixed a real bug, the wrong one. Its own test passed. The hidden tests failed.
-
-Its report: "I made no hand-run call that executed code."
-
-</td><td valign="top">
-
-Built the real handler by hand and asked whether the chain is async: **False**. That is the bug.
-
-Four small edits, same call again: **True**. 1,014 tests pass. Hidden tests pass.
-
-</td></tr>
-</table>
-
-Every rule that was only words got ignored. Every rule that became a refusal changed behaviour the same day. The full story is in [`bench/README.md`](bench/README.md).
-
-These results are from version 0.7. Version 2 is being measured with the plugin's own evals in [`evals/`](evals/).
 
 ## Install
 

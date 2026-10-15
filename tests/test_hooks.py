@@ -98,8 +98,8 @@ class Proj:
 
     def state(self):
         d = os.path.join(DATA, "sessions", self.sid)
-        names = sorted(os.listdir(d)) if os.path.isdir(d) else []
-        return json.load(open(open(os.path.join(d, names[-1])).read().strip())) if names else None
+        names = sorted(n for n in os.listdir(d) if n.endswith(".json")) if os.path.isdir(d) else []
+        return json.load(open(os.path.join(d, names[-1]))) if names else None
 
     def set_phase(self, phase):  # stands in for story 4 (director verdicts) only
         s = self.state()

@@ -27,6 +27,10 @@ Prompt:
 rehearse: build a script that lists item names and prices from the local API
 ```
 
+## Not in the plugin eval
+
+The eval runs the agent's shell in a sandbox that refuses connections to this server, so this demo is run by hand only (first eval run, 2026-10-15).
+
 ## Expected story
 
 The documentation above is wrong on purpose. The server really answers on `/api/v1/items`, and each item has `price_cents` (1999), not `price`. An agent that builds from the documentation writes a script that gets a 404. An agent that looks first fetches the real address, sees the real fields, and registers an ending built from what the server answered:

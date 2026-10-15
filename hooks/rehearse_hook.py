@@ -10,6 +10,7 @@ Fails open: any error or malformed input exits 0 with no decision.
 import json
 import os
 import re
+import traceback
 import sys
 import time
 import urllib.parse
@@ -142,7 +143,7 @@ def spawn_review(s, tin):
     """Unattended confirm: the director reviews the ending against the request."""
     with S.locked(s) as cur:
         cur["review_spawned"] = True
-    return updated(tin, "director-review.md", "- state file (request, prompts, ending): %s\n" % s["path"])
+    return updated(tin, "director-review.md", "- state file (request, prompts, ending): %s\n" % S.mirror_path(s))
 
 
 def spawn_director(s, tin):
@@ -156,7 +157,7 @@ def spawn_director(s, tin):
         cur["spawn_from"] = cur["phase"]
         cur["phase"] = "judge"
     return updated(tin, "director.md", "- run folder: %s\n- ending record: %s (the \"ending\" key)\n- findings: %s\n"
-                   "- project root: %s\n" % (cur["run_folder"], cur["path"], fpath, cur["root"]))
+                   "- project root: %s\n" % (cur["run_folder"], S.mirror_path(cur), fpath, cur["root"]))
 
 
 def on_pre(p, sid):
@@ -532,7 +533,8 @@ def on_stop(p, sid):
         return None
     first = report_line(s)
     ph = s["phase"]
-    if (first or "").startswith("not fixed"):  # an honest give-up ends the run in any phase
+    # An honest give-up ends the run where nobody can answer: unattended, or after the user chose "stop here".
+    if (first or "").startswith("not fixed") and (not attended() or s.get("stop_here")):
         if ph != "done.not_fixed":
             with S.locked(s) as cur:
                 cur["phase"] = "done.not_fixed"
@@ -576,6 +578,7 @@ def main():
     sid = str(p.get("session_id") or "no-session")
     s = S.current(sid)
     if s:
+        S.ensure_mirror(s)
         void_pass(s)
     handler = {"UserPromptSubmit": on_prompt, "PreToolUse": on_pre, "PostToolUse": on_post,
                "PostToolUseFailure": on_post, "SubagentStop": on_subagent_stop, "Stop": on_stop}.get(p["hook_event_name"])
@@ -587,6 +590,13 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception:  # a hook bug must never block the user
-        pass
+    except Exception:  # a hook bug must never block the user, but it must not pass in silence either
+        log = os.path.join(os.path.dirname(S.sessions_root()), "hook-errors.log")
+        try:
+            os.makedirs(os.path.dirname(log), exist_ok=True)
+            with open(log, "a", encoding="utf-8") as f:
+                f.write("%s\n%s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), traceback.format_exc()))
+        except OSError:
+            pass
+        print(json.dumps({"systemMessage": "rehearse: hook error; this check did not run; see %s" % log}))
     sys.exit(0)

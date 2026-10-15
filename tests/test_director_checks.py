@@ -98,8 +98,8 @@ class Proj:
 
     def state(self):
         d = os.path.join(DATA, "sessions", self.sid)
-        names = sorted(os.listdir(d)) if os.path.isdir(d) else []
-        return json.load(open(open(os.path.join(d, names[-1])).read().strip())) if names else None
+        names = sorted(n for n in os.listdir(d) if n.endswith(".json")) if os.path.isdir(d) else []
+        return json.load(open(os.path.join(d, names[-1]))) if names else None
 
     def set(self, **kw):
         s = self.state()
@@ -242,12 +242,32 @@ try:
         p.report("built, not verified against the real target: no credentials here")
         assert blocked(p.stop(), "next: spawn rehearse:director"), phase
 
-    for make in (in_work, lambda: Proj({"main.py": BUGGY})):  # an honest give-up ends the run in any phase
+    for make in (in_work, lambda: Proj({"main.py": BUGGY})):  # an honest give-up ends the run only unattended
         p = make()
         if p.state() is None:
             p.ev("UserPromptSubmit", prompt="rehearse fix the report; it should print total: 12")
         p.report("not fixed: the sandbox hides the tool, nothing was changed")
-        assert p.stop() is None and p.state()["phase"] == "done.not_fixed"
+        assert blocked(p.stop(), "next:")  # attended: the user has "stop here"; the agent does not
+        assert p.stop(EVAL_REHEARSE_CONFIRM_ENDING="0") is None and p.state()["phase"] == "done.not_fixed"
+
+    p = Proj({"main.py": BUGGY})  # the run folder deleted mid-run: decisions read the data folder, the copy comes back
+    p.ev("UserPromptSubmit", prompt="rehearse fix the report; it should print total: 12")
+    folder = p.state()["run_folder"]
+    shutil.rmtree(folder)
+    assert blocked(p.stop(), "next: register an ending")
+    assert json.load(open(os.path.join(folder, "state.json")))["run_id"] == p.state()["run_id"]
+    with open(os.path.join(folder, "state.json"), "w") as f:  # an edited copy changes no decision
+        f.write(json.dumps(dict(p.state(), phase="done.passed")))
+    assert blocked(p.stop(), "next: register an ending")
+
+    p = Proj({"main.py": BUGGY})  # a hook bug fails open, leaves a traceback, tells the user
+    p.ev("UserPromptSubmit", prompt="rehearse fix the report; it should print total: 12")
+    s = p.state()
+    del s["phase"]
+    json.dump(s, open(s["path"], "w"))
+    out = p.stop()
+    assert out and "hook error" in out.get("systemMessage", "") and "hook-errors.log" in out["systemMessage"], out
+    assert "KeyError" in open(os.path.join(DATA, "hook-errors.log")).read()
 
     p = in_confirm()  # stop here, from the confirmation answer
     p.ev("UserPromptSubmit", prompt="stop here and write the report")
@@ -303,7 +323,7 @@ try:
     p = in_confirm()
     assert blocked(p.stop(**UN), "next: spawn rehearse:director to review the ending")
     ui = p.spawn(UN)["hookSpecificOutput"]["updatedInput"]
-    assert ui["prompt"].startswith(REVIEW) and p.state()["path"] in ui["prompt"] and ui["model"] == "opus"
+    assert ui["prompt"].startswith(REVIEW) and os.path.join(p.state()["run_folder"], "state.json") in ui["prompt"] and ui["model"] == "opus"
     assert p.state()["phase"] == "confirm" and not p.state()["spawn_fingerprint"]
     out = p.verdict('{"review": "uncovered", "uncovered": ["the total includes tax"]}')
     s = p.state()

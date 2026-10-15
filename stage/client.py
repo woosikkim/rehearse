@@ -38,7 +38,8 @@ def save(s, st):
 def run(python, s, args, stdin=""):
     """(reply dict or None, error text) from one server process."""
     try:
-        r = subprocess.run([python, SERVER, "--root", s["root"], "--state", s["path"]] + args, input=stdin,
+        state = os.path.join(s["run_folder"], "state.json")  # the copy; the data folder may be unreadable here
+        r = subprocess.run([python, SERVER, "--root", s["root"], "--state", state] + args, input=stdin,
                            cwd=s["root"], capture_output=True, text=True, timeout=TIMEOUT)
     except (OSError, subprocess.TimeoutExpired) as x:
         return None, str(x)
