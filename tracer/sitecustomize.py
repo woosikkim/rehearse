@@ -45,16 +45,17 @@ def _start(trace_path, root):
     def r(v, depth=0):
         """A repr that never runs project code: builtin scalars and containers of them; anything else by type name."""
         try:
-            if isinstance(v, SAFE):
+            t = type(v)  # exact types only: a subclass may override __repr__, __iter__ or __len__ with project code
+            if t in SAFE:
                 return short.repr(v)[:MAX_REPR]
-            if depth < 2 and isinstance(v, (list, tuple, set, frozenset)):
+            if depth < 2 and t in (list, tuple, set, frozenset):
                 items = [r(x, depth + 1) for x in list(v)[:8]]
                 more = ", ..." if len(v) > 8 else ""
-                return (type(v).__name__ + "[" if not isinstance(v, (list, tuple)) else "[") + ", ".join(items) + more + "]"
-            if depth < 2 and isinstance(v, dict):
+                return (t.__name__ + "[" if t not in (list, tuple) else "[") + ", ".join(items) + more + "]"
+            if depth < 2 and t is dict:
                 items = ["%s: %s" % (r(k, depth + 1), r(x, depth + 1)) for k, x in list(v.items())[:8]]
                 return "{" + ", ".join(items) + (", ...}" if len(v) > 8 else "}")
-            return "<%s>" % type(v).__name__
+            return "<%s>" % t.__name__
         except Exception:
             return "<repr failed>"
 

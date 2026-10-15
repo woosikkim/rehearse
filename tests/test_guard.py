@@ -458,6 +458,9 @@ with tempfile.TemporaryDirectory() as d:
     touch(os.path.join(d, "fresh.txt"))  # a new file the guard never saw written: still not a program's output
     assert "written during this rehearsal" in bash_err("python3 fresh.txt", d)
     assert "contains logic or file access" in bash_err("python3 -c 'import io; print(1, file=io.FileIO(\"evil\", \"w\"))'", d)
+    assert "written during this rehearsal" in bash_err("iconv -f utf-8 -t utf-8 run.txt -o evil; python3 evil", d)  # a text tool's -o
+    assert "writes .rehearsal/log.md itself" in bash_err("rm .rehearsal/written", d)
+    assert "writes .rehearsal/log.md itself" in bash_err("mv .rehearsal/commands.jsonl /tmp/x", d)
     assert bash("python3 notes.txt", d) == 2 and bash("ls", d) == 0 and bash("python3 notes.txt", d) == 2  # not an immediate retry
 
 # E5-E7: the trace is the gate, the log shows it, the recorder is switched on for by-hand commands only.
@@ -702,6 +705,11 @@ with tempfile.TemporaryDirectory() as d:
     pr = traced("import loud; loud.take(loud.Loud()); print('done')", d, trace)
     assert pr.stdout.strip() == "done", pr.stdout
     assert "<Loud>" in open(trace).read() and "REPR RAN" not in open(trace).read()
+    with open(j("loudstr.py"), "w") as f:
+        f.write("class S(str):\n    def __repr__(self):\n        print('SIDE EFFECT')\n        return 'S'\n\ndef take(x):\n    return x\n")
+    os.remove(trace)
+    pr = traced("import loudstr; loudstr.take(loudstr.S('a')); print('done')", d, trace)
+    assert pr.stdout.strip() == "done" and "<S>" in open(trace).read() and "SIDE EFFECT" not in open(trace).read()
     # E4: an unwritable trace file changes nothing the program shows.
     code = "import oldmod; print(oldmod.f(5)); raise SystemExit(3)"
     plain = subprocess.run([sys.executable, "-c", code], cwd=d, capture_output=True, text=True)

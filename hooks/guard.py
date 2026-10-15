@@ -43,7 +43,8 @@ READ_ONLY = {"cat", "sed", "grep", "rg", "ag", "ack", "ls", "find", "head", "tai
              "cd", "mkdir", "touch", "rm", "rmdir", "cp", "mv", "ln", "chmod", "chown", "tee", "sort", "uniq", "cut", "tr",
              "awk", "jq", "yq", "basename", "dirname", "realpath", "readlink", "env", "export", "set", "unset", "true",
              "false", "test", "[", "date", "sleep", "git", "du", "df", "free", "nproc", "uname", "id", "whoami", "hostname",
-             "ps", "pgrep", "kill", "seq", "yes", "clear", "exit", "wait", "time", "timeout", "nohup", "xargs", "conda"}
+             "ps", "pgrep", "kill", "seq", "yes", "clear", "exit", "wait", "time", "timeout", "nohup", "xargs", "conda",
+             "iconv", "base64", "pandoc", "gzip", "gunzip", "xz", "bzip2", "zip", "cpp", "m4", "envsubst", "fmt", "fold", "paste", "join", "comm"}
 # Package and build managers count only when they run something (install/list do not).
 SETUP = {"pip": set(), "pip3": set(), "apt": set(), "apt-get": set(), "apk": set(), "brew": set(), "uv": {"run"}, "pipx": {"run"},
          "npm": {"run", "test", "start", "exec"}, "pnpm": {"run", "test", "start", "exec", "dlx"}, "yarn": {"run", "test", "start"},
@@ -402,6 +403,8 @@ def check_shell_writes(toks, cur="", d=None, produced=None):
             (targets if prog == "curl" or prog in READ_ONLY else outputs).append(t.split("=", 1)[1])
     if prog == "tee":
         targets += [a for a in args if not a.startswith("-")]
+    if prog in {"rm", "mv", "rmdir", "unlink", "truncate", "shred"} and any(os.path.basename(a) in GUARD_OWNED and ".rehearsal" in a for a in args):
+        return OWN_LOG
     if prog in {"cp", "mv", "install", "ln"} and args:
         targets.append(args[-1])
     if prog == "dd":
@@ -688,9 +691,10 @@ def replay(d, cmd, cwd):
         # Untracked files are the agent's new files: snapshot them ourselves (git stash -u cannot restore over a
         # file the original run recreates), then put the tree back to the original code.
         for p in untracked:
-            src, dst = os.path.join(cwd, p), os.path.join(snapshot, p)
-            os.makedirs(os.path.dirname(dst.rstrip(os.sep)) or snapshot, exist_ok=True)
-            (shutil.copytree if os.path.isdir(src) else shutil.copy2)(src, dst)
+            src, dst = os.path.join(cwd, p), os.path.join(snapshot, p.rstrip(os.sep))
+            os.makedirs(os.path.dirname(dst) or snapshot, exist_ok=True)
+            (shutil.copytree if os.path.isdir(src) else shutil.copy2)(src, dst + ".partial")
+            os.replace(dst + ".partial", dst)  # an item only appears in the snapshot once it is complete
             (shutil.rmtree if os.path.isdir(src) else os.remove)(src)
         if tracked:
             if git("stash", "push", "-q", "--", *tracked).returncode != 0:
@@ -742,9 +746,9 @@ def restore_replay(d, cwd):
             git("stash", "pop", "-q")
     snapshot = os.path.join(d, "replay-snapshot")
     for p in plan.get("untracked", []):
-        src, dst = os.path.join(snapshot, p), os.path.join(cwd, p)
+        src, dst = os.path.join(snapshot, p.rstrip(os.sep)), os.path.join(cwd, p.rstrip(os.sep))
         if not os.path.exists(src):
-            continue
+            continue  # not snapshotted yet (or only partially): the original is still in place
         if os.path.isdir(dst) and not os.path.isdir(src):
             shutil.rmtree(dst)
         elif os.path.isdir(dst):
