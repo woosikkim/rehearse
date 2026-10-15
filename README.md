@@ -2,6 +2,15 @@
 
 **A Claude Code plugin that makes the AI see a bug fail before it fixes it, then check every place the fix should reach.**
 
+Think of a mechanic. Most AI coding tools read your complaint, open the hood and replace the part that looks wrong. With `rehearse`, the AI has to drive the car first and hear the noise, replace the part, drive it again, and then check the other wheels for the same wear. Only then does it hand you the keys, with a written note of everything it tried.
+
+1. **See it fail.** Make the bug happen by hand and write down what happened.
+2. **Fix the cause.** Change the code where the problem starts, not where it shows.
+3. **Check the siblings.** Find every other place with the same cause and test each one.
+4. **Prove it.** Run it all again; what was seen by hand becomes the tests.
+
+A guard watches every command and will not let the AI skip a step.
+
 - [What it does](#what-it-does)
 - [What it looks like](#what-it-looks-like)
 - [The loop](#the-loop)
