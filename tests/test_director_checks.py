@@ -203,11 +203,12 @@ try:
     p.spawn()
     assert blocked(p.stop(), "next: spawn rehearse:director")  # judge
     p.verdict(PASS)
-    assert p.stop() is None  # done.passed
-    p.report("fixed: the total is 12 now")
-    assert p.stop() is None  # verified by rehearse run
     p.report("looks good")
     assert blocked(p.stop(), "write report.md starting with fixed / built, not verified")
+    p.report("fixed: the total is 12 now")
+    assert p.stop() is None and p.state()["closed"]  # verified by rehearse run; the run is over
+    p.edit("main.py", FIXED + "# later, unrelated\n")  # a closed run does not come back on a later edit
+    assert p.stop() is None and p.state()["phase"] == "done.passed"
 
     p = rejected_three_times()
     assert blocked(p.stop(), 'write report.md starting with "not fixed"')
@@ -249,6 +250,12 @@ try:
         p.report("not fixed: the sandbox hides the tool, nothing was changed")
         assert blocked(p.stop(), "next:")  # attended: the user has "stop here"; the agent does not
         assert p.stop(EVAL_REHEARSE_CONFIRM_ENDING="0") is None and p.state()["phase"] == "done.not_fixed"
+
+    p = in_work()  # the loop breaker rounds setting is read where it is used
+    p.edit("main.py", "print('total: 11')\n")
+    p.ev("PostToolUse", {"REHEARSE_LOOP_BREAKER_ROUNDS": "1"}, tool_name="Bash", tool_input={"command": "python3 main.py"},
+         tool_response={"stdout": "total: 11\n", "stderr": "", "interrupted": False})
+    assert p.state()["phase"] == "rework-observe" and p.state()["failing_rounds"] == 1, p.state()["phase"]
 
     p = Proj({"main.py": BUGGY})  # the run folder deleted mid-run: decisions read the data folder, the copy comes back
     p.ev("UserPromptSubmit", prompt="rehearse fix the report; it should print total: 12")

@@ -243,6 +243,14 @@ try:
     for cite, value in (("step:S9", "price_cents: 1250"), ("step:S1", "price_cents: 9")):
         so, _ = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "x", "contains", value, "--cite", cite)
         assert "ending refused" in so and p.state()["phase"] == "observe", so
+    rid = p.state()["run_id"]  # S5: the command named through a shell variable, its refusal echoing the value
+    p.bash("R=rehearse; $R ending --cmd x --expect x contains 'price_cents: 1250'",
+           "ending refused: 'price_cents: 1250' does not appear in step:S9\nREHEARSE-RESULT "
+           + json.dumps({"run": rid, "kind": "ending", "ok": False}))
+    for cite in ("step:S3", "step:S5"):  # the plugin's own ending output echoes values: never a source, however spelled
+        so, _ = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "x", "contains", "price_cents: 1250",
+                           "--cite", cite)
+        assert "ending refused" in so and p.state()["phase"] == "observe", (cite, so)
     so, _ = p.rehearse("fetch", "file://" + p.j("data.txt"))
     fixture = p.state()["fixtures"][0]
     assert os.path.exists(os.path.join(p.state()["run_folder"], "fixtures", fixture))
@@ -276,6 +284,11 @@ try:
     assert p.state()["phase"] == "observe"  # only the last line applies
     p.bash("cd sub && rehearse ending", "REHEARSE-RESULT {}\n" + line)
     assert p.state()["phase"] == "confirm"
+    # rehearse ending / run may take minutes (the program, then the tests): they get the Bash tool's longest timeout
+    for cmd in ("rehearse ending --cmd x", "R=/opt/plugin/bin/rehearse\n$R run", "cd sub && rehearse run --as-director"):
+        out = p.pre("Bash", command=cmd)
+        assert out["hookSpecificOutput"]["updatedInput"]["timeout"] == 600000, (cmd, out)
+    assert p.pre("Bash", command="rehearse status") is None and p.pre("Bash", command="python3 run.py") is None
     # The command invoked through an interpreter by path (the executable bit can be lost on a
     # Windows-mounted checkout) is still the plugin command: the program position is the script.
     p = Proj({"main.py": BUGGY})

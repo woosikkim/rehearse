@@ -23,7 +23,7 @@ import ending as E  # noqa: E402
 import log as L  # noqa: E402
 import state as S  # noqa: E402
 
-TIMEOUT = float(os.environ.get("REHEARSE_RUN_TIMEOUT", "600"))
+TIMEOUT = float(os.environ.get("REHEARSE_RUN_TIMEOUT", "270"))  # two runs (program, then tests) fit the Bash cap
 
 
 def result(run, kind, **kw):
@@ -83,9 +83,10 @@ def baseline(s, tests):
 
 
 def sources(s):
-    # a `rehearse ending` step echoes its own expected values, so it can never be a source for them
+    # a `rehearse ending` or `rehearse run` step echoes the expected values, so it can never be a source for them;
+    # judged by its result line, so the command's spelling ($R ending, a path) does not matter
     steps = {r["step"]: r.get("out", "") for r in L.records(s["run_folder"])
-             if "step" in r and not re.search(r"(^|[\s;&|/])rehearse\s+ending\b", r.get("cmd", ""))}
+             if "step" in r and not re.search(r'^REHEARSE-RESULT .*"kind": "(ending|run)"', r.get("out", ""), re.M)}
     fixtures = {}
     for name in s.get("fixtures", []):
         try:

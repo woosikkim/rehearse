@@ -17,6 +17,11 @@ import time
 ENDED = ("done.cancelled", "done.not_fixed")
 
 
+def live(s):
+    """A run still governs the session until it is cancelled, not fixed, or closed (its final Stop was allowed)."""
+    return bool(s) and s.get("phase") not in ENDED and not s.get("closed")
+
+
 def sessions_root():
     data = os.environ.get("CLAUDE_PLUGIN_DATA")
     return os.path.join(data, "sessions") if data else os.path.expanduser("~/.claude/rehearse/sessions")
@@ -69,7 +74,7 @@ def newest(session_id):
 def current(session_id):
     """The session's newest run unless it has ended (cancelled or not fixed); None otherwise. Read-only."""
     s = newest(session_id)
-    return s if s and s.get("phase") not in ENDED else None
+    return s if live(s) else None
 
 
 def find_for_cwd(cwd):
@@ -80,7 +85,7 @@ def find_for_cwd(cwd):
         if os.path.isdir(rd):
             for run in sorted(os.listdir(rd), reverse=True):
                 s = load(os.path.join(rd, run, "state.json"))
-                if s and s.get("phase") not in ENDED:
+                if live(s):
                     return s
         parent = os.path.dirname(d)
         if parent == d:

@@ -28,7 +28,9 @@ LOCKED = ("observe", "confirm", "rework-observe")
 EDIT_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 AFFIRMATIVE = {"yes", "y", "ok", "correct", "confirmed", "네", "예", "응", "맞아", "맞아요", "네 맞아요"}
 ACTIVATE = re.compile(r"^(?:/rehearse(?::rehearse)?(?:\s+|$)|rehearse(?:\s*:\s*|\s+))(.*)$", re.I | re.S)
-LOOP_ROUNDS = 2
+LONG_RUN = re.compile(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:ending|run)\b")
+BIN = os.path.join(os.path.dirname(HERE), "bin", "rehearse")
+BASH_CAP_MS = 600000  # Claude Code's largest Bash timeout; rehearse ending/run get it so a slow baseline is not cut off
 NEED_ENDING = "register and confirm an ending first"
 NEED_LOOK = ("edits are locked after two failing rounds with no direct look; look directly (a stage step that "
              "calls project code, or rehearse fetch to a known host) or make rehearse run pass")
@@ -63,8 +65,7 @@ def instructions(mode, run_id):
             text = f.read().replace("${CLAUDE_PLUGIN_ROOT}", os.path.dirname(HERE))
     except OSError:
         text = "[rehearse] instructions pending"
-    return text.rstrip() + "\n[rehearse] run %s activated · command: rehearse (if not on PATH: %s)" % (
-        run_id, os.path.join(os.path.dirname(HERE), "bin", "rehearse"))
+    return text.rstrip() + "\n[rehearse] run %s activated · command: rehearse (if not on PATH: %s)" % (run_id, BIN)
 
 
 def on_prompt(p, sid):
@@ -143,7 +144,8 @@ def spawn_review(s, tin):
     """Unattended confirm: the director reviews the ending against the request."""
     with S.locked(s) as cur:
         cur["review_spawned"] = True
-    return updated(tin, "director-review.md", "- state file (request, prompts, ending): %s\n" % S.mirror_path(s))
+    return updated(tin, "director-review.md", "- state file (request, prompts, ending): %s\n- command: %s\n"
+                   % (S.mirror_path(s), BIN))
 
 
 def spawn_director(s, tin):
@@ -157,7 +159,7 @@ def spawn_director(s, tin):
         cur["spawn_from"] = cur["phase"]
         cur["phase"] = "judge"
     return updated(tin, "director.md", "- run folder: %s\n- ending record: %s (the \"ending\" key)\n- findings: %s\n"
-                   "- project root: %s\n" % (cur["run_folder"], S.mirror_path(cur), fpath, cur["root"]))
+                   "- project root: %s\n- command: %s\n" % (cur["run_folder"], S.mirror_path(cur), fpath, cur["root"], BIN))
 
 
 def on_pre(p, sid):
@@ -211,6 +213,8 @@ def on_pre(p, sid):
         with S.locked(s) as cur:
             cur["created"] += [t for t in targets if t not in cur["created"]]
             cur["produced"] += [o for o in outputs if o not in cur["produced"]]
+    if LONG_RUN.search(str(tin.get("command") or "")):
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": dict(tin, timeout=BASH_CAP_MS)}}
     return None
 
 
@@ -271,7 +275,7 @@ def close_round(cur, passing, by, msgs):
     cur["round_open"] = False
     cur["rounds"].append({"passing": passing, "by": by, "at": time.time()})
     cur["failing_rounds"] = 0 if passing else cur["failing_rounds"] + 1
-    if cur["failing_rounds"] < LOOP_ROUNDS:
+    if cur["failing_rounds"] < int(float(option("LOOP_BREAKER_ROUNDS", "2"))):
         return
     if runs_python(cur) or known_host(cur):
         cur["phase"] = "rework-observe"
@@ -484,7 +488,7 @@ def on_subagent_stop(p, sid):
         elif verdict == "REWORK":
             cur["rejections"] += 1
             cur["findings"] = v.get("findings")
-            if cur["rejections"] >= int(option("MAX_REJECTIONS", "3")):
+            if cur["rejections"] >= int(float(option("MAX_REJECTIONS", "3"))):
                 cur["phase"] = "done.not_fixed"
                 cur["report_pending"] = True
                 msg = ("the director rejected the change %d times. Write report.md starting with \"not fixed\": "
@@ -529,7 +533,7 @@ def verified(s):
 
 def on_stop(p, sid):
     s = S.newest(sid)
-    if not s or s["phase"] == "done.cancelled":
+    if not s or s["phase"] == "done.cancelled" or s.get("closed"):
         return None
     first = report_line(s)
     ph = s["phase"]
@@ -565,6 +569,9 @@ def on_stop(p, sid):
     if s.get("stop_here") and ph != "done.not_fixed":
         with S.locked(s) as cur:
             cur["phase"] = "done.not_fixed"
+    if ph == "done.passed":  # the run is over; later work in this session is not governed by it
+        with S.locked(s) as cur:
+            cur["closed"] = True
     return None
 
 

@@ -69,7 +69,7 @@ The same loop builds new programs: the AI does the job by hand first, one reques
 
 Only two things, and both say what to do instead:
 
-- **Changing code before the ending is confirmed.** Until you have said yes to the ending, every edit to the project's code is refused, whichever way the AI tries to write it.
+- **Changing code before the ending is confirmed.** Until you have said yes to the ending, every edit to the project's code is refused, through the editor tools or a shell command that writes a code file. A write hidden inside a script the AI runs is caught when the ending is registered: the code must still match what it was when the run started.
 - **Finishing before the director passes.** The AI cannot hand back the work until the director has checked it, or until it writes an honest `not fixed` report.
 
 One more rule keeps the looking honest: while it is looking, the AI cannot run a file it has just written itself. It looks with the plugin's own tools instead, which log every step.
@@ -135,7 +135,7 @@ python3 tests/run_all.py
 claude plugin eval . --scaffold --allow-tools Bash Write Edit Agent --trust-plugin --runs 3
 ```
 
-The first runs the deterministic hook, stage and director tests and prints nothing on success. The second runs the six cases in `evals/`, with and without the plugin.
+The first runs the deterministic hook, stage and director tests and prints nothing on success. The second runs the five cases in `evals/`, with and without the plugin.
 
 ### Limits
 
