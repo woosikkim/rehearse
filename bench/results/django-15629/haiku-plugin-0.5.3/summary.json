@@ -1,0 +1,13 @@
+{
+ "task": "django-15629",
+ "fixed": false,
+ "broke_others": 0,
+ "hidden_tests_failing": 2,
+ "announce": "full",
+ "real_run_before_edit": false,
+ "guard_blocks": 4,
+ "turns": 67,
+ "cost_usd": 0.03,
+ "minutes": 10.1,
+ "final": "Fixed in `/testbed`, but the MySQL path is not verified: there is no MySQL server or driver in this environment.\n\n**Cause:** when a primary key changes collation, `_alter_field` in `django/db/backends/base/schema.py` updates referencing columns through the type-only path. The collation is never emitted for `account_id`, so `ADD CONSTRAINT` fails on MySQL.\n\n**Changes:**\n- `django/db/backends/base/schema.py`: in the related-field loop, if the referencing field's collation differs, use `_alter_column_collation_sql`. Otherwise keep the type path.\n- `django/db/backends/mysql/schema.py`: override `_alter_column_collation_sql` to add the NULL/NOT NULL state, as `_alter_column_type_sql` already does. Without this, the new `MODIFY` would make the FK column nullable. This also applies to a plain collation change on a MySQL field, which now keeps its nullability.\n- `tests/schema/tests.py`: added `test_db_collation_propagates_to_foreign_key`, limited to MySQL. On SQLite it failed at the FK assertion, because SQLite never updates referencing columns. That is backend behaviour, not the bug, so I scoped the test rather than the fix.\n\n**Verified:**\n- `tests/runtests.py schema`: 180 run, OK, 29 skipped (the new test is skipped on SQLite).\n- `tests/runtests.py migrations`: OK.\n\n**Not verified:**\n- The new MySQL test has never run, and I haven't looked at the SQL MySQL would emit. Run `tests/runtests.py schema` against MySQL before merging.\n\n**Environment:** I installed `asgiref` and `sqlparse` with pip so the test runner could import Django. The rehearsal log is in `.rehearsal/REHEARSAL.md`; I left `.rehearsal/` in place."
+}

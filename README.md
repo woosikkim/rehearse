@@ -1,75 +1,163 @@
 # rehearse
 
-**Make coding agents be the program before they write it.**
+**A Claude Code plugin that makes the AI see a bug fail before it fixes it, and check every place the fix should reach.**
 
-Ask an agent for a scraper and it usually writes `scrape.py`, runs it and hopes. Then it breaks on a 403, a JavaScript-rendered page, or a missing field on page 7.
+Most coding agents work like this: read the bug report, read some code, write a fix that looks right, run the tests, hand it back. It is fast, and it is how you get a fix that passes the one test in the report and leaves the same bug alive in two other places. Or a "fix" for the wrong bug entirely.
 
-`rehearse` flips the order. The agent first **does the program's job itself, by hand**: one `curl`, one browser click, one `sqlite3` query at a time. It logs what really happens, and only then builds the program from the steps that actually worked. And before building anything, it checks whether someone already built it. The responses it recorded become the program's tests.
+`rehearse` changes what the agent is allowed to do and when. Before it may touch a line of code, it has to reproduce the problem **by hand**, one real command at a time, and write down what it saw. After it has fixed the cause, it has to go looking for every other place that same cause shows up, and check each one the same way. And it cannot hand the work back while its own tests are red.
+
+None of that is a request. It is enforced by a guard that watches every command the agent runs and refuses the shortcuts.
+
+## What it looks like
+
+Here is the agent's log from the bundled demo, a five-file program that loses its March orders. The agent is told only "fix the missing March orders".
 
 ```
-Look (by hand) → Act as it (by hand) → Build (transcribe) → Sweep (callers and siblings, by hand) → Replay (hand results are the tests)
+### S1: main.py -> March 80.00                              (saved as fixtures/before.txt)
+### S2: parse_date("04/03/2024") -> None, so the row is dropped
+### S3: to_amount("12,50") -> ValueError.  Revealed by: S2 fix (rows now reach price.py)
+## Expected by hand: 12.50 + 40.00 + 30.00 = 82.50; March = 162.50
+## What I'd change: parse_date accepts day/month/year; to_amount accepts a comma
 ```
 
-The same loop covers a new program and a change to existing code. For a bug, the agent *becomes the broken file*: it feeds the real input to the real neighbours one call at a time, finds where things go wrong, then acts as the fixed file by hand before any code is written.
+Three real calls, each one a line. The second call finds the bug. The third finds a second bug that was hidden *behind* the first: once March rows get through, the price parser chokes on a European decimal comma. The agent found it by acting as the fixed file and feeding its output to the next file by hand, not by reading. Then it wrote the expected total down before writing any code, fixed both files, and ran the program: March 162.50.
 
-## How it works
+That log is the product. You can read it without reading code and know exactly what was checked.
 
-- **It sizes itself.** One question (is there anything to run before the change?) picks the size: skip when there is nothing to run, otherwise full; helpers are added after Look when the chain is long, feedback slow or the codebase big. There is no light size: a one-line bug gets the whole loop too, because the plugin's job is a verified fix, not a fast one. The agent announces one line, `Rehearse: <size>, because <reason>. Say skip or full to override.`, and goes on. The word **rehearse** in a prompt always loads the skill.
-- **Look first, in both directions.** Existing code: reproduce once, locate, pick the file to become. New program: scout for a tool that already does the job, then poke the real target by hand.
-- **Act as the fix.** The agent produces by hand what the fixed component should output and feeds it to the real neighbours. Those hand outputs become the expected values in the tests.
-- **Chains are tracked.** A neighbour that breaks on corrected data is a chain link, logged with *Revealed by: <the fix>*. More than three links means undo and re-diagnose.
-- **Helpers that can only look.** For slow feedback or a chain, the session sends a `rehearse:rehearser` agent that has no write tools. It brings back a log path and a fixture list; the session edits only when the log shows the hand-made chain working, then replays.
+## The loop
 
-- **Scout before building.** A ladder: does a tool already do the whole job (`yt-dlp`, `pandoc`, `rclone`)? Does an official API or feed replace the hard part? Does a maintained library do the step? Only then write code. Candidates are checked (alive, used, fits, weight, real name) and then rehearsed on the real target, because a tool found is still an assumption.
-- **Surfaces, not program types.** Any program is a mix of eight surfaces: web, CLI, files, GUI, database, time, external services, hardware. Each has a playbook ([surfaces.md](skills/rehearse/references/surfaces.md)), so one skill covers thousands of programs.
-- **Plan labels.** Each plan step's hidden assumption is labeled 🟢 rehearse, 🟡 sandbox, 🔴 simulate/ask, ⚪ pure logic, or ❓ blocked. Irreversible actions (sending, paying, deleting, posting) never run without the user's OK.
-- **A flow grid** of happy path, input variations, dependency failures, state and user mistakes, ranked by likelihood × damage.
-- **Rehearsal rules.** One direct action per call, observe before acting, use the same tool the program will use, sample instead of looping, save evidence, never fake a result.
-- **Replay.** Recorded responses become fixture tests, and the finished program is run live on the same sample and compared with the hand results.
+```mermaid
+flowchart LR
+    A["Look<br/><small>reproduce by hand,<br/>follow the bad value upstream</small>"] --> B["Act as it<br/><small>be the broken file,<br/>then be the fixed one</small>"]
+    B --> C["Build<br/><small>change only what<br/>the hand-made fix showed</small>"]
+    C --> D["Sweep<br/><small>every caller, every sibling,<br/>each checked by hand</small>"]
+    D --> E["Replay<br/><small>hand results<br/>become the tests</small>"]
+    B -. "a neighbour breaks on the corrected data:<br/>second bug, revealed by the first" .-> A
+    E -. "replay fails" .-> A
+```
 
-Full details are in [SKILL.md](skills/rehearse/SKILL.md).
+- **Look.** Reproduce the problem once, by hand. Find the place where good input turns into bad output. If the bad value arrives from somewhere else, follow it upstream until you find where it is first made wrong. That is where the fix belongs.
+- **Act as it.** Be the broken file: call it with the real input and watch it fail. Then be the fixed file: write down, by hand, what it *should* produce, and feed that to its neighbours one call at a time. Anything that breaks on the corrected data is a second bug, logged as "revealed by" the first.
+- **Build.** Only now change code, and only what the hand-made fix showed.
+- **Sweep.** Find every caller of what you changed and every other place that does the same job. Call each one by hand with the bad input. Fix what fails.
+- **Replay.** Everything you saw by hand becomes a test. Run the real program on the same sample and compare.
 
-## Four hooks (Claude Code)
+The same loop works for building something new: the agent does the program's job itself first, one `curl` or one query at a time, and only builds from the steps that actually worked.
 
-| Hook | Why |
+## What the guard refuses
+
+The skill tells the agent what to do. The guard is what makes it true. While a rehearsal is on:
+
+- **No scripts.** The agent may run anything that existed before the rehearsal started, and may not write new code to run. It can type one-line calls to existing functions, which is how it reproduces things by hand. A specimen that a real tool needs to read, such as a tiny docs project, goes in one folder the agent can fill but never execute.
+- **No edits before a real call.** Code edits stay refused until the guard's own log shows the agent actually ran something. Reading files does not count. Notes do not count. The log cannot be written by hand.
+- **No finishing with red tests.** If the agent's last test run shows failures, it is sent back once: fix the cause or undo the change.
+- **No narrow fix.** If code was edited and nothing after the first edit was a search of the codebase plus a fresh by-hand check, it is sent back once: look for the siblings.
+
+Every refusal says what the agent may do instead. Every command and its result is recorded in `.rehearsal/`, so there is always an audit trail, and the agent is told to leave it in place for you.
+
+## Does it work?
+
+We measured it on the hardest part of the standard bug-fixing benchmark, and on a standard terminal-task benchmark. All runs use Claude Sonnet 5.5 and are reproducible from the files in [`bench/`](bench/).
+
+**SWE-bench Verified, the 45 tasks rated as taking a human over an hour.** Real bugs from Django, sympy, sphinx, astropy, scikit-learn, pytest, pylint and xarray, graded by the projects' own hidden tests.
+
+![Results on the 45 hardest SWE-bench Verified tasks](docs/swe-bench-results.svg)
+
+Typical run: 15 minutes, 21 cents.
+
+Of the 15 misses, 8 are tasks whose hidden tests demand things the bug report never asks for, 3 are bugs that only appear on a database the test container does not have, and 4 are real misses. The plugin was improved *using* these runs, so the versions are not uniform; the full story, version by version and failure by failure, is in [`bench/README.md`](bench/README.md).
+
+**Terminal-Bench 2.1, a seeded sample.** Tasks like "find and fix the security weakness in this web framework", "repair this corrupted database", "finish this formal proof".
+
+| | |
 |---|---|
-| `SessionStart` | **One standing rule.** Adds one sentence at startup, resume and after compaction: before building or fixing anything that depends on something outside the code, load the rehearse skill and let it size the job. No keyword list. |
-| `UserPromptSubmit` | **Force word.** A prompt containing the word `rehearse` always loads the skill. |
-| `PreToolUse` | **Guard.** Loading the skill creates `.rehearsal/fixtures/` and the marker `.rehearsal/active` when none exists, so the first probe is already guarded. While `.rehearsal/active` exists: anything that existed before the marker may run; anything written since may not. One-line calls to existing code (`python3 -c '…'`, `node -e`, `node -p`, `ruby -e`, single quotes) are allowed when they contain no logic or file access. Loops, background jobs, new scripts, shell writes to code files, in-place editors and command substitution inside double quotes are blocked, each with a message naming the alternative. Once the marker is gone, code edits stay blocked until the guard's own log holds one call that ran something (a one-liner, `curl`, a query, an existing script or test); reading files and writing notes do not count, and the log cannot be written by hand. |
-| `PostToolUse` / `PostToolUseFailure` | **Automatic evidence.** While the marker exists, every shell command and the first lines of its output are appended to `.rehearsal/log.md`, with common secrets redacted. While `.rehearsal/` exists, test runs are also appended to `.rehearsal/tests.log`. |
-| `Stop` | **No red hand-back, no narrow fix.** While `.rehearsal/` exists, the agent is refused once when it tries to finish if the last logged test run shows failures, or if code was edited and no sweep followed: a search of the codebase plus a new by-hand call after the first edit. Build-phase commands and edits are recorded in `.rehearsal/build.log`. |
+| Passed | 5 of 5 so far |
+| Typical run | 12 minutes, 20 cents |
 
-All four run [`hooks/guard.py`](hooks/guard.py), which needs only the Python 3 standard library. The plugin also ships one agent, [`agents/rehearser.md`](agents/rehearser.md).
+### Same bug, same model, before and after
+
+Django bug 13344, an async middleware receiving a coroutine instead of a response. Claude Sonnet both times.
+
+<table>
+<tr><th width="50%">Before the guard enforced reproduction</th><th width="50%">After</th></tr>
+<tr><td valign="top">
+
+Read four files. Wrote two notes: *"S1: read deprecation.py"*, *"S2: spot stale state in load_middleware"*. Took the marker down. Edited the handler.
+
+Fixed a real bug, the wrong one: a neighbouring flaw in how an unused middleware is skipped. Wrote its own test, which passed. The hidden tests failed.
+
+Its report: *"I made no hand-run call that executed code."*
+
+</td><td valign="top">
+
+Built the real ASGI handler by hand and asked whether the middleware chain is a coroutine function: **False**. That is the bug, seen running. One more call isolated the four classes that skip the async check.
+
+Marker down, four small edits, same call again: **True**. Then 1,014 tests, all passing. Hidden tests: all passing.
+
+Its report separates *"verified for real"* from *"not done"*.
+
+</td></tr>
+</table>
+
+What we learned the hard way, and what the plugin does about it, is the interesting part. Short version: every rule that was only words got ignored; every rule that became a refusal changed behaviour the same day.
 
 ## Install
 
-**Claude Code** (skill, four hooks and the `rehearser` agent):
+In Claude Code:
 
 ```
 /plugin marketplace add woosikkim/rehearse
 /plugin install rehearse@rehearse
 ```
 
-**Other agents** (Codex, Gemini CLI, Cursor, Copilot and others that support the [Agent Skills](https://agentskills.io) standard): copy `skills/rehearse/` into your agent's skills folder. The skill works as-is. Auto-loading depends on the description match, and there is no guard unless you wire one up.
+Then just ask for a fix, or say the word **rehearse** in your prompt to force it. The agent announces how it sized the job in its first line and gets on with it.
 
-**Guard on other agents (experimental, untested):** `hooks/guard.py` reads a pre-tool-use payload as JSON on stdin and exits `2` to block. It also recognizes `shell`/`exec_command`/`run_shell_command` and `write_file`/`replace`/`apply_patch` tool names, so you can point your agent's pre-tool hook at it.
+## Try the demo
 
-## Test
+```
+cd demos/five-files
+claude "rehearse: fix the missing March orders"
+```
+
+Then read `.rehearsal/REHEARSAL.md`. There is a second demo, `demos/new-program`, where the agent builds a small scraper against a local site the same way.
+
+<details>
+<summary><strong>For developers: hooks, other agents, limits</strong></summary>
+
+### The hooks
+
+All of them run [`hooks/guard.py`](hooks/guard.py), Python 3 standard library only. The plugin also ships one agent, [`agents/rehearser.md`](agents/rehearser.md), a helper that can look but not write.
+
+| Hook | What it does |
+|---|---|
+| `SessionStart` | Adds one standing sentence: before building or fixing anything that depends on something outside the code, load the rehearse skill. |
+| `UserPromptSubmit` | A prompt containing the word `rehearse` always loads the skill. |
+| `PreToolUse` | Loading the skill creates `.rehearsal/fixtures/`, `.rehearsal/scaffold/` and the marker `.rehearsal/active`. While the marker exists: anything that existed before it may run; anything written since may not. One-line calls to existing code (`python3 -c '…'`, `node -e`, `ruby -e`, single quotes, up to twelve straight-line statements, no logic or file access) are allowed. Loops, background jobs, new scripts, shell writes to code files, in-place editors and command substitution inside double quotes are refused with a message naming the alternative. Files under `.rehearsal/scaffold/` may be created but never run or imported. Once the marker is gone, code edits stay refused until `.rehearsal/log.md`, written only by the guard, holds one command that ran something. |
+| `PostToolUse` / `PostToolUseFailure` | While the marker exists, every shell command and the first lines of its output go to `.rehearsal/log.md`, with common secrets redacted. Once building has begun, every command goes to `.rehearsal/build.log` instead, with each code edit noted. Test runs are also appended to `.rehearsal/tests.log` in every phase. |
+| `Stop` | While `.rehearsal/` exists, the agent is refused once when it tries to finish if the last logged test run is red (a baseline run with the change stashed is not counted), or if code was edited and no sweep followed: a codebase search plus a new by-hand call after the first edit. The second attempt always goes through. |
+
+### Other agents
+
+Codex, Gemini CLI, Cursor, Copilot and others that support the [Agent Skills](https://agentskills.io) standard: copy `skills/rehearse/` into your agent's skills folder. The skill works as-is; there is no guard unless you wire one up. `hooks/guard.py` reads a pre-tool-use payload as JSON on stdin and exits `2` to block, and recognises `shell`/`exec_command`/`run_shell_command` and `write_file`/`replace`/`apply_patch` tool names, so it can be pointed at from another agent's hook. Untested outside Claude Code.
+
+### Test
 
 ```
 python3 tests/test_guard.py
 ```
 
-## Limits
+### Limits
 
-- The guard is a speed bump, not a sandbox. An agent can `rm .rehearsal/active` early, but cannot edit code until its log shows one real call; the only other exit is deleting `.rehearsal/` entirely, which leaves no log at all. A meaningless call (`python3 -c 'print(1)'`) satisfies the gate; it also sits in the log for the reader to see.
-- The guard's rules are frozen as of 0.3.0. Known ways around it are listed here, not patched, until a git-tracked "existing" check lands: backdating a file with `touch -d`; logic hidden in `awk` or `jq` programs; editing an extension-less file such as a `Makefile` or `justfile` and running `make` or `just`; `io.FileIO("a.py", "w")` creating an empty code file; standard-library runners that execute code or files handed to them as arguments (`python3 -m timeit -s 'import os' 'os.system("…")'`, `python3 -m pdb notes.txt`, `python3 -m trace --count notes.txt`); wrappers the guard does not know (`nice -n 5 python3 new.py`, `time -p …`, `env -S …`, `stdbuf`, `setsid`, `pypy3`); a program name taken from a variable or substitution (`P=python3; $P x.txt`, `$(which python3) x.txt`); `find . -exec python3 x.txt \;`; `ruby -e 'load "x.txt"'` and `require_relative`; `node -e 'import("./x.js")'`; attribute lookups that spell a blocked name in pieces (`__dict__["__built" + "ins__"]`); starting the marker with a substitution hidden in the same call (`touch .rehearsal/active $(python3 new.py)`) or creating it without `touch` (`: > .rehearsal/active`), which skips the start-on-its-own rule. A bypass that shows up unprompted in a real rehearsal log (ordinary habit, not evasion) is patched.
-- A specimen a real tool must read under its true file names (a docs project for Sphinx, a sample package, a dummy middleware) may be created under `.rehearsal/scaffold/` during a rehearsal; the agent still cannot run or import it, only hand it to a program that existed before.
-- Known false blocks, each with a message naming the accepted alternative: unquoted heredocs with shell-like prose; double-quoted one-liners; one-liners with extra flags (an interpreter given by full path or after `PATH=` is accepted); an interpreter flag before a file (`python3 -O old.py`); `php -r`; data strings inside a one-liner containing an access word as a whole word (`"open late"`, `"File not found"`); single-quoted text containing `"$(`; an unquoted `$(…)` after a closing `"` on the same line; `sort -u` arguments over-redacted in the logged command.
-- The Stop rule reads test output as text (pytest, unittest, Django, jest, go, cargo and similar failure lines). A runner it does not recognise passes through, and it cannot tell which tests were green before the change, only whether the last run is red. It refuses once; the second attempt to finish always goes through. A baseline run with the change stashed (`git stash ... git stash pop`) is red on purpose and is not counted.
-- The auto-log redacts common secret patterns (`Authorization`, `Cookie`, bearer tokens, `token=`/`password=`, `curl -u`, URL credentials) but is not a secrets filter.
-- Sizing can misjudge. Say `skip` or `full` to override.
-- Anything that fails only over time (scheduled runs over days, site changes) is reported as an unverified risk. It is not tested.
+- The guard is a speed bump, not a sandbox. An agent can `rm .rehearsal/active` early, but cannot edit code until its log shows one real call; the only other exit is deleting `.rehearsal/` entirely, which leaves no log at all. A meaningless call satisfies the gate; it also sits in the log for the reader to see.
+- Known ways around the guard are listed here, not patched, until a git-tracked "existing" check lands: backdating a file with `touch -d`; logic hidden in `awk` or `jq` programs; editing an extension-less file such as a `Makefile` and running `make`; `io.FileIO("a.py", "w")`; standard-library runners that execute code handed to them (`python3 -m timeit -s …`, `python3 -m pdb notes.txt`); wrappers the guard does not know (`nice -n 5 python3 new.py`, `env -S …`, `stdbuf`, `setsid`, `pypy3`); `find . -exec python3 x.txt \;`; `ruby -e 'load "x.txt"'`; `node -e 'import("./x.js")'`; attribute lookups that spell a blocked name in pieces; creating the marker without `touch`. A bypass that shows up unprompted in a real rehearsal log (habit, not evasion) is patched.
+- Known false blocks, each with a message naming the accepted alternative: unquoted heredocs with shell-like prose; double-quoted one-liners; an interpreter flag before a file (`python3 -O old.py`); `php -r`; data strings inside a one-liner containing an access word as a whole word; single-quoted text containing `"$(`; `sort -u` arguments over-redacted in the logged command.
+- The Stop rule reads test output as text (pytest, unittest, Django, jest, go, cargo and similar). A runner it does not recognise passes through. It cannot tell which tests were green before the change, only whether the last run is red. An agent can edit the existing tests until they pass; the log shows it, the guard does not stop it.
+- The sweep rule can make the agent look for siblings; it cannot make it recognise one. The two remaining judgment failures in the benchmark, fixing where a bad value is noticed rather than where it is made, and dismissing a sibling the search found, are exactly that.
+- Bugs that need something the machine does not have (a particular database, a live service) cannot be rehearsed. The honest outcome is "not reproduced, not fixed", which the skill asks for and the agent does not always choose.
+- The auto-log redacts common secret patterns but is not a secrets filter.
+- Anything that fails only over time (scheduled runs over days, site changes) is reported as an unverified risk, not tested.
+
+</details>
 
 ## License
 

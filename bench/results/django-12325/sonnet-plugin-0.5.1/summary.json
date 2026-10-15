@@ -1,0 +1,13 @@
+{
+ "task": "django-12325",
+ "fixed": true,
+ "broke_others": 0,
+ "hidden_tests_failing": 0,
+ "announce": "full",
+ "real_run_before_edit": true,
+ "guard_blocks": 4,
+ "turns": 40,
+ "cost_usd": 0.18,
+ "minutes": 17.9,
+ "final": "I fixed it. Field order no longer matters, and both orderings from your report now pick `document_ptr` as the primary key.\n\n**Cause:** `ModelBase.__new__` in `django/db/models/base.py` built its map of parent links from every `OneToOneField` pointing at the parent. The last one declared won, even when it wasn't marked `parent_link=True`. When `origin` came last, it replaced `document_ptr`, which produced the `Add parent_link=True to ...origin` error.\n\n**Fix:** it now only counts fields with `parent_link=True`, so `origin` is treated as an ordinary relation.\n\n**Tests:**\n- I added `test_parent_link_with_multiple_one_to_one_fields` to `tests/invalid_models_tests/test_models.py`, covering both field orders.\n- A `OneToOneField` to the parent without `parent_link=True` no longer raises \"Add parent_link=True\". Django auto-creates the `*_ptr` link and treats the field as a normal one-to-one. So I removed `test_missing_parent_link`, which asserted the old error, and its unused import.\n- `model_inheritance`, `invalid_models_tests`, `model_fields`, `model_forms` and `one_to_one` pass (767 tests), and `invalid_models_tests` passes on its own after the import cleanup.\n\n**Not verified:**\n- I never saw the original error reproduced by hand. The rehearse guard rejected class definitions in one-liners, so I found the cause by reading the code.\n- The new test is checked only against the fixed code. My attempt to confirm it fails without the fix was unclear, because the stash step reported an error.\n- The now-unreachable \"Add parent_link=True\" check in `options.py:254` is still there.\n- The rehearsal log is in `.rehearsal/`, left in place."
+}

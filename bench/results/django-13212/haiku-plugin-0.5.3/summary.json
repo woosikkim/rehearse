@@ -1,0 +1,13 @@
+{
+ "task": "django-13212",
+ "fixed": false,
+ "broke_others": 0,
+ "hidden_tests_failing": 2,
+ "announce": "full",
+ "real_run_before_edit": false,
+ "guard_blocks": 2,
+ "turns": 90,
+ "cost_usd": 0.03,
+ "minutes": 18.2,
+ "final": "The one failing test was already failing before my change, so the fix is done and no test regressed.\n\n**Test results**\n- Clean HEAD: `Ran 873 tests`, `FAILED (errors=1, skipped=1)`. The error is `test_unicode_filename`.\n- Working tree: `Ran 874 tests`, `FAILED (errors=1, skipped=1)`. Same error. The extra test is the new `test_validators_message_value`, which passes.\n- `test_unicode_filename` fails with `UnicodeEncodeError: 'ascii' codec` inside `os.stat`. This is the environment's filesystem encoding, not validator code. I did not fix it; it isn't in scope and it isn't mine to change.\n\n**Changes still in place**\n- `django/core/validators.py`: validators pass `value` into `ValidationError` params, and the IDN URL retry reports the original input. Details are in my previous report.\n- `tests/validators/tests.py`: new regression test for Email and URL messages.\n\n**Not done**\n- `FileExtensionValidator` still doesn't pass `value`, deliberately, because it receives a file object.\n- `test_unicode_filename` still fails in this environment because of the filesystem encoding.\n\nI removed the temporary worktree I used for the clean-HEAD comparison. `.rehearsal/` remains as the log."
+}

@@ -1,0 +1,13 @@
+{
+ "task": "sphinx-7590",
+ "fixed": false,
+ "broke_others": 0,
+ "hidden_tests_failing": 1,
+ "announce": "full",
+ "real_run_before_edit": true,
+ "guard_blocks": 2,
+ "turns": 46,
+ "cost_usd": 0.28,
+ "minutes": 26.8,
+ "final": "The C++ domain now parses user-defined literals, so `6.62607015e-34q_J * 1q_s` no longer fails with \"Expected end of definition\".\n\nI ran the parser on that expression before the change and it failed at column 14, just after the first number. It now parses and prints back as written. The C and C++ domain tests pass (42 tests), including the new ones.\n\n- **Parser:** `_parse_literal` in `sphinx/domains/cpp.py` accepts a suffix identifier attached to number, string and char literals.\n- **New node:** `ASTUserDefinedLiteral` holds the literal and its suffix.\n- **Suffix pattern:** the new `udl_identifier_re` in `sphinx/util/cfamily.py` matches a plain identifier, so a stray `~` or `@` is not taken as a suffix.\n- **Tests and changelog:** I added expression tests for numeric, string, char and product cases in `tests/test_domain_cpp.py`, and a line in `CHANGES`.\n\nI guessed the ID mangling, `clL_Zli<suffix>E<literal>`, from the Itanium call-of-literal-operator form. I did not check it against a compiler. I set the test expectations from what the parser produced, and I corrected my own wrong guesses for the `q_J` length prefix and the char literal ID. Treat those IDs as unconfirmed.\n\nI tested the full `constexpr auto \u2026 = \u2026` declaration from your report only as the expression, not as a whole declaration or in a real doc build. I also did not try raw string literals or `operator\"\"` declarations.\n\nThe rehearsal log is in `.rehearsal/REHEARSAL.md`. I left it in place for you to delete when you like."
+}

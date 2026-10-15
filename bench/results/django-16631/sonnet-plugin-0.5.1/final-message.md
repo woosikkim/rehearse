@@ -1,0 +1,18 @@
+Sessions now survive a `SECRET_KEY` rotation when the old key is in `SECRET_KEY_FALLBACKS`. The auth and sessions test suites pass (984 tests), including a new regression test.
+
+**Cause:** `get_session_auth_hash()` called `salted_hmac` without a `secret`, so it only ever used the current `SECRET_KEY`. A session stored under the old key no longer matched, and `get_user()` flushed it.
+
+**Reproduced first:** with `SECRET_KEY="new"` and `SECRET_KEY_FALLBACKS=["old"]`, the hash was `d200…`. The same user under the old key gave `f317…`.
+
+**Fix:**
+- `django/contrib/auth/base_user.py`: `get_session_auth_hash()` now goes through a private `_get_session_auth_hash(secret=None)`. A new `get_session_auth_fallback_hash()` yields one hash per fallback key.
+- `django/contrib/auth/__init__.py`: `get_user()` checks the stored hash against the fallback hashes when the current key doesn't match. On a match it calls `cycle_key()` and re-stores the hash under the current key. With no match, it flushes the session as before.
+- `tests/auth_tests/test_basic.py`: `test_get_user_fallback_secret` checks that the session survives under a fallback key and still works after the fallback is removed.
+
+After the fix, calling `get_session_auth_fallback_hash()` with the same settings returns exactly the old-key hash I saved before the change.
+
+**Not covered:** a custom user model that defines its own `get_session_auth_hash` but not the new `get_session_auth_fallback_hash` would raise an `AttributeError` on a hash mismatch. Subclasses of `AbstractBaseUser` are fine. I did not add that fallback.
+
+I didn't change the docs. The note in `docs/topics/auth/default.txt` already points people to `SECRET_KEY_FALLBACKS`, which is now accurate. A release note could still be worth adding.
+
+The rehearsal log and fixtures are in `.rehearsal/`. I left them in place.

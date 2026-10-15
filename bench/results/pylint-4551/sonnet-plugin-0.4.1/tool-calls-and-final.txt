@@ -1,0 +1,19 @@
+ 1 Skill  rehearse:rehearse
+ 2 Bash   mkdir -p .rehearsal/fixtures && touch .rehearsal/active
+ 3 Bash   grep -n "def \|^class \|^import\|^from" pylint/pyreverse/inspector.py | head -80; grep -n "def \|^class " pylint/pyrev
+ 4 Read   /testbed/pylint/pyreverse/diagrams.py
+ 5 Read   /testbed/pylint/pyreverse/inspector.py
+ 6 Bash   mkdir -p /tmp/t && printf 'class C(object):\n    def __init__(self, a: str = None, b: int = 1, c=None):\n        self.
+     BLOCKED: PreToolUse:Bash hook error: [python3 "/root/rehearse-plugin/hooks/guard.py"]: rehearse: blocked: writing code file '/tmp/t/c.py' through the
+ 7 Bash   python3 -c 'import astroid; from pylint.pyreverse import inspector; m = astroid.parse("class C:\n    def __init__(self
+ 8 Bash   ls /testbed; ls -d /opt/*/bin/python /opt/*/envs/*/bin/python 2>/dev/null; which -a python python3
+ 9 Bash   /opt/miniconda3/envs/testbed/bin/python -c 'import astroid; from pylint.pyreverse import inspector; m = astroid.parse(
+10 Bash   /opt/miniconda3/envs/testbed/bin/python -c 'import astroid; m = astroid.parse("class C:\n    def __init__(self, a: str
+11 Bash   cat >> .rehearsal/REHEARSAL.md <<'EOF' / # Rehearsal: pyreverse uses annotations / ### S1: instance_attrs_type for `a: str
+12 Edit   /testbed/pylint/pyreverse/inspector.py
+13 Edit   /testbed/pylint/pyreverse/inspector.py
+14 Bash   /opt/miniconda3/envs/testbed/bin/python -c 'import astroid; from pylint.pyreverse import inspector, diagrams; m = astr
+15 Bash   /opt/miniconda3/envs/testbed/bin/python -c 'import astroid; from pylint.pyreverse import inspector, diagrams; m = astr
+== turns=23 tool_calls=15 guard_blocks=1 result=('success', 17, 0.141)
+== ANNOUNCE: Rehearse: full, because this is a behaviour change in pyreverse with code to run before editing. Say skip or full to override.
+== FINAL: Pyreverse now reads argument annotations. Your example gives `a : str` instead of `NoneType`. I haven't added a regression test or a ChangeLog entry. /  / I ran a probe class with `a: str = None`, `b: int = 1` and an unannotated `c=None`. The attributes come out as `a : str`, `b : int` and `c : NoneType`. The 23 existing pyreverse tests (inspector, diadefs, writer) pass. /  / **Cause.** `self.a = a` was inferred from the default value, so the annotation was ignored. /  / **Fix.** In `pylint/pyreverse/inspector.py`, a new helper `_infer_from_annotation` handles `self.x = arg` when `arg` is a parameter with an annotation. It uses the annotation's inferred type, and anything else still goes through normal inference. /  / **Not covered.** / - Only plain `self.x = arg` assignments are handled. Annotations on class-level attributes (`x: int = 0`) and on attributes assigned from other expressions are not read. / - I only probed simple annotations like `str` and `int`. Generic forms such as `Optional[str]` or `List[int]` are untested, so I don't know what they show. /  / The rehearsal log is in `.rehearsal/REHEARSAL.md`.

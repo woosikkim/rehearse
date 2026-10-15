@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="250" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="14">
+<rect width="760" height="250" fill="white"/>
+<text x="250" y="24" font-size="15" font-weight="600" fill="#222">SWE-bench Verified, the 45 tasks rated over one hour for a human. Claude Sonnet 5.5 with rehearse.</text>
+<text x="238" y="62.0" text-anchor="end" fill="#333">Fixed</text>
+<rect x="250" y="40" width="313" height="34" rx="4" fill="#2f9e44"/>
+<text x="571" y="62.0" fill="#222" font-weight="600">30</text>
+<text x="238" y="102.0" text-anchor="end" fill="#333">Tests want things</text>
+<text x="238" y="118.0" text-anchor="end" fill="#333">the report never asks</text>
+<rect x="250" y="88" width="84" height="34" rx="4" fill="#adb5bd"/>
+<text x="342" y="110.0" fill="#222" font-weight="600">8</text>
+<text x="238" y="150.0" text-anchor="end" fill="#333">Bug needs a database</text>
+<text x="238" y="166.0" text-anchor="end" fill="#333">the container lacks</text>
+<rect x="250" y="136" width="31" height="34" rx="4" fill="#adb5bd"/>
+<text x="289" y="158.0" fill="#222" font-weight="600">3</text>
+<text x="238" y="206.0" text-anchor="end" fill="#333">Real misses</text>
+<rect x="250" y="184" width="42" height="34" rx="4" fill="#e03131"/>
+<text x="300" y="206.0" fill="#222" font-weight="600">4</text>
+<text x="250" y="238" fill="#666" font-size="12">Latest run on each task, graded by each project's own hidden tests. Previously passing tests broken: 2 of 45 runs.</text>
+</svg>

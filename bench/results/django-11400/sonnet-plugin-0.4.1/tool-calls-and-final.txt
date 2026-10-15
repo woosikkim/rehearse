@@ -1,0 +1,22 @@
+ 1 Skill  rehearse:rehearse
+ 2 Bash   mkdir -p .rehearsal/fixtures && touch .rehearsal/active && grep -n "ordering\|get_choices" django/contrib/admin/filter
+     BLOCKED: PreToolUse:Bash hook error: [python3 "/root/rehearse-plugin/hooks/guard.py"]: rehearse: blocked: start the rehearsal on its own: run mkdir -
+ 3 Bash   mkdir -p .rehearsal/fixtures && touch .rehearsal/active
+ 4 Bash   grep -n "ordering\|get_choices" django/contrib/admin/filters.py; grep -n "def get_choices" -A12 django/db/models/field
+ 5 Bash   sed -n 190,202p django/contrib/admin/filters.py; sed -n 415,423p django/contrib/admin/filters.py; sed -n 821,840p djan
+ 6 Bash   cd tests && python3 runtests.py admin_filters --parallel 1 2>&1 | tail -4
+ 7 Bash   cd /testbed && PYTHONPATH=/testbed python3 tests/runtests.py admin_filters --parallel 1 2>&1 | tail -4
+     BLOCKED: PreToolUse:Bash hook error: [python3 "/root/rehearse-plugin/hooks/guard.py"]: rehearse: blocked: module path override; import from the proje
+ 8 Bash   cd /testbed && python3 -c 'import django; print(django.__file__); from django.db.models import Model; from django.cont
+ 9 Bash   ls /opt /opt/*/bin 2>/dev/null | head -20; command -v -a python python3; pip list 2>/dev/null | grep -i -E "django|asg
+10 Bash   ls /opt/miniconda3/envs
+11 Bash   cd /testbed && /opt/miniconda3/envs/testbed/bin/python tests/runtests.py admin_filters --parallel 1 2>&1 | tail -4
+12 Bash   rm /testbed/.rehearsal/active
+13 Edit   /testbed/django/db/models/fields/__init__.py
+14 Edit   /testbed/django/db/models/fields/reverse_related.py
+15 Edit   /testbed/django/contrib/admin/filters.py
+16 Edit   /testbed/django/contrib/admin/filters.py
+17 Bash   /opt/miniconda3/envs/testbed/bin/python tests/runtests.py admin_filters model_fields model_forms admin_views.tests --p
+== turns=26 tool_calls=17 guard_blocks=2 result=('success', 19, 0.134)
+== ANNOUNCE: Rehearse: full, because this is a reported bug and I can reproduce the ordering behaviour before changing anything. Say skip or full to override.
+== FINAL: Both filters now order their choices correctly, and the existing tests pass. I did not add new tests for the ordering cases. I ran `admin_filters`, `model_fields`, `model_forms` and `admin_views.tests`, with 14 tests skipped. /  / - **`RelatedFieldListFilter`:** `Field.get_choices()` always called `.order_by(*ordering)`. With the default empty ordering, that cleared the related model's `Meta.ordering`. It now only reorders when an ordering is given, so `Meta.ordering` is the fallback. / - **`RelatedOnlyFieldListFilter`:** it never passed `ordering` at all. It now uses the related model's `ModelAdmin` ordering, falling back to `Meta.ordering`. / - **Shared helper:** I added `field_admin_ordering()` to `RelatedFieldListFilter` (`django/contrib/admin/filters.py`), and both filters use it. / - **Reverse relations:** I made the same change to `ForeignObjectRel.get_choices` in `reverse_related.py`, since it had the same unconditional `order_by`. /  / Before the change I could only confirm the baseline (`admin_filters` passing). I didn't reproduce the wrong ordering by hand. The diagnosis comes from reading the code. /  / The tests need the conda interpreter at `/opt/miniconda3/envs/testbed/bin/python`. The default `python3` doesn't have `asgiref`.

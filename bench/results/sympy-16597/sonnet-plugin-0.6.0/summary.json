@@ -1,0 +1,13 @@
+{
+ "task": "sympy-16597",
+ "fixed": false,
+ "broke_others": 0,
+ "hidden_tests_failing": 3,
+ "announce": "full",
+ "real_run_before_edit": false,
+ "guard_blocks": 3,
+ "turns": 52,
+ "cost_usd": 0.28,
+ "minutes": 26.0,
+ "final": "The background run of `core`, `assumptions`, `functions`, `ntheory` and `simplify` was stopped when it hit its time limit, so it never finished. I'm not restarting it.\n\nThe `core`, `assumptions`, `functions/elementary`, `functions/combinatorial` and `ntheory` suites ran to completion in the separate foreground run. `simplify` and the rest of `functions` (for example `special`) never completed in either run, so they are untested against the new `'integer -> finite'` rule.\n\nI also need to correct my last message. I said the rehearsal log was at `.rehearsal/log.md`, but I never opened that file, so I can't confirm it exists or what it holds."
+}

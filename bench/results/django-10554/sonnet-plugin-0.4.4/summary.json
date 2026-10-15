@@ -1,0 +1,13 @@
+{
+ "task": "django-10554",
+ "fixed": false,
+ "broke_others": 0,
+ "hidden_tests_failing": 2,
+ "announce": "full",
+ "real_run_before_edit": true,
+ "guard_blocks": 13,
+ "turns": 54,
+ "cost_usd": 0.31,
+ "minutes": 10.6,
+ "final": "I changed `Query.clone()` so a cloned union query no longer shares its sub-queries with the original. I never reproduced the reported crash, so the fix is unconfirmed. All 365 `queries` tests pass, including the new one.\n\nThe fix is in `django/db/models/sql/query.py`. `clone()` was copying `combined_queries` by reference, so a derived queryset (`qs.order_by().values_list(...)`) shared its sub-queries with `qs`. Now each clone gets its own copies, so anything done to the derived queryset can't change the original.\n\nI added `test_union_with_ordering_and_derived_queryset` to `tests/queries/test_qs_combinators.py`. It follows the report: a union ordered by `order`, then `order_by().values_list('pk', flat=True)`, then the original is evaluated again. I didn't run that test without the fix, so I can't say it fails on the old code.\n\n- **No reproduction:** the exact failure needs `ORDER BY` inside a union sub-query. SQLite refuses that (\"ORDER BY not allowed in subqueries of compound statements\"), and the only database here is SQLite. The `django.contrib.contenttypes` model check printed an unchanged query for the original after the derived one was built, but that ran with the fix in place. The `ORDER BY (4)` crash from the report was not observed.\n- **Rehearsal log:** the rehearse guard rejected most of my inline Python probes (statement limit, `os` use), so `.rehearsal/` holds little evidence and no hand-built fixtures. The marker is removed.\n- **Separate oddity:** for a union ordered by `model`, the SQL printed `ORDER BY (2)`, but `model` is the third selected column. I didn't investigate it. It may be unrelated to this bug, or it may be the same class of problem."
+}

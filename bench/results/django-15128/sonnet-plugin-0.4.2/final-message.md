@@ -1,0 +1,11 @@
+`qs1 | qs2` no longer raises the `AssertionError`. The new regression test and the `queries`, `expressions`, `lookup`, `aggregation` and `or_lookups` suites pass (795 tests). I haven't run the rest of Django's test suite.
+
+**Cause.** `Query.combine()` builds a relabel map like `{T4: T5, T5: T6}` for the right-hand query's aliases, and that map is only applied to the right-hand `where` clause. The `qux.bazes.all()` subqueries inside that clause call `change_aliases()` with the same map. The assertion checked the whole map, even though the subquery doesn't own `T4`, `T5` or `T6`. That is why `qs2 | qs1` worked and `qs1 | qs2` didn't.
+
+**Fix.** In `Query.change_aliases()` (`django/db/models/sql/query.py`), the assertion now checks only the aliases that exist in that query's own `alias_map`. The assertion is still there to stop an alias being renamed twice, and I added a comment saying so, as the ticket suggested. I did not change how `combine()` or `table_alias()` choose aliases, so `|` is still not strictly commutative, and I did not touch the docs.
+
+**Test.** I added `Foo`, `Bar`, `Baz` and `Qux` models to `tests/queries/models.py`. The new test, `QuerySetOrCombineTests.test_or_with_rhs_sequential_aliases`, runs both `qs1 | qs2` and `qs2 | qs1`. It failed with the reported assertion before the change.
+
+**Rehearse.** I started the rehearsal and ran the existing runner, but I wrote the reproduction as a test instead of rehearsing it by hand. The existing test models can't build the reported shape, and the guard blocks writing code until the marker is removed. Because of that, `.rehearsal/` has no step log or fixtures. I left the directory in place.
+
+**Not checked.** The test only compares results against an empty database, so it doesn't check the generated SQL.

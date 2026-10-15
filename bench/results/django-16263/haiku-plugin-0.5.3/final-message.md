@@ -1,0 +1,14 @@
+`Book.objects.annotate(Count('chapters')).count()` now produces a plain `COUNT(*)` with no subquery or join. The fix is in `get_count()` in `django/db/models/sql/query.py`, with two regression tests added to `tests/aggregation/tests.py`. I did not commit anything.
+
+**What the fix does:** when nothing needs the annotations (no `HAVING`/`QUALIFY` filter, no `values()` grouping, no slice, distinct or combinator), `get_count()` drops them and the joins only they used. It keeps any join a WHERE clause uses, and it keeps everything when WHERE contains a subquery.
+
+**Verification:**
+- Replayed against a saved SQLite database with real rows: unused annotation gives 3 (same as a plain count). The earlier build gave 4 because the leftover join multiplied rows, and the replay caught that.
+- Filters on the annotation, `values().annotate()` grouping, chained annotations, a non-aggregate annotation, and a filter sharing the annotation's join all give the expected counts.
+- An `Exists(OuterRef(...))` case failed during replay, which led to the subquery guard.
+- 1934 tests pass across aggregation, annotations, queries, expressions, many-to-many, prefetch/select_related, lookup and model suites.
+- The new `test_count_strips_unused_annotations` fails without the fix and passes with it.
+
+**Unverified:** subqueries in WHERE now disable the optimisation, so those queries keep the old SQL. I didn't measure how often that matters in practice.
+
+**Environment notes:** the default `python3` lacks Django's dependencies, so I used `/opt/miniconda3/envs/testbed/bin/python`. The rehearsal log and fixtures are in `/testbed/.rehearsal/`, which I left in place as the evidence trail.

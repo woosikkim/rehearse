@@ -1,0 +1,13 @@
+{
+ "task": "astropy-13398",
+ "fixed": false,
+ "broke_others": 5,
+ "hidden_tests_failing": 4,
+ "announce": "full",
+ "real_run_before_edit": false,
+ "guard_blocks": 4,
+ "turns": 69,
+ "cost_usd": 0.03,
+ "minutes": 15.3,
+ "final": "The direct ITRS\u2194AltAz/HADec transform is in place and the rehearsed cases pass. One existing test now fails because of the intended change, and that needs your decision before a PR.\n\n**What changed**\n- New `astropy/coordinates/builtin_frames/itrs_observed_transforms.py`: your sketch, with the `PIOVER2` import pointed at the local `.utils` module and the comments tidied.\n- Registered it in `builtin_frames/__init__.py`. The graph picks the direct edge over the two-hop ITRS\u2192CIRS\u2192AltAz path.\n- Appended `test_itrs_straight_overhead_direct` to `test_intermediate_transformations.py`. It checks Alt=90\u00b0 at the same obstime and one hour later, HADec dec = site latitude, and an exact round trip.\n\n**What the rehearsal showed**\n- The current ITRS\u2192AltAz path is obstime-sensitive. For a point straight overhead, it gives 86\u00b019' at the same time and \u22125\u00b035' one hour later. The new path gives 90\u00b0 at both, and at `obstime=None`.\n- The matrix applied by hand to the topocentric vector gives x\u22480, y\u22480, z\u224810 km, which matches the replay.\n\n**Test results** (run with `/opt/miniconda3/envs/testbed/bin/python`; the system `python3` lacks `erfa`)\n- Five new failures: `test_gcrs_altaz_bothroutes[testframe0..4]`. It asserts that the Sun via ICRS and the Sun via ITRS agree at `rtol=1e-7`. The new direct edge deliberately skips the CIRS route, and the max difference is 5.8e-7. The test's expectation is now a choice you need to make: loosen the tolerance, or change the test to compare against the new route. I have not changed it. The Moon half of that test never runs because the Sun assertion fails first.\n- `test_straight_overhead` fails with or without my change: `Time - float` inside the IERS code. The bundled leap-second file has expired (today is 2026-10-15). This is environmental, not caused by this change.\n- The other baseline failures and the 85 errors are unchanged.\n\n**Not done**\n- Refraction is not included, as in your sketch.\n- I did not answer whether maintainers will be receptive; that's for the issue thread.\n- I did not commit.\n\nThe rehearsal log is in `.rehearsal/REHEARSAL.md`, with probe output in `.rehearsal/fixtures/`. I left it in place."
+}

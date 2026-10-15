@@ -1,0 +1,16 @@
+Request threads spawned by `ThreadedWSGIServer` now close their database connections when they finish. I could not reproduce the ticket's exact PostgreSQL error here, since no PostgreSQL is installed.
+
+**Cause:** `ThreadedWSGIServer` (`django/core/servers/basehttp.py`) runs each request in a daemon thread. Only `LiveServerThread.run` calls `connections.close_all()`, and it does that once, when the server stops. A request thread's connection is therefore left open after the request, and it can outlive the test run.
+
+**Change:**
+- `django/core/servers/basehttp.py`: `ThreadedWSGIServer` overrides `process_request_thread` and calls `connections.close_all()` in a `finally`. The import is `from django.db import connections`.
+- `tests/servers/test_basehttp.py`: new `ThreadedWSGIServerTestCase.test_request_thread_closes_connections`. It fails without the fix (`close_all` called 0 times) and passes with it.
+
+**Verification:**
+- `runtests.py servers`: 26 tests, OK (1 skipped, as before the change). The servers suite runs on SQLite only.
+- Confirmed by hand that `close_all()` drops a file-backed SQLite connection.
+- Not verified: the shutdown race itself, and the PostgreSQL "being accessed by other users" error. Both need a PostgreSQL run with `LiveServerTestCase` to confirm.
+
+**Environment:** the bare interpreters lacked Django's dependencies, so I made a venv at `.rehearsal/venv` with `asgiref`, `sqlparse`, `pytz` and an editable install of `/testbed`. The rehearsal log is in `.rehearsal/REHEARSAL.md`, and I left `.rehearsal/` in place as the record. Delete it when you're done.
+
+I did not commit anything.

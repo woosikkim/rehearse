@@ -1,0 +1,21 @@
+# 20 SWE-bench Verified tasks, seed 20261014, difficulty <= 1 hour, allocated by repo
+astropy__astropy-7166	<15 min fix
+django__django-11848	15 min - 1 hour
+django__django-12050	15 min - 1 hour
+django__django-15037	15 min - 1 hour
+django__django-16032	15 min - 1 hour
+django__django-16485	15 min - 1 hour
+django__django-16667	15 min - 1 hour
+matplotlib__matplotlib-25122	<15 min fix
+matplotlib__matplotlib-26466	15 min - 1 hour
+psf__requests-5414	<15 min fix
+pydata__xarray-7229	15 min - 1 hour
+pylint-dev__pylint-7277	<15 min fix
+pytest-dev__pytest-7324	15 min - 1 hour
+scikit-learn__scikit-learn-11578	15 min - 1 hour
+scikit-learn__scikit-learn-25747	15 min - 1 hour
+sphinx-doc__sphinx-8459	<15 min fix
+sphinx-doc__sphinx-8551	15 min - 1 hour
+sympy__sympy-20154	15 min - 1 hour
+sympy__sympy-23950	15 min - 1 hour
+sympy__sympy-24539	<15 min fix

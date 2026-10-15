@@ -1,0 +1,39 @@
+{
+    "id": "fffe13af-368b-4d84-982c-74f0ae1e9eab",
+    "started_at": "2026-10-14T16:27:18.943968",
+    "updated_at": "2026-10-14T16:34:27.982378",
+    "finished_at": "2026-10-14T16:34:27.982378",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 0,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "claude-code-rehearse__claude-sonnet-5-5__adhoc": {
+                "n_trials": 1,
+                "n_errors": 0,
+                "metrics": [
+                    {
+                        "mean": 1.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "1.0": [
+                            "django__django-13344__of2dh3L"
+                        ]
+                    }
+                },
+                "exception_stats": {}
+            }
+        },
+        "n_input_tokens": 623207,
+        "n_cache_tokens": 598789,
+        "n_output_tokens": 6195,
+        "cost_usd": 0.21941689999999994
+    }
+}

@@ -1,0 +1,16 @@
+autodoc with `:inherited-members:` now documents inherited instance attributes, and the new regression test passes. I did the work under the rehearse process; its log is in `.rehearsal/` and I left it there.
+
+**Cause:** there were two problems.
+- `get_class_members` (`sphinx/ext/autodoc/importer.py`) only looked up attribute docs in the analyzer of the class being documented. Doc-comment attributes such as `self.attr4 = 0  #: attr4`, defined on a base class, were never found for the subclass.
+- `is_filtered_inherited_member` (`sphinx/ext/autodoc/__init__.py`) walks the MRO looking in `__dict__` and `__annotations__`. Instance attributes appear in neither, so it assumed they came from `object` and dropped them.
+
+**Changes:**
+- **`get_class_members`:** it now walks the whole MRO, using each base class's module analyzer. It also fills in a missing docstring on annotation-only members, because an earlier autodoc run can add annotations to a subclass and mask the doc-comment.
+- **`ObjectMember`:** it gains a `class_` attribute, which `ClassDocumenter` fills in, and the inherited-member filter uses it to find the owning class.
+- **Test:** I added `test_autodoc_inherited_members_instance_attributes` in `tests/test_ext_autodoc.py`. It checks that `Derived` shows `attr4`, `attr5` and `attr6`.
+
+**Test results:** across the autodoc, autosummary and napoleon tests, the same 6 tests fail with and without my change, and the new test passes. One of those is `test_autodoc`, which fails on a `sphinx.addnodes` "meta already registered" warning. flake8 isn't installed in the environment, so I didn't lint.
+
+**Sweep:** `get_class_members` and `ObjectMember` are only used in `autodoc/__init__.py`, and I updated all three of its call sites. Module-level data members already look up docs by their own module, so inheritance doesn't apply to them.
+
+**Not verified:** several attempts to build a standalone Sphinx project by hand were blocked by the guard or returned empty output, so I verified through the project's test harness instead.

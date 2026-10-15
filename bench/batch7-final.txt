@@ -1,0 +1,13 @@
+django__django-13837
+django__django-14007
+django__django-15503
+sympy__sympy-16597
+sympy__sympy-13878
+sphinx-doc__sphinx-11510
+django__django-15629
+django__django-16263
+django__django-15957
+sphinx-doc__sphinx-9461
+pytest-dev__pytest-5787
+django__django-13128
+sphinx-doc__sphinx-7590

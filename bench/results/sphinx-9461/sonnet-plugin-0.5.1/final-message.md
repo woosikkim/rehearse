@@ -1,0 +1,15 @@
+Methods decorated with both `@classmethod` and `@property` are now documented. The related autodoc and Python-domain tests pass (123 passed, including a new one for this case).
+
+**Cause:** autodoc collects class members with `getattr(cls, name)`. For a `@classmethod @property` that returns the property's computed value, not the property object, so `PropertyDocumenter` never recognised it. I checked this with a real object: `type(A.f)` is `str`, while `type(A.__dict__["f"])` is `classmethod`. That `classmethod` wraps the property and still carries the docstring.
+
+**Changes:**
+- **`sphinx/ext/autodoc/__init__.py`:** `PropertyDocumenter` now also accepts a `classmethod` in the class `__dict__` that wraps a property. Its `import_object` unwraps it and records `isclassmethod`, and the directive header adds `:classmethod:`.
+- **`sphinx/domains/python.py`:** the `py:property` directive gets a `classmethod` option, so these render as `class property` (or `abstract class property`).
+- **Test:** `classmethod_prop` added to `tests/roots/test-ext-autodoc/target/properties.py`, with `test_class_properties` in `tests/test_ext_autodoc_autoproperty.py`. The test is skipped below Python 3.9.
+
+**Not checked:**
+- I didn't run the full demo project from the report. I only ran the focused tests, not the whole suite.
+- The `abstract class property` case from the report (`@abstractmethod` stacked on these) wasn't exercised.
+- The new `class property` and `:classmethod:` output is only covered by the autodoc test, not by a docs build.
+
+The rehearsal log is in `.rehearsal/REHEARSAL.md`. I left `.rehearsal/` in place, as the skill asks.

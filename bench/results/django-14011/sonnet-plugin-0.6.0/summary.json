@@ -1,0 +1,13 @@
+{
+ "task": "django-14011",
+ "fixed": false,
+ "broke_others": 0,
+ "hidden_tests_failing": 17,
+ "announce": "full",
+ "real_run_before_edit": false,
+ "guard_blocks": 4,
+ "turns": 32,
+ "cost_usd": 0.21,
+ "minutes": 7.0,
+ "final": "The sweep is done. It found one sibling I left alone and no new failures in the code I changed.\n\n- **Search:** `process_request_thread`, `daemon_threads` and `ThreadingMixIn` appear only in `django/core/servers/basehttp.py` and `django/test/testcases.py`. `ThreadedWSGIServer`'s only other user is `tests/servers/test_liveserverthread.py`, which passes.\n- **Checked by hand:** `ThreadedWSGIServer.daemon_threads` is still `True`. `LiveServerThreadedWSGIServer.daemon_threads` is `False`, and `LiveServerThread` uses it. I also confirmed it inherits the new `process_request_thread` that closes connections.\n- **Sibling left alone:** `basehttp.run(threading=True)`, which `runserver` uses, builds its own threaded class. That class doesn't get the connection-closing `process_request_thread`, so `runserver` request threads still don't close their connections. I left it because `runserver` is long-lived and isn't what the ticket is about. Say if you want it routed through `ThreadedWSGIServer` too.\n\nThe race still isn't reproduced on a database that enforces connection limits, such as Postgres. I haven't added a regression test either. The sweep is logged in `.rehearsal/REHEARSAL.md`."
+}

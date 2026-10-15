@@ -1,0 +1,16 @@
+The date lookups on MySQL, Oracle and SQLite now read stored values in the database's own `TIME_ZONE`, and no longer assume UTC.
+
+I couldn't run the MySQL and Oracle changes. The new regression test is skipped on SQLite, and I didn't test against a real MySQL or Oracle server. The `timezones`, `datetime`, `db_functions.datetime`, `lookup` and `expressions` suites on SQLite show only 3 failures, the same 3 `SerializationTests` tzinfo failures that were there before my change.
+
+- **MySQL:** the SQL now converts from the database time zone to the current one, and skips `CONVERT_TZ` when the two are equal. That also fixes your second point: with equal zones, the query works without MySQL's time zone tables.
+- **Oracle:** same logic, so `FROM_TZ` now uses the database time zone instead of `'0:00'`, and is skipped when the zones match.
+- **SQLite:** the date functions now take the database time zone as an extra argument, and read the stored value in that zone before converting.
+- **Time zone source:** the database zone comes from `connection.timezone_name`, which already existed. It is the database's `TIME_ZONE` if set, otherwise UTC, so setups without a database `TIME_ZONE` behave as before.
+- **Verified by hand:**
+  - A stored `2011-09-01 03:00` read as Bangkok time and cast in Nairobi gives `2011-08-31`.
+  - The same value read as UTC gives `2011-09-01`.
+  - Equal zones leave the date unchanged.
+  - The MySQL SQL for a default connection is still `CONVERT_TZ(f, 'UTC', 'Africa/Nairobi')`, as before.
+- **Regression test:** I added `test_date_lookup_uses_database_timezone` to `ForcedTimeZoneDatabaseTests` in `tests/timezones/tests.py`. That class is skipped on SQLite, so the test only runs on MySQL and Oracle.
+
+The rehearsal log is in `.rehearsal/REHEARSAL.md`. The main changes are in `django/db/backends/mysql/operations.py`, `oracle/operations.py` and `sqlite3/base.py` and `operations.py`.

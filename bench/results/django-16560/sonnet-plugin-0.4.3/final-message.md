@@ -1,0 +1,8 @@
+`BaseConstraint`, `CheckConstraint`, `UniqueConstraint` and the postgres `ExclusionConstraint` now take a `violation_error_code` argument. Their `validate()` passes it as the `code` of the `ValidationError` they raise. The constraints, validation and postgres constraint tests pass (185 run, 53 skipped). The skips include the postgres tests, which need PostgreSQL, so the `ExclusionConstraint` change was never run.
+
+- **Reproduced first:** `CheckConstraint(..., violation_error_code="x")` raised a `TypeError` for the unknown keyword. I also confirmed that `ValidationError("m", code="c")` keeps the code.
+- **Where it applies:** the code is included in `deconstruct()` and `clone()`, compared in `__eq__`, and shown in `__repr__` when set.
+- **Docs and tests:** I added docs for the new argument, a 5.0 release note, and two new tests in `tests/constraints/tests.py`. One covers `BaseConstraint` and the other `CheckConstraint.validate`.
+- **Limitation:** a `UniqueConstraint` with `fields` and no `condition` still raises through `unique_error_message()`, so it ignores both the custom message and the new code. That matches how the message already behaves, and I left it alone.
+- **Not tested:** `UniqueConstraint.validate` raising with a custom code has no test, and neither does `ExclusionConstraint` (it can't run without PostgreSQL).
+- **Rehearsal files:** `.rehearsal/` is still in place with the log.

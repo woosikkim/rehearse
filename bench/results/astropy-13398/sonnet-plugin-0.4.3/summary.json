@@ -1,0 +1,13 @@
+{
+ "task": "astropy-13398",
+ "fixed": false,
+ "broke_others": 5,
+ "hidden_tests_failing": 4,
+ "announce": "full",
+ "real_run_before_edit": true,
+ "guard_blocks": 3,
+ "turns": 58,
+ "cost_usd": 0.36,
+ "minutes": 14.3,
+ "final": "I added direct ITRS\u2194AltAz and ITRS\u2194HADec transforms, and the new geometry test passes. The wider coordinates suite has 5 more failures than before my change, and I haven't worked out why.\n\n**The bug:** a point 1 km along +z from an observer at latitude 30\u00b0 came out at altitude 23\u00b027\u2032 through the old route. Geometry says 30\u00b000\u2032. With the new transforms it is exactly 30\u00b000\u203200\u2033.\n\n**What changed:**\n- **New transforms:** `astropy/coordinates/builtin_frames/itrs_observed_transforms.py` is your proposed code with an unused `erfa` import removed. It is registered in `builtin_frames/__init__.py`. There is no refraction yet, as in your draft.\n- **New test:** `test_itrs_topocentric_overhead` covers the altitude check, time-invariance across obstimes, `dec` = 90\u00b0 for HADec, and the round trip back to ITRS.\n- **Loosened test:** in `test_gcrs_altaz_bothroutes` I loosened the Sun comparison to `rtol=1e-5`. The new topocentric route and the route through ICRS now differ by about 1.6e-6 relative. That is the geocentric-versus-topocentric aberration you describe, but the test itself fails on the IERS error below, so the loosened tolerance has not passed yet.\n\n**Test results:**\n- **Baseline:** the full `astropy/coordinates` suite has 5 failures and 85 errors before my change. These are IERS and environment problems.\n- **With my change:** 10 failures and the same 85 errors. The 5 extra are all `test_gcrs_altaz_bothroutes[testframe0\u20134]`.\n- **The error:** they fail with `TypeError: Time - float` inside the IERS lookup (`iers.py:271`), on the ICRS route at line 428, before the loosened comparison runs.\n- **Unexplained:** on baseline, `testframe0` fails the same way but the other four pass. I don't know why my change makes all five fail. Outside pytest the same comparison runs fine and gives the 1.6e-6 difference.\n\nI haven't investigated further. I can dig into why the extra four fail if you want.\n\n**Not done:**\n- No changelog entry or docs update.\n- No check of the old geocentric `test_straight_overhead()` workaround. It lives in the same test file, and its result is part of the full-suite run above.\n\nThe rehearsal log is in `.rehearsal/REHEARSAL.md`."
+}
