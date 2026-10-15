@@ -20,8 +20,10 @@ for name in SCRIPTS:
         continue
     r = subprocess.run([sys.executable, path], capture_output=True, text=True)
     tail = (r.stdout + r.stderr).strip().splitlines()
-    print(f"{name}: {'ok' if r.returncode == 0 else 'FAILED'}: {tail[-1] if tail else ''}")
     if r.returncode != 0:
+        # Print only on failure: the ralph verify gate fingerprints every output line,
+        # so a passing run must stay silent.
         failed.append(name)
+        print(f"{name}: FAILED")
         print("\n".join(tail[-15:]))
 sys.exit(1 if failed else 0)
