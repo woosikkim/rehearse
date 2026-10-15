@@ -1,3 +1,0 @@
-The background run of the wider test set (`timezones`, `db_functions.datetime`, `lookup`, `datetimes`, `backends.sqlite`, `expressions`) was killed at its time limit. It produced no output, so I have no results from `lookup`, `datetimes`, `backends.sqlite` or `expressions`. I won't restart it, since the notification says not to if the longest timeout was already used.
-
-Only the narrower run counts: `timezones` and `db_functions.datetime` ran 159 tests with 3 failures. The same 3 `SerializationTests` failures appear with my changes stashed, so they predate this change. Everything else in my last report stands, including that the MySQL and Oracle changes are untested.

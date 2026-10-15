@@ -7,7 +7,6 @@
 - [What it looks like](#what-it-looks-like)
 - [The loop](#the-loop)
 - [What the guard refuses](#what-the-guard-refuses)
-- [Does it work?](#does-it-work)
 - [Install](#install)
 - [For developers](#for-developers)
 
@@ -63,41 +62,6 @@ The same loop builds new programs: the agent does the job by hand first, one req
 
 Every refusal names what to do instead. Everything the agent ran is kept in `.rehearsal/` for you to read.
 
-## Does it work?
-
-Measured on the hardest part of the standard bug-fixing benchmark and on a standard terminal-task benchmark, with Claude Sonnet 5.5. Every run is in [`bench/`](bench/) and can be repeated.
-
-**SWE-bench Verified, the 45 tasks rated over one hour for a human.** Real bugs in Django, sympy, sphinx, astropy and others, graded by each project's own hidden tests.
-
-![Results on the 45 hardest SWE-bench Verified tasks](docs/swe-bench-results.svg)
-
-**Terminal-Bench 2.1, seeded sample:** 5 of 5 passed so far. Typical run on either benchmark: about 15 minutes, 20 cents.
-
-### Same bug, same model, before and after
-
-Django 13344. Claude Sonnet both times.
-
-<table>
-<tr><th width="50%">Before reproduction was enforced</th><th width="50%">After</th></tr>
-<tr><td valign="top">
-
-Read four files, wrote "S1: read deprecation.py", edited.
-
-Fixed a real bug, the wrong one. Its own test passed. The hidden tests failed.
-
-Its report: "I made no hand-run call that executed code."
-
-</td><td valign="top">
-
-Built the real handler by hand and asked whether the chain is async: **False**. That is the bug.
-
-Four small edits, same call again: **True**. 1,014 tests pass. Hidden tests pass.
-
-</td></tr>
-</table>
-
-Every rule that was only words got ignored. Every rule that became a refusal changed behaviour the same day. The full story is in [`bench/README.md`](bench/README.md).
-
 ## Install
 
 ```
@@ -145,7 +109,7 @@ python3 tests/test_guard.py
 
 - The guard is a speed bump, not a sandbox. An agent can `rm .rehearsal/active` early, but cannot edit code until its log shows one real call; the only other exit is deleting `.rehearsal/` entirely, which leaves no log at all. A meaningless call satisfies the gate; it also sits in the log for the reader to see.
 - Known ways around the guard, listed rather than patched: backdating a file with `touch -d`; logic hidden in `awk` or `jq` programs; editing an extension-less file such as a `Makefile` and running `make`; `io.FileIO("a.py", "w")`; standard-library runners that execute code handed to them (`python3 -m timeit -s …`, `python3 -m pdb notes.txt`); wrappers the guard does not know (`nice -n 5 python3 new.py`, `env -S …`, `stdbuf`, `setsid`, `pypy3`); `find . -exec python3 x.txt \;`; `ruby -e 'load "x.txt"'`; `node -e 'import("./x.js")'`; Ruby or JavaScript loops written as method calls (`loop {}`, `.each`, `.forEach`); attribute lookups that spell a blocked name in pieces; creating the marker without `touch`; a file written by a channel the guard does not see and then run under a non-code name. `awk 'BEGIN{system("…")}'`, `find . -exec python3 …`, and `make -f <a file the agent wrote>` run unchecked, because text tools and build runners are not inspected. A bypass that shows up unprompted in a real rehearsal log is patched.
-- Known false blocks, each with a message naming the accepted alternative: unquoted heredocs with shell-like prose; data strings containing an access word as a whole word; single-quoted text containing `"$(`; `sort -u` arguments over-redacted in the logged command. Any `bench/replay_guard.py --old <ref> --new <ref>` run lists what a guard change newly refuses or allows across every recorded benchmark transcript.
+- Known false blocks, each with a message naming the accepted alternative: unquoted heredocs with shell-like prose; data strings containing an access word as a whole word; single-quoted text containing `"$(`; `sort -u` arguments over-redacted in the logged command.
 - The Stop rule reads test output as text (pytest, unittest, Django, jest, go, cargo and similar). A runner it does not recognise passes through. It cannot tell which tests were green before the change, only whether the last run is red. An agent can edit existing tests until they pass; the log shows it, the guard does not stop it.
 - The sweep rule makes the agent look for siblings; it cannot make it recognise one.
 - Bugs that need something the machine does not have (a particular database, a live service) cannot be rehearsed. The honest outcome is "not reproduced, not fixed", which the skill asks for and the agent does not always choose.

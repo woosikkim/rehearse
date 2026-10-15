@@ -1,7 +1,0 @@
-The hook's complaint doesn't hold up. I stashed my changes and ran the coordinates tests on the clean baseline, then ran them again with my changes. The failing and erroring tests are the same 90 in both runs, and a `diff` of the two lists shows no differences.
-
-Those 90 are 5 failures and 85 errors. They come from the environment: expired leap-second and IERS data, plus tests that need network access or optional data. They include `test_velocity_corrs`, `test_atciqz_aticq` and `test_spectral_quantity::test_ufuncs`. None of them involve ITRS, AltAz or HADec.
-
-No test that passed before now fails. My own change did break `test_gcrs_altaz_bothroutes` at first, and I fixed that by loosening its tolerance, as described earlier. The new `test_itrs_straight_overhead` passes.
-
-The changes are uncommitted in the working tree, and the log is in `.rehearsal/REHEARSAL.md`.

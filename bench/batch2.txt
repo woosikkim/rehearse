@@ -1,5 +1,0 @@
-django__django-11138
-django__django-16560
-sphinx-doc__sphinx-9229
-astropy__astropy-14369
-django__django-15128
