@@ -516,6 +516,11 @@ def records(d):
     return out
 
 
+def is_suite(cmd):
+    """A test-runner command, unless it is pointed at the agent's own scaffold: then it is a by-hand call."""
+    return bool(TEST_CMD.search(cmd)) and ".rehearsal/scaffold" not in cmd
+
+
 def first_edit_record(recs):
     return next((i for i, r in enumerate(recs) if "edit" in r or ("cmd" in r and EDIT_SHELL.search(r["cmd"]))), None)
 
@@ -545,6 +550,10 @@ def start_marker(cwd):
     try:
         os.makedirs(os.path.join(cwd, ".rehearsal", "fixtures"), exist_ok=True)
         os.makedirs(os.path.join(cwd, ".rehearsal", "scaffold"), exist_ok=True)
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=cwd, capture_output=True, text=True)
+        if head.returncode == 0:
+            with open(os.path.join(cwd, ".rehearsal", "base"), "w", encoding="utf-8") as f:
+                f.write(head.stdout.strip())  # the code as it was when the rehearsal began
         with open(os.path.join(cwd, FLAG), "a", encoding="utf-8"):
             pass
     except OSError:
@@ -564,7 +573,7 @@ def sweep_missing(d):
     before = {r["cmd"] for r in recs[:first] if "cmd" in r}
     after = [r["cmd"] for r in recs[first + 1:] if "cmd" in r]
     searched = any(SEARCH_CMD.search(c) for c in after)
-    new_call = any(executed(c) and not TEST_CMD.search(c) and c not in before for c in after)
+    new_call = any(executed(c) and not is_suite(c) and c not in before for c in after)
     missing = [x for x, ok in (("no search of the codebase", searched),
                                ("no new by-hand call (the original reproduction and test runs do not count)", new_call)) if not ok]
     return " and ".join(missing) or None
@@ -583,11 +592,31 @@ def pick_repro(d):
     recs = records(d)
     first = first_edit_record(recs)
     cmds = [r["cmd"] for r in recs[:first if first is not None else len(recs)]
-            if "cmd" in r and executed(r["cmd"]) and not TEST_CMD.search(r["cmd"])]
+            if "cmd" in r and executed(r["cmd"]) and not is_suite(r["cmd"])]
     return cmds[-1] if cmds else None
 
 
-def run_for_replay(cmd, cwd):
+GUARD_FILES = {"active", "log.md", "build.log", "tests.log", "trace.jsonl", "trace.offset", "commands.jsonl",
+               "written", "refused", "base", "REHEARSAL.md"}
+
+
+def rehearsal_digest(d):
+    """A digest of what a run left under .rehearsal/ (scaffold output, fixtures), ignoring the guard's own files."""
+    h = hashlib.sha256()
+    for root, dirs, files in os.walk(d):
+        dirs[:] = sorted(x for x in dirs if not x.startswith("pycache-"))
+        for f in sorted(files):
+            if root == d and f in GUARD_FILES:
+                continue
+            p = os.path.join(root, f)
+            try:
+                h.update(p.encode()); h.update(str(os.path.getsize(p)).encode()); h.update(open(p, "rb").read(65536))
+            except OSError:
+                pass
+    return h.hexdigest()
+
+
+def run_for_replay(cmd, cwd, d=None):
     timeout = float(os.environ.get("REHEARSE_REPLAY_TIMEOUT", "120"))
     # A fresh bytecode cache per run: a stale .pyc with the same mtime second and size would hide the change.
     cache = os.path.join(cwd, ".rehearsal", "pycache-%d" % time.time_ns())
@@ -603,7 +632,7 @@ def run_for_replay(cmd, cwd):
         if os.path.isdir(cache):
             os.rmdir(cache)
     out = REPLAY_NOISE.sub("", (p.stdout + p.stderr).decode("utf-8", "replace"))
-    return p.returncode, out
+    return p.returncode, out, (rehearsal_digest(d) if d else "")
 
 
 def replay(d, cmd, cwd):
@@ -626,15 +655,23 @@ def replay(d, cmd, cwd):
         path = item[3:].split(" -> ")[-1] if len(item) > 3 else ""
         if path and not path.replace("\\", "/").startswith((".rehearsal", "__pycache__")):
             changed.append(path)
+    base = read(os.path.join(d, "base")).strip()
+    committed = []
+    if base and git("rev-parse", "HEAD").stdout.strip() != base:  # the agent committed: revert those files too
+        committed = [p for p in git("diff", "--name-only", base, "HEAD").stdout.splitlines() if p]
     stashes = git("stash", "list").stdout
     if changed and git("stash", "push", "-u", "-q", "--", *changed).returncode != 0:
         note("skipped: git stash failed")
         return None
+    if committed:
+        git("checkout", "-q", base, "--", *committed)
     try:
-        before = run_for_replay(cmd, cwd)
+        before = run_for_replay(cmd, cwd, d)
     except subprocess.TimeoutExpired:
         before = None
     finally:
+        if committed:
+            git("checkout", "-q", "HEAD", "--", *committed)
         if changed:
             git("stash", "pop", "-q")
     if git("stash", "list").stdout != stashes:
@@ -643,12 +680,13 @@ def replay(d, cmd, cwd):
         note("timed out on the original code")
         return None
     try:
-        after = run_for_replay(cmd, cwd)
+        after = run_for_replay(cmd, cwd, d)
     except subprocess.TimeoutExpired:
         note("timed out on the fixed code")
         return None
     differs = before != after
-    note("differs" if differs else "same")
+    head = lambda r: ("exit %d; " % r[0]) + " / ".join(r[1].strip().splitlines()[:4])[:300]
+    note(("differs" if differs else "same") + " (stashed: %s)\n  original: %s\n  fixed:    %s" % (" ".join(changed) or "nothing", head(before), head(after)))
     return differs
 
 

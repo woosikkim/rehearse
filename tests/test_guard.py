@@ -564,6 +564,34 @@ edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")
 logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; print(old.g())'", "g")
 assert stop_in(d) == "", stop_in(d)
 assert "replay: differs" in open(os.path.join(d, ".rehearsal", "build.log")).read()
+# D7: the agent committed its fix: the replay still compares against the code as it was when the rehearsal began.
+d = git_repo()
+with open(os.path.join(d, ".rehearsal", "base"), "w") as f:
+    f.write(subprocess.run(["git", "rev-parse", "HEAD"], cwd=d, capture_output=True, text=True).stdout.strip())
+assert logged_in(d, repro, "1") == 0
+edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")
+subprocess.run(["git", "commit", "-q", "-am", "fix"], cwd=d, check=True)
+logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; print(old.g())'", "g")
+assert stop_in(d) == "", stop_in(d)
+assert "replay: differs" in open(os.path.join(d, ".rehearsal", "build.log")).read()
+assert open(os.path.join(d, "old.py")).read().startswith("def f():\n    return 2") and subprocess.run(["git", "status", "--porcelain"], cwd=d, capture_output=True, text=True).stdout.strip() == "?? .rehearsal/"
+# D8: a reproduction whose result lands in a file under .rehearsal/ (a docs build) still counts as differing.
+d = git_repo()
+with open(os.path.join(d, "build_docs.py"), "w") as f:
+    f.write("import old, os\nos.makedirs('.rehearsal/scaffold/out', exist_ok=True)\nopen('.rehearsal/scaffold/out/index.txt', 'w').write(str(old.f()))\n")
+subprocess.run(["git", "add", "-A"], cwd=d); subprocess.run(["git", "commit", "-q", "-m", "docs"], cwd=d, check=True)
+assert logged_in(d, "python3 build_docs.py", "") == 0
+edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")
+logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; print(old.g())'", "g")
+assert stop_in(d) == "", stop_in(d)
+assert "replay: differs" in open(os.path.join(d, ".rehearsal", "build.log")).read()
+# A test runner pointed at the scaffold is a by-hand reproduction and a by-hand sweep call.
+d = git_repo(); os.makedirs(os.path.join(d, ".rehearsal", "scaffold"))
+assert logged_in(d, "python3 -m pytest .rehearsal/scaffold -q", "1 failed") == 0
+edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")
+logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -m pytest .rehearsal/scaffold -q -k other", "1 passed")
+out = stop_in(d); assert "no sweep" not in out, out
+assert "skipped: no reproduction found" not in open(os.path.join(d, ".rehearsal", "build.log")).read()
 # A reproduction that writes is never replayed.
 d = git_repo(); assert logged_in(d, repro, "1") == 0
 with open(os.path.join(d, ".rehearsal", "REHEARSAL.md"), "w") as f:
