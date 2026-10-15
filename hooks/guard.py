@@ -16,10 +16,12 @@ was edited and no sweep followed (a codebase search plus a new by-hand call afte
 Reads a hook payload (JSON) on stdin. Exit 2 = block (reason on stderr), 0 = allow. Never exits 1.
 Tool names cover Claude Code; the others are best-effort for agents with similar hooks.
 """
+import hashlib
 import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 import time
 
@@ -31,13 +33,20 @@ WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "write_file", "repl
 LOOPS = {"for", "while", "until", "xargs", "parallel", "watch", "sleep", "nohup"}
 INTERPRETERS = {"python", "py", "node", "deno", "bun", "ruby", "perl", "php", "bash", "sh", "zsh",
                 "fish", "pwsh", "powershell", "tsx", "ts-node", "eval", "source", "."}
-ONELINER_LANGS = {"python", "py", "node", "ruby", "php"}
 RUNNERS = {"npm": {"run", "start", "exec", "test"}, "pnpm": {"run", "start", "exec", "test"},
            "yarn": {"run", "start", "exec", "test"}, "go": {"run"}, "cargo": {"run"}}
 WRAPPERS = {"sudo", "env", "time", "nice", "command", "exec"}
-# Logged commands that count as having run something; reading (cat, grep, sed, ls) and notes do not.
-EXEC_TOOLS = {"curl", "sqlite3", "psql", "mysql", "mongosh", "redis-cli", "http", "https", "grpcurl", "nc",
-              "ssh", "pytest", "make", "sphinx-build", "django-admin", "flask", "uvicorn", "gunicorn"}
+# Commands that only read, move or note things: a logged command made of these never counts as having run something.
+READ_ONLY = {"cat", "sed", "grep", "rg", "ag", "ack", "ls", "find", "head", "tail", "wc", "echo", "printf", "pwd", "which",
+             "type", "command", "stat", "file", "od", "xxd", "hexdump", "strings", "tree", "diff", "cmp", "less", "more",
+             "cd", "mkdir", "touch", "rm", "rmdir", "cp", "mv", "ln", "chmod", "chown", "tee", "sort", "uniq", "cut", "tr",
+             "awk", "jq", "yq", "basename", "dirname", "realpath", "readlink", "env", "export", "set", "unset", "true",
+             "false", "test", "[", "date", "sleep", "git", "du", "df", "free", "nproc", "uname", "id", "whoami", "hostname",
+             "ps", "pgrep", "kill", "seq", "yes", "clear", "exit", "wait", "time", "timeout", "nohup", "xargs", "conda"}
+# Package and build managers count only when they run something (install/list do not).
+SETUP = {"pip": set(), "pip3": set(), "apt": set(), "apt-get": set(), "apk": set(), "brew": set(), "uv": {"run"}, "pipx": {"run"},
+         "npm": {"run", "test", "start", "exec"}, "pnpm": {"run", "test", "start", "exec", "dlx"}, "yarn": {"run", "test", "start"},
+         "cargo": {"run", "test", "build", "bench"}, "go": {"run", "test", "build"}, "npx": None, "bunx": None, "docker": {"run", "exec", "compose"}}
 # Package launchers run a tool: allowed, but the tool they launch is checked too (npx tsx a.ts is still a script).
 LAUNCHERS = {"npx": None, "bunx": None, "uvx": None, "uv": "run", "pipx": "run", "pnpm": "dlx"}
 VERSION_ARGS = {"--version", "-V", "-v", "version"}
@@ -49,13 +58,19 @@ QUOTED = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 SEPARATORS = re.compile(r"&&|\|\||;|\||\n|\$\(|\(|\)|`")
 # ponytail: one strict one-liner shape plus keyword filters, frozen as of 0.3.0;
 # upgrade path is ast.parse for Python, or "existing" = committed to git.
-ONELINER = re.compile(r"^\s*(?:PATH=\S+\s+)?(?:\S*/)?(?:(python3?(?:\.\d+)?)\s+-c|node\s+-[ep]|ruby\s+-e)\s+'([^']*)'\s*(?:<\s*\S+\s*)?$")
-CONTROL = re.compile(r"\b(for|while|if|elif|else|def|function|fn|class|lambda|try|except|catch|finally|with)\b|=>|\n")
+# Which flag hands an interpreter inline code; "$" stands for an interpreter held in a shell variable.
+INLINE_FLAGS = {"python": {"-c"}, "py": {"-c"}, "node": {"-e", "-p"}, "bun": {"-e"}, "deno": {"eval"}, "ruby": {"-e"},
+                "php": {"-r"}, "perl": {"-e", "-E"}, "bash": {"-c"}, "sh": {"-c"}, "zsh": {"-c"}, "fish": {"-c"},
+                "pwsh": {"-c", "-Command"}, "powershell": {"-c", "-Command"}, "$": {"-c", "-e"}}
+# Syntax keywords only: method names such as .filter() or .map() are ordinary calls and must not trip this.
+CONTROL = re.compile(r"\b(for|while|until|do|if|elif|elsif|else|unless|def|function|fn|class|lambda|proc|try|except|"
+                     r"catch|finally|with|begin|rescue)\b|=>|->")
 ACCESS = re.compile(r"\b(exec\w*|spawn\w*|eval|compile|__import__|__builtins__|getattr|importlib|runpy|subprocess|"
                     r"child_process|worker_threads|vm|os|fs|shutil|pathlib|system|popen|chdir|open|write\w*|"
                     r"append\w*|copy\w*|rename\w*|unlink\w*|utime|touch|rmtree|move|symlink|replace|send|Kernel|"
-                    r"Open3|FileUtils|IO|File|mainModule|sys\.path|PYTHONPATH|NODE_PATH)\b|%x|require\(\s*[\"']node:|`|\n")
-ONE_SHAPE = "use python3 -c '<calls>' (single quotes, no other flags, optional < fixture; the interpreter may be a full path or follow PATH=...)"
+                    r"Open3|FileUtils|IO|File|mainModule|sys\.path|PYTHONPATH|NODE_PATH)\b|%x|require\(\s*[\"']node:|`")
+ONE_SHAPE = ("inline code may use any interpreter and flags, quoted or in a quoted heredoc, but may not contain loops, "
+             "branches, definitions or file/process access")
 NO_STEPS = ("rehearsal started but nothing has been run yet; while .rehearsal/active exists, make one real call "
             "the guard can log (python3 -c '...' against existing code, curl, a query, an existing script or test), "
             "then rm the marker. Reading files and writing notes do not count. If the marker is already down, put it "
@@ -81,6 +96,12 @@ SWEEP = ("rehearse: you changed code, and the record shows no sweep after your f
          "answers only the reported example leaves its siblings broken. Search the codebase for every caller of what "
          "you changed and every other place that does the same job (grep -rn <name>), call each by hand with the bad "
          "input, fix what fails, then finish.")
+REPRO_SAME = ("rehearse: your reproduction `{cmd}` behaves the same on the original code and on your fixed code "
+              "(same output and exit code), so it never showed the bug. Find a call that gives the wrong result before "
+              "your change and the right one after, write it as `repro: <command>` in .rehearsal/REHEARSAL.md, run it, "
+              "then finish.")
+UNSAFE_REPLAY = re.compile(r"(?:^|[\s;&|(])rm\s|(?<![<>&\d])>(?!&)|curl\b[^|;&]*-X\s*(?:POST|PUT|DELETE|PATCH)", re.I)
+REPLAY_NOISE = re.compile(r"0x[0-9a-fA-F]{4,}|\b\d+\.\d+s\b|\d{2}:\d{2}:\d{2}")
 NOT_DONE = ("rehearse: your last test run shows failures: `{cmd}`. A test that passed before your change and fails after it "
             "means the fix is not done. Fix the cause or undo your change (git stash, git checkout -- <file>), run the "
             "tests again, and only then report what is and is not fixed.")
@@ -131,12 +152,30 @@ def shell_text(cmd):
     return cmd if isinstance(cmd, str) else ""
 
 
-def predates_marker(path, m, cur):
-    """True if path is an existing file outside .rehearsal/ that is older than the marker."""
+def written_list(m):
+    return os.path.join(os.path.dirname(m), "written")
+
+
+def record_written(d, paths, cur):
+    """Remember files the agent wrote during the rehearsal: those may never be run or imported."""
+    try:
+        with open(os.path.join(d, "written"), "a", encoding="utf-8") as f:
+            for p in paths:
+                if p and p != "/dev/null":
+                    f.write(os.path.abspath(os.path.join(cur, os.path.expanduser(str(p)))) + "\n")
+    except OSError:
+        pass
+
+
+def may_run(path, m, cur):
+    """True if path is an existing file outside .rehearsal/ that the agent did not write during the rehearsal.
+    A code file newer than the marker is refused too, as a backstop for a write the guard did not see."""
     p = os.path.abspath(os.path.join(cur, os.path.expanduser(path)))
-    if ".rehearsal" in p.split(os.sep):
+    if ".rehearsal" in p.split(os.sep) or not os.path.isfile(p):
         return False
-    return os.path.isfile(p) and os.path.getmtime(p) < os.path.getmtime(m)
+    if p in set(read(written_list(m)).splitlines()):
+        return False
+    return os.path.splitext(p)[1] not in CODE_EXT or os.path.getmtime(p) < os.path.getmtime(m)
 
 
 def resolve_module(name, cur, js=False):
@@ -153,10 +192,8 @@ def segments(cmd):
 
 
 def executed(cmd):
-    """True if some segment of a logged command ran something, as opposed to reading or taking notes."""
+    """True if some segment of a logged command ran something: anything that is not a read-only or setup command."""
     for seg in segments(HEREDOC.sub(r"<<\3", cmd))[1]:
-        if ONELINER.match(seg):
-            return True
         try:
             toks = tokens(seg)
         except ValueError:
@@ -166,21 +203,69 @@ def executed(cmd):
             continue
         prog = toks[i]
         name = re.sub(r"[\d.]+$", "", os.path.basename(prog)) or prog
-        args = [a for a in toks[i + 1:] if not a.startswith("-")]
-        if {name, os.path.basename(prog)} & EXEC_TOOLS or prog.startswith("./") or os.path.splitext(prog)[1] in CODE_EXT:
-            return True
-        if prog.startswith("$") and toks[i + 1:]:  # an interpreter held in a shell variable ($P -m sphinx ...)
-            return True
-        if name in INTERPRETERS and args and (os.path.splitext(args[0])[1] in CODE_EXT or toks[i + 1:i + 2] == ["-m"]):
-            return True
-        if name in INTERPRETERS and {"-c", "-e", "-p"} & set(toks[i + 1:]):  # inline code with any flags or redirections
-            return True
-        if name in RUNNERS and args and args[0] in RUNNERS[name]:
+        if name in READ_ONLY or os.path.basename(prog) in READ_ONLY:
+            continue
+        if name in SETUP:
+            sub = next((a for a in toks[i + 1:] if not a.startswith("-")), "")
+            if SETUP[name] is not None and sub not in SETUP[name]:
+                continue
+        return True
+    return False
+
+
+TRACER_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tracer")
+
+
+def path_override(toks, i):
+    """A PYTHONPATH/NODE_PATH/RUBYLIB prefix, except the guard's own tracer prefix."""
+    for t in toks[:i]:
+        if re.match(r"(PYTHONPATH|NODE_PATH|RUBYLIB)=", t) and not t.startswith("PYTHONPATH=" + TRACER_DIR):
             return True
     return False
 
 
+def inject_tracer(cmd, cwd, d):
+    """Switch the Python call recorder on for a by-hand command; test runners and non-shell text are left alone."""
+    if not cmd or TEST_CMD.search(cmd) or "REHEARSE_TRACE=" in cmd:
+        return cmd
+    env = ("REHEARSE_TRACE=%s REHEARSE_ROOT=%s PYTHONPATH=%s${PYTHONPATH:+:$PYTHONPATH} "
+           % (shlex.quote(os.path.join(d, "trace.jsonl")), shlex.quote(os.path.abspath(cwd)), shlex.quote(TRACER_DIR)))
+    return env + cmd
+
+
+def trace_events(d, since=0):
+    """Trace events appended after byte offset `since`, and the new offset."""
+    path = os.path.join(d, "trace.jsonl")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            f.seek(since)
+            lines = f.read()
+            return [json.loads(ln) for ln in lines.splitlines() if ln.strip()], since + len(lines.encode("utf-8"))
+    except (OSError, ValueError):
+        return [], since
+
+
+def trace_tail(d, limit=10):
+    """Readable lines for the trace events logged since the last command, for the log entry."""
+    off_path = os.path.join(d, "trace.offset")
+    events, offset = trace_events(d, int(read(off_path) or 0))
+    with open(off_path, "w", encoding="utf-8") as f:
+        f.write(str(offset))
+    calls, lines = {}, []
+    for ev in events:
+        key = (ev.get("qual") or ev.get("func"), ev.get("file"))
+        if ev.get("t") == "call":
+            calls[key] = ", ".join("%s=%s" % kv for kv in (ev.get("args") or {}).items())
+        elif ev.get("t") in ("return", "exception"):
+            args = calls.pop(key, "")
+            result = ("raised " + ev["exc"]) if ev.get("t") == "exception" else ("= " + str(ev.get("ret")))
+            lines.append("  -> %s(%s) %s  [%s:%s]" % (key[0], args, result, ev.get("file"), ev.get("line")))
+    return lines[-limit:]
+
+
 def has_executed_step(d):
+    if os.path.getsize(os.path.join(d, "trace.jsonl")) if os.path.exists(os.path.join(d, "trace.jsonl")) else 0:
+        return True  # project code ran under the recorder
     return any(executed(ln[2:]) for ln in read(os.path.join(d, "log.md")).splitlines() if ln.startswith("$ "))
 
 
@@ -201,7 +286,9 @@ def prog_index(toks):
 
 def check_shell(cmd, cwd, m, full=True):
     """Full rules while the marker exists; with full=False only the shell's code-write channels."""
-    cmd = HEREDOC.sub(r"<<\3", cmd)  # quoted heredoc bodies are data
+    bodies = [h.group(0).split("\n", 1)[1].rsplit("\n", 1)[0] for h in HEREDOC.finditer(cmd)]  # quoted heredoc bodies
+    cmd = HEREDOC.sub(r"<<\3", cmd)
+    d = os.path.dirname(m) if m else None
     if full:
         try:
             shlex.split(cmd)
@@ -221,15 +308,47 @@ def check_shell(cmd, cwd, m, full=True):
         if toks[:1] == ["cd"] and len(toks) == 2:
             cur = os.path.join(cur, os.path.expanduser(toks[1]))
             continue
-        reason = check_shell_writes(toks, cur)
+        reason = check_shell_writes(toks, cur, d)
         if reason:
             return reason
+        body = bodies.pop(0) if "<<" in seg and bodies else None
         if not full:
             continue
-        one = ONELINER.match(seg)
-        reason = check_snippet(one.group(2), cur, m) if one else check_tokens(toks, cur, m)
+        snippet = inline_code(toks)
+        if snippet is None and body is not None and is_interpreter(toks):
+            snippet = body  # python3 - <<'EOF' ... EOF: the body is the inline code
+        if snippet is not None and path_override(toks, prog_index(toks)):
+            return "module path override; import from the project directory instead"
+        reason = check_snippet(snippet, cur, m) if snippet is not None else check_tokens(toks, cur, m)
         if reason:
             return reason
+    return None
+
+
+def is_interpreter(toks):
+    i = prog_index(toks)
+    if i >= len(toks):
+        return False
+    prog = toks[i]
+    return prog.startswith("$") or (re.sub(r"[\d.]+$", "", os.path.basename(prog)) or prog) in INTERPRETERS
+
+
+def inline_flags(toks):
+    i = prog_index(toks)
+    prog = toks[i]
+    name = "$" if prog.startswith("$") else (re.sub(r"[\d.]+$", "", os.path.basename(prog)) or prog)
+    return INLINE_FLAGS.get(name, set())
+
+
+def inline_code(toks):
+    """The code string handed to an interpreter by its inline flag, whatever the quoting; None if there is none."""
+    if not is_interpreter(toks):
+        return None
+    i = prog_index(toks)
+    flags = inline_flags(toks)
+    for k in range(i + 1, len(toks) - 1):
+        if toks[k] in flags:
+            return toks[k + 1]
     return None
 
 
@@ -247,7 +366,7 @@ def check_marker_start(cmd):
     return None
 
 
-def check_shell_writes(toks, cur=""):
+def check_shell_writes(toks, cur="", d=None):
     i = prog_index(toks)
     prog = os.path.basename(toks[i]) if i < len(toks) else ""
     args = toks[i + 1:]
@@ -255,14 +374,16 @@ def check_shell_writes(toks, cur=""):
             or (prog in {"sed", "perl"} and any(re.match(r"-[^-]*i", a) or a.startswith("--in-place") for a in args))):
         return (f"'{prog}' edits or unpacks files in place; not during rehearsal "
                 "(use curl -o into .rehearsal/fixtures/ for downloads)")
-    targets = []
+    targets = []   # files the agent itself writes: redirections, copies, downloads
+    outputs = []   # files another program writes for it (-o of a compiler or converter): not the agent's code
     for k, t in enumerate(toks):
         nxt = toks[k + 1] if k + 1 < len(toks) else ""
-        if (t in {">", ">>", ">|", "&>", "&>>", "-o", "--output"} or (prog == "curl" and re.fullmatch(r"-[A-Za-z]*o", t))
-                or (t == ">&" and not re.fullmatch(r"\d+|-", nxt))):
+        if t in {">", ">>", ">|", "&>", "&>>"} or (t == ">&" and not re.fullmatch(r"\d+|-", nxt)):
             targets.append(nxt)
+        elif t in {"-o", "--output"} or (prog == "curl" and re.fullmatch(r"-[A-Za-z]*o", t)):
+            (targets if prog == "curl" else outputs).append(nxt)
         elif t.startswith("--output="):
-            targets.append(t.split("=", 1)[1])
+            (targets if prog == "curl" else outputs).append(t.split("=", 1)[1])
     if prog == "tee":
         targets += [a for a in args if not a.startswith("-")]
     if prog in {"cp", "mv", "install"} and args:
@@ -271,12 +392,14 @@ def check_shell_writes(toks, cur=""):
         targets += [a[3:] for a in args if a.startswith("of=")]
     if prog == "curl" and any(re.fullmatch(r"-[A-Za-z]*O", a) for a in args):  # curl -O saves under the URL's file name
         targets += [a.rsplit("/", 1)[-1] for a in args if not a.startswith("-")]
-    for t in targets:
+    for t in targets + outputs:
         if os.path.basename(t) == "log.md":
             return OWN_LOG
         if t != "/dev/null" and os.path.splitext(t)[1] in CODE_EXT and not in_scaffold(t, cur):
             return (f"writing code file '{t}' through the shell; code is written in the build phase, "
                     f"after rm .rehearsal/active. {SCAFFOLD_HINT}, or save a code-like fixture as .txt.")
+    if d and targets:
+        record_written(d, targets, cur)
     return None
 
 
@@ -286,11 +409,13 @@ def written(path):
 
 def check_tokens(toks, cur, m):
     i = prog_index(toks)
-    path_override = any(re.match(r"(PYTHONPATH|NODE_PATH|RUBYLIB)=", t) for t in toks[:i])
+    override = path_override(toks, i)
     if i >= len(toks):
         return None
     prog, args = toks[i], toks[i + 1:]
     name = re.sub(r"[\d.]+$", "", os.path.basename(prog)) or prog
+    if prog.startswith("$"):
+        name = "python"  # an interpreter held in a shell variable gets the interpreter rules
     if name in LAUNCHERS and (LAUNCHERS[name] is None or args[:1] == [LAUNCHERS[name]]):
         rest = args if LAUNCHERS[name] is None else args[1:]
         return check_tokens([t for t in rest if not t.startswith("-")], cur, m)
@@ -299,41 +424,42 @@ def check_tokens(toks, cur, m):
     if name in INTERPRETERS:
         if len(args) == 1 and args[0] in VERSION_ARGS:
             return None
-        if path_override:
+        if override:
             return "module path override; import from the project directory instead"
         if name in {"python", "py"} and args[:1] == ["-m"] and len(args) > 1:
             mod = resolve_module(args[1], cur)
-            if mod and not predates_marker(mod, m, cur):
+            if mod and not may_run(mod, m, cur):
                 return f"module '{args[1]}' was written during this rehearsal; run only modules that existed before it"
             return next((written(a) for a in args[2:]
-                         if os.path.splitext(a)[1] in CODE_EXT and not predates_marker(a, m, cur)), None)
-        if args and args[0] in {"<", "<<", "<<<"}:  # inline code fed through stdin
-            return f"inline code in this shape is not accepted; {ONE_SHAPE}"
-        if args and not args[0].startswith("-"):
-            return None if predates_marker(args[0], m, cur) else written(args[0])
-        if args and name in ONELINER_LANGS:
-            return f"inline code in this shape is not accepted; {ONE_SHAPE}"
-        return f"interpreter '{prog}' with inline code or stdin; run a file that existed before the rehearsal, or {ONE_SHAPE}"
+                         if os.path.splitext(a)[1] in CODE_EXT and not may_run(a, m, cur)), None)
+        if args and args[0] == "<" and len(args) > 1:  # code fed from a file: the file must have existed before
+            return None if may_run(args[1], m, cur) else written(args[1])
+        if args and args[0] in {"<<", "<<<"}:  # an unquoted heredoc: its lines were checked as separate segments
+            return None
+        if any(a in inline_flags(toks) for a in args):
+            return f"inline code must be quoted; {ONE_SHAPE}"
+        target = next((a for a in args if not a.startswith("-")), None)  # the file to run, after any flags
+        if target is None:  # nothing to run but stdin: piped or interactive code
+            return f"interpreter '{prog}' reading code from stdin; run a file that existed before the rehearsal, or {ONE_SHAPE}"
+        return None if may_run(target, m, cur) else written(target)
     if name in RUNNERS and args and args[0] in RUNNERS[name]:
         target = next((a for a in args[1:] if not a.startswith("-")), "")
-        if name == "go" and target.endswith(".go") and predates_marker(target, m, cur):
+        if name == "go" and target.endswith(".go") and may_run(target, m, cur):
             return None
         return f"'{prog} {args[0]}' target cannot be checked; run the underlying command directly"
     if prog.startswith("./") or os.path.splitext(prog)[1] in CODE_EXT:
-        return None if predates_marker(prog, m, cur) else written(prog)
+        return None if may_run(prog, m, cur) else written(prog)
     return None
 
 
 def check_snippet(snippet, cur, m):
-    """A one-liner that matched ONELINER: straight-line calls to existing code, no logic, no file access, nothing new imported."""
-    blank = re.sub(r'"(?:\\.|[^"\\])*"', '""', snippet)  # data strings cannot trip the logic check
+    """Inline code: straight-line calls to existing code, no logic, no file access, nothing new imported."""
+    blank = re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', '""', snippet)  # data strings cannot trip the logic check
     hit = CONTROL.search(blank) or ACCESS.search(snippet)
     if hit:
         return (f"inline code contains logic or file access ({hit.group(0)!r}); call one existing function and "
                 "print the result as a literal, or feed a fixture through < stdin")
-    statements = [s.strip() for s in blank.split(";") if s.strip()]
-    if len(statements) > 12:  # ponytail: straight-line calls only; the keyword checks above already ban logic
-        return f"inline code has {len(statements)} statements; at most twelve (imports, literals, calls, print)"
+    statements = [x.strip() for x in re.split(r"[;\n]", blank) if x.strip()]
     mods = [(r, True) for r in re.findall(r"require\(\s*\"(\.{1,2}/[^\"]*)\"\s*\)", snippet)]
     for s in statements:
         if s.startswith("import "):
@@ -342,7 +468,7 @@ def check_snippet(snippet, cur, m):
             mods.append((s.split()[1], False))
     for name, js in mods:
         path = resolve_module(name, cur, js) if name and not name.startswith(".") or js else None
-        if path and not predates_marker(path, m, cur):
+        if path and not may_run(path, m, cur):
             return f"module '{name}' was written during this rehearsal; import only what existed before it began"
     return None
 
@@ -363,8 +489,11 @@ def check_write(tool_input, m, empty_log):
     return None
 
 
+TRACER_PREFIX = re.compile(r"^REHEARSE_TRACE=\S+ REHEARSE_ROOT=\S+ PYTHONPATH=\S+ ")
+
+
 def log_command(payload, path):
-    cmd = shell_text((payload.get("tool_input") or {}).get("command"))
+    cmd = TRACER_PREFIX.sub("", shell_text((payload.get("tool_input") or {}).get("command")))  # the guard's own prefix is noise
     out = payload.get("tool_response")
     if payload.get("hook_event_name") == "PostToolUseFailure":
         out = payload.get("error") or out
@@ -377,6 +506,7 @@ def log_command(payload, path):
     cmd = REDACT_USER[0].sub(REDACT_USER[1], cmd)
     cmd, out = REDACT_URL[0].sub(REDACT_URL[1], cmd), REDACT_URL[0].sub(REDACT_URL[1], out)
     lines = [ln[:400] for ln in out.splitlines() if ln.strip()][:40]  # no blank lines: entries are blank-line separated
+    lines += trace_tail(os.path.dirname(path))
     with open(path, "a", encoding="utf-8") as f:
         f.write("\n".join([f"$ {cmd}"] + lines) + "\n\n")
 
@@ -410,6 +540,89 @@ def sweep_missing(d):
     missing = [x for x, ok in (("no search of the codebase", searched),
                                ("no new by-hand call (the original reproduction and test runs do not count)", new_call)) if not ok]
     return " and ".join(missing) or None
+
+
+def first_edit_index(entries):
+    return next((i for i, e in enumerate(entries)
+                 if e.startswith("EDIT ") or EDIT_SHELL.search(e.partition("\n")[0])), None)
+
+
+def pick_repro(d):
+    """The reproduction to replay: a `repro:` line in REHEARSAL.md, else the last by-hand run before the first edit."""
+    m = re.search(r"^repro:\s*`?(.+?)`?\s*$", read(os.path.join(d, "REHEARSAL.md")), re.M)
+    if m:
+        return m.group(1).strip()
+    cmds = [ln[2:] for ln in read(os.path.join(d, "log.md")).splitlines() if ln.startswith("$ ")]
+    entries = build_entries(d)
+    first = first_edit_index(entries)
+    cmds += [e.partition("\n")[0][2:] for e in (entries[:first] if first is not None else entries) if e.startswith("$ ")]
+    cmds = [c for c in cmds if executed(c) and not TEST_CMD.search(c)]
+    return cmds[-1] if cmds else None
+
+
+def run_for_replay(cmd, cwd):
+    timeout = float(os.environ.get("REHEARSE_REPLAY_TIMEOUT", "120"))
+    # A fresh bytecode cache per run: a stale .pyc with the same mtime second and size would hide the change.
+    cache = os.path.join(cwd, ".rehearsal", "pycache-%d" % time.time_ns())
+    env = dict(os.environ, PYTHONPYCACHEPREFIX=cache)
+    try:
+        p = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, timeout=timeout, env=env)
+    finally:
+        for root, dirs, files in os.walk(cache, topdown=False):
+            for f in files:
+                os.remove(os.path.join(root, f))
+            for x in dirs:
+                os.rmdir(os.path.join(root, x))
+        if os.path.isdir(cache):
+            os.rmdir(cache)
+    out = REPLAY_NOISE.sub("", (p.stdout + p.stderr).decode("utf-8", "replace"))
+    return p.returncode, out
+
+
+def replay(d, cmd, cwd):
+    """Run the reproduction on the original code (changes stashed) and on the current code. True if they differ."""
+    def note(msg):
+        with open(os.path.join(d, "build.log"), "a", encoding="utf-8") as f:
+            f.write(f"replay: {msg}\n\n")
+    if not cmd:
+        note("skipped: no reproduction found")
+        return None
+    if UNSAFE_REPLAY.search(QUOTED.sub("''", cmd)):
+        note("skipped: command writes")
+        return None
+    git = lambda *a: subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True)
+    if git("rev-parse", "--is-inside-work-tree").returncode != 0:
+        note("skipped: not a git repository")
+        return None
+    changed = []
+    for item in git("status", "--porcelain", "-z").stdout.split("\0"):
+        path = item[3:].split(" -> ")[-1] if len(item) > 3 else ""
+        if path and not path.replace("\\", "/").startswith((".rehearsal", "__pycache__")):
+            changed.append(path)
+    stashes = git("stash", "list").stdout
+    if changed and git("stash", "push", "-u", "-q", "--", *changed).returncode != 0:
+        note("skipped: git stash failed")
+        return None
+    try:
+        before = run_for_replay(cmd, cwd)
+    except subprocess.TimeoutExpired:
+        before = None
+    finally:
+        if changed:
+            git("stash", "pop", "-q")
+    if git("stash", "list").stdout != stashes:
+        note("warning: the stash list changed; check git stash list")
+    if before is None:
+        note("timed out on the original code")
+        return None
+    try:
+        after = run_for_replay(cmd, cwd)
+    except subprocess.TimeoutExpired:
+        note("timed out on the fixed code")
+        return None
+    differs = before != after
+    note("differs" if differs else "same")
+    return differs
 
 
 def last_test_run(d):
@@ -461,6 +674,12 @@ def main():
         if last and RED.search(last[1]) and "git stash" not in last[0]:
             print(json.dumps({"decision": "block", "reason": NOT_DONE.format(cmd=last[0][:200])}))
             return 0
+        if d and not payload.get("stop_hook_active") and first_edit_index(build_entries(d)) is not None \
+                and "replay: " not in read(os.path.join(d, "build.log")):
+            cmd = pick_repro(d)
+            if replay(d, cmd, payload.get("cwd") or os.getcwd()) is False:
+                print(json.dumps({"decision": "block", "reason": REPRO_SAME.format(cmd=cmd[:200])}))
+                return 0
         missing = None if payload.get("stop_hook_active") or not d else sweep_missing(d)
         if missing:
             print(json.dumps({"decision": "block", "reason": SWEEP.format(missing=missing)}))
@@ -482,13 +701,33 @@ def main():
                 reason = f"{NO_STEPS} ({reason})"
     elif tool in WRITE_TOOLS or "patch" in tool.lower():
         reason = check_write(tin, m, empty_log)
+        if not reason and d:
+            record_written(d, [tin.get(k) for k in ("file_path", "path", "notebook_path")], cwd)
         if not reason and d and not m:
             for p in (tin.get(k) for k in ("file_path", "path", "notebook_path")):
                 if p and os.path.splitext(str(p))[1] in CODE_EXT:
                     with open(os.path.join(d, "build.log"), "a", encoding="utf-8") as f:
                         f.write(f"EDIT {p}\n\n")
     if not reason:
+        if m and tool in SHELL_TOOLS and os.path.exists(os.path.join(os.path.dirname(m), "refused")):
+            os.remove(os.path.join(os.path.dirname(m), "refused"))  # any other command ends the one-retry allowance
+        if m and tool == "Bash" and isinstance(tin.get("command"), str):
+            traced = inject_tracer(tin["command"], cwd, os.path.dirname(m))
+            if traced != tin["command"]:  # switch the Python call recorder on for this by-hand command
+                print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                                         "updatedInput": dict(tin, command=traced)}}))
         return 0
+    if m and "was written during this rehearsal" in reason:  # refuse once: the second identical attempt goes through, marked
+        key = hashlib.sha1(cmd.encode("utf-8", "replace")).hexdigest() if tool in SHELL_TOOLS else None
+        refused = os.path.join(os.path.dirname(m), "refused")
+        if key and read(refused).strip() == key:  # the same command, tried again right after the refusal
+            os.remove(refused)
+            with open(os.path.join(os.path.dirname(m), "log.md"), "a", encoding="utf-8") as f:
+                f.write(f"forced: {cmd}\n\n")
+            return 0
+        if key:
+            with open(refused, "w", encoding="utf-8") as f:
+                f.write(key)
     if m and marker_age_hours(m) > 24:
         reason = f"rehearsal marker is {int(marker_age_hours(m))} h old; if this rehearsal is over, run: rm {m}. {reason}"
     hint = (" Do this step by hand with one direct command or tool call (curl, jq, grep, sqlite3, a browser tool...) "

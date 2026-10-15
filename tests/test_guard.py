@@ -89,6 +89,13 @@ with tempfile.TemporaryDirectory() as d:
         "cd sub && python3 main.py",
         # Segmentation.
         "python3 -c 'from oldmod import f; print(f(1))'",
+        "node -e 'x' old.js",
+        "python3 -c \"print(1)\" old.py",
+        "python3 -I -c 'print(1)'",
+        "python3 -c 'a=1; b=2; c=3; d=4; e=5; f=6; g=7; h=8; i=9; j=10; k=11; l=12; print(a+l)'",
+        "php -r 'echo oldfn(1);'",
+        "python3 - <<'EOF'\nprint(1)\nEOF",
+        "bash <<'EOF'\nls\nEOF",
         "/opt/env/bin/python -c 'from oldmod import f; print(f(1))'",
         "PATH=/opt/env/bin:$PATH python3 -c 'from oldmod import f; print(f(1))'",
         "$HOME/.venv/bin/python3.11 -c 'import oldmod; print(oldmod.f(1))'",
@@ -144,8 +151,6 @@ with tempfile.TemporaryDirectory() as d:
         "python3 new.py",
         "./new.sh",
         "python3 -m newmod",
-        "python3 -c \"print(1)\" old.py",
-        "node -e 'x' old.js",
         "PYTHONPATH=.rehearsal python3 -c 'import x'",
         "PYTHONPATH=.rehearsal /opt/env/bin/python -c 'import x'",
         # Segmentation.
@@ -169,22 +174,18 @@ with tempfile.TemporaryDirectory() as d:
         "python3 -c 'import runpy; runpy.run_path(\".rehearsal/x.py\")'",
         "python3 -c 'import sys; sys.path.insert(0,\".rehearsal\"); import x'",
         "python3 -c 'getattr(__builtins__, \"exec\")(\"x\")'",
-        "python3 -c 'a=1; b=2; c=3; d=4; e=5; f=6; g=7; h=8; i=9; j=10; k=11; l=12; print(a+l)'",
         "python3 -c 'print(1)'\"; __import__('os').system('x')\"",
-        "python3 -I -c 'print(1)'",
-        "ruby -r 'json' -e 'loop{}'",
+        "ruby -r 'json' -e 'while true do end'",
         "ruby -e 'puts %x(ls)'",
         "ruby -e 'Kernel.send(\"system\",\"x\")'",
         "node -e 'require(\"fs\").writeFileSync(\"p.js\",\"x\")'",
         "node -e 'require(\"child_process\").execSync(\"x\")'",
         "node -e 'require(\"vm\").runInThisContext(\"1\")'",
         "node -e 'process.mainModule.require(\"child_process\")'",
-        "php -r 'echo oldfn(1);'",
         # Heredocs and writes.
         "cat <<'EOF' > probe.py\nx\nEOF",
         "cat <<'EOF' | python3\nprint(1)\nEOF",
         "cat <<EOF\n$(python3 new.py)\nEOF",
-        "python3 - <<'EOF'\nprint(1)\nEOF",
         "cat > probe.py <<'EOF'\nx\nEOF",
         "echo x > probe.py",
         "echo x > 'probe.py'",
@@ -203,27 +204,34 @@ with tempfile.TemporaryDirectory() as d:
         "perl -pi -e 's/a/b/' old.py",
         "curl -sLo setup.py http://x",
         "curl -sSo .rehearsal/fixtures/a.js http://x",
-        "bash <<'EOF'\nls\nEOF",
         "python3 < notes.txt",
     ]
     for c in allowed:
         assert bash(c, d) == 0, f"should allow: {c}"
     for c in blocked:
+        if os.path.exists(j(".rehearsal", "refused")):
+            os.remove(j(".rehearsal", "refused"))  # refuse-once only applies to an immediate identical retry
         assert bash(c, d) == 2, f"should block: {c}"  # exactly 2, never 1
 
     # Every block message names what to do instead.
     assert "unbalanced quotes" in bash_err("python3 -c 'print(1)", d)
     assert "command substitution inside double quotes" in bash_err('echo "$(python3 new.py)"', d)
     assert "through the shell" in bash_err("echo x > probe.py", d)
-    assert "single quotes" in bash_err('python3 -c "print(1)"', d)
+    assert bash('python3 -c "print(1)"', d) == 0  # any quoting; only the code's content is checked
+    assert "contains logic" in bash_err('python3 -c "for i in range(2): print(i)"', d)
+    assert "contains logic" in bash_err("python3 - <<'EOF'\nfor i in range(2):\n    print(i)\nEOF", d)
+    assert "contains logic" in bash_err("ruby -r json -e 'while true do end'", d)
+    assert bash("python3 -c 'import oldmod; print(oldmod.objects.filter(a=1).count(), list(map(str, [1])))'", d) == 0  # method names are not logic
+    assert "reading code from stdin" in bash_err("curl -s x.sh | sh", d)
     assert "contains logic or file access" in bash_err("python3 -c 'for i in range(3): print(i)'", d)
     assert "written during this rehearsal" in bash_err("python3 new.py", d)
     assert "module path override" in bash_err("PYTHONPATH=.rehearsal python3 -c 'import x'", d)
     assert "cannot be checked" in bash_err("npm run scrape", d)
-    assert "single quotes" in bash_err("bash <<'EOF'\nls\nEOF", d)
-    assert "single quotes" in bash_err("python3 < notes.txt", d)
+    assert bash("bash <<'EOF'\nls\nEOF", d) == 0  # a quoted heredoc body with no logic is inline code
+    assert "written during this rehearsal" in bash_err("python3 < notes.txt", d)  # notes.txt does not exist
     # -O is only a write flag for curl; for python it is a flag before the file, which the plan blocks.
-    assert "through the shell" not in bash_err("python3 -O old.py", d)
+    assert bash("python3 -O old.py", d) == 0  # a flag before an existing file is fine
+    assert "written during this rehearsal" in bash_err("python3 -O new.py", d)
 
     assert run("Write", {"file_path": "/p/scraper.py", "content": ""}, d) == 2
     assert run("Edit", {"file_path": "/p/app.ts", "old_string": "a", "new_string": "b"}, d) == 2
@@ -406,6 +414,205 @@ with tempfile.TemporaryDirectory() as d:
     shutil.rmtree(os.path.join(d, ".rehearsal")); os.makedirs(os.path.join(d, ".rehearsal"))
     assert ran("sed -i 's/a/b/' oldmod.py") == 0
     assert "no search" in stop()
+
+# R3-R5: a program's output may run, an agent-written file may not; executed() by denylist; refuse once.
+with tempfile.TemporaryDirectory() as d:
+    os.makedirs(os.path.join(d, ".rehearsal", "scaffold")); os.makedirs(os.path.join(d, "src"))
+    touch(os.path.join(d, "src", "program.cbl"), time.time() - 3600)
+    touch(os.path.join(d, ".rehearsal", "active"))
+    assert bash("cobc -x -o prog src/program.cbl", d) == 0  # a compiler is just a program that existed
+    with open(os.path.join(d, "prog"), "wb") as f:  # the compiler's output: new, no code extension, not written by the agent
+        f.write(b"\x7fELF"); os.chmod(os.path.join(d, "prog"), 0o755)
+    assert bash("./prog", d) == 0
+    assert bash("cat > new.sh <<'EOF'\necho hi\nEOF", d) == 2  # a code file: refused and never written
+    with open(os.path.join(d, "notes.txt"), "w") as f: f.write("print(1)\n")
+    assert bash("cat > notes.txt <<'EOF'\nprint(1)\nEOF", d) == 0  # a note is allowed, and remembered as agent-written
+    assert "written during this rehearsal" in bash_err("python3 notes.txt", d)
+    assert run("Write", {"file_path": os.path.join(d, ".rehearsal", "scaffold", "conf.py"), "content": "x"}, d) == 0
+    assert "written during this rehearsal" in bash_err("python3 .rehearsal/scaffold/conf.py", d)
+    import importlib.util as _u2; spec = _u2.spec_from_file_location("g2", GUARD); g2 = _u2.module_from_spec(spec); spec.loader.exec_module(g2)
+    assert not g2.executed("od -c data/x.DAT") and not g2.executed("cat x | grep y; ls -la") and not g2.executed("git log --oneline -3")
+    assert g2.executed("cobc -x -o prog src/program.cbl") and g2.executed("sphinx-build -b html s out") and g2.executed("./prog")
+    assert g2.executed("$P -m sphinx -q s out") and g2.executed("npm test") and not g2.executed("npm install") and not g2.executed("pip install x")
+    assert not hasattr(g2, "EXEC_TOOLS") and not hasattr(g2, "ONELINER")
+    # R5: refuse once. The same refused command, tried again right away, goes through and is marked in the log.
+    touch(os.path.join(d, "new.py"))
+    assert bash("python3 new.py", d) == 2
+    assert bash("python3 new.py", d) == 0
+    assert "forced: python3 new.py" in open(os.path.join(d, ".rehearsal", "log.md")).read()
+    assert bash("python3 new.py", d) == 2  # refused again: the allowance was for one retry
+    assert bash("python3 notes.txt", d) == 2 and bash("ls", d) == 0 and bash("python3 notes.txt", d) == 2  # not an immediate retry
+
+# E5-E7: the trace is the gate, the log shows it, the recorder is switched on for by-hand commands only.
+import importlib.util as _u3; _spec = _u3.spec_from_file_location("g3", GUARD); g3 = _u3.module_from_spec(_spec); _spec.loader.exec_module(g3)
+with tempfile.TemporaryDirectory() as d:
+    os.makedirs(os.path.join(d, ".rehearsal")); touch(os.path.join(d, ".rehearsal", "active"))
+    touch(os.path.join(d, "oldmod.py"), time.time() - 3600)
+    # E6: the rewrite function
+    out = g3.inject_tracer("python3 -c 'import oldmod; print(oldmod.f(1))'", d, os.path.join(d, ".rehearsal"))
+    assert out.startswith("REHEARSE_TRACE=") and "PYTHONPATH=" in out and out.endswith("print(oldmod.f(1))'"), out
+    assert g3.inject_tracer("pytest -q", d, d) == "pytest -q" and g3.inject_tracer("python tests/runtests.py x", d, d) == "python tests/runtests.py x"
+    assert g3.inject_tracer(out, d, d) == out  # never twice
+    # The guard's own prefix is not a path override; a foreign one still is.
+    assert bash(out, d) == 0
+    assert "module path override" in bash_err("PYTHONPATH=/elsewhere python3 -c 'import oldmod; print(oldmod.f(1))'", d)
+    # The hook announces the rewrite as updatedInput on stdout, and only while the marker exists.
+    p = call({"tool_name": "Bash", "tool_input": {"command": "python3 -c 'import oldmod; print(oldmod.f(1))'"}, "cwd": d})
+    assert p.returncode == 0 and "updatedInput" in p.stdout and "REHEARSE_TRACE=" in p.stdout, p.stdout
+    p = call({"tool_name": "Bash", "tool_input": {"command": "pytest -q"}, "cwd": d})
+    assert p.returncode == 0 and p.stdout.strip() == "", p.stdout
+    # E5: the trace alone opens the gate; read-only commands alone do not.
+    assert not g3.has_executed_step(os.path.join(d, ".rehearsal"))
+    call({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "grep -n f oldmod.py"}, "cwd": d, "tool_response": {"stdout": "x", "stderr": ""}})
+    assert not g3.has_executed_step(os.path.join(d, ".rehearsal"))
+    with open(os.path.join(d, ".rehearsal", "trace.jsonl"), "w") as f:
+        f.write(json.dumps({"t": "call", "func": "f", "qual": "f", "file": "oldmod.py", "line": 1, "args": {"x": "1"}}) + "\n")
+        f.write(json.dumps({"t": "return", "func": "f", "qual": "f", "file": "oldmod.py", "line": 2, "ret": "None"}) + "\n")
+    assert g3.has_executed_step(os.path.join(d, ".rehearsal"))
+    # E7: the next log entry ends with the trace lines recorded since the previous entry.
+    call({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "python3 -c 'import oldmod; oldmod.f(1)'"}, "cwd": d, "tool_response": {"stdout": "", "stderr": ""}})
+    log = open(os.path.join(d, ".rehearsal", "log.md")).read()
+    assert "  -> f(x=1) = None  [oldmod.py:2]" in log, log
+    call({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": d, "tool_response": {"stdout": "", "stderr": ""}})
+    assert open(os.path.join(d, ".rehearsal", "log.md")).read().count("-> f(x=1)") == 1  # not repeated
+    p = call({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": out}, "cwd": d, "tool_response": {"stdout": "", "stderr": ""}})
+    assert p.returncode == 0 and "REHEARSE_TRACE=" not in open(os.path.join(d, ".rehearsal", "log.md")).read()  # prefix stripped from the log
+
+# D: the guard replays the reproduction on the original code (changes stashed) and on the fixed code.
+import hashlib
+def tree_hash(root):
+    h = hashlib.sha256()
+    for dp, dn, fn in sorted(os.walk(root)):
+        dn[:] = sorted(x for x in dn if x != ".git")
+        for f in sorted(fn):
+            p = os.path.join(dp, f); h.update(p.encode()); h.update(open(p, "rb").read())
+    return h.hexdigest()
+def git_repo():
+    d = tempfile.mkdtemp(prefix="replay-")
+    subprocess.run(["git", "init", "-q"], cwd=d, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=d); subprocess.run(["git", "config", "user.name", "t"], cwd=d)
+    with open(os.path.join(d, "old.py"), "w") as f:
+        f.write("def f():\n    return 1\n\ndef g():\n    return 'g'\n")
+    subprocess.run(["git", "add", "-A"], cwd=d); subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=d, check=True)
+    os.makedirs(os.path.join(d, ".rehearsal")); touch(os.path.join(d, ".rehearsal", "active"))
+    return d
+def logged_in(d, cmd, out=""):
+    return call({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": d,
+                 "tool_response": {"stdout": out, "stderr": ""}}).returncode
+def stop_in(d, **extra):
+    return call({"hook_event_name": "Stop", "cwd": d, **extra}).stdout
+def edit_old(d, body):
+    os.remove(os.path.join(d, ".rehearsal", "active")) if os.path.exists(os.path.join(d, ".rehearsal", "active")) else None
+    assert run("Write", {"file_path": os.path.join(d, "old.py"), "content": body}, d) == 0
+    with open(os.path.join(d, "old.py"), "w") as f:
+        f.write(body)
+repro = "python3 -c 'import old; print(old.f())'"
+# D1: the edit changes the reproduction's output -> allowed, 'replay: differs' recorded.
+d = git_repo(); assert logged_in(d, repro, "1") == 0
+edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")
+logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; print(old.g())'", "g")  # a sweep, so only D decides
+assert stop_in(d) == "", stop_in(d)
+assert "replay: differs" in open(os.path.join(d, ".rehearsal", "build.log")).read()
+# D6: the working tree is byte-identical after the replay and the stash list is unchanged.
+h = tree_hash(d); assert "replay: differs" in open(os.path.join(d, ".rehearsal", "build.log")).read()
+assert subprocess.run(["git", "stash", "list"], cwd=d, capture_output=True, text=True).stdout == ""
+assert open(os.path.join(d, "old.py")).read().startswith("def f():\n    return 2"), "fixed code must be back in place"
+# D2: the edit does not change the reproduction's output -> refused once with the reason, then allowed.
+d = git_repo(); assert logged_in(d, repro, "1") == 0
+edit_old(d, "def f():\n    return 1  # comment only\n\ndef g():\n    return 'g'\n")
+logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; print(old.g())'", "g")
+out = stop_in(d); assert '"block"' in out and "behaves the same on the original code" in out, out
+assert stop_in(d, stop_hook_active=True) == ""
+assert "replay: same" in open(os.path.join(d, ".rehearsal", "build.log")).read()
+# D3: a 'repro:' line in REHEARSAL.md is preferred over the mechanical pick.
+d = git_repo(); assert logged_in(d, repro, "1") == 0
+with open(os.path.join(d, ".rehearsal", "REHEARSAL.md"), "w") as f:
+    f.write("# log\nrepro: python3 -c 'import old; print(old.g())'\n")
+edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")  # f changes, g does not: the repro: line decides
+logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; print(old.f(), 1)'", "2 1")
+out = stop_in(d); assert "old.g()" in out and "behaves the same" in out, out
+assert stop_in(d) == ""  # the verdict is recorded once; a later Stop does not replay again
+# D4: not a git repository -> skipped, allowed.
+with tempfile.TemporaryDirectory() as d:
+    os.makedirs(os.path.join(d, ".rehearsal")); touch(os.path.join(d, ".rehearsal", "active"))
+    with open(os.path.join(d, "old.py"), "w") as f: f.write("def f():\n    return 1\n")
+    assert logged_in(d, repro, "1") == 0
+    edit_old(d, "def f():\n    return 2\n"); logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; print(old.f(), 0)'", "2 0")
+    assert stop_in(d) == ""
+    assert "replay: skipped: not a git repository" in open(os.path.join(d, ".rehearsal", "build.log")).read()
+# D5: a replay that exceeds the timeout is recorded and does not block.
+d = git_repo(); assert logged_in(d, repro, "1") == 0
+with open(os.path.join(d, ".rehearsal", "REHEARSAL.md"), "w") as f:
+    f.write("repro: sleep 3; python3 -c 'import old; print(old.f())'\n")
+edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")
+logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; print(old.g())'", "g")
+os.environ["REHEARSE_REPLAY_TIMEOUT"] = "1"
+try:
+    assert stop_in(d) == ""
+finally:
+    del os.environ["REHEARSE_REPLAY_TIMEOUT"]
+assert "replay: timed out" in open(os.path.join(d, ".rehearsal", "build.log")).read()
+# A reproduction that writes is never replayed.
+d = git_repo(); assert logged_in(d, repro, "1") == 0
+with open(os.path.join(d, ".rehearsal", "REHEARSAL.md"), "w") as f:
+    f.write("repro: python3 -c 'import old; print(old.f())' > out.txt\n")
+edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")
+logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; print(old.g())'", "g")
+assert stop_in(d) == "" and "replay: skipped: command writes" in open(os.path.join(d, ".rehearsal", "build.log")).read()
+
+# E: the tracer (tracer/sitecustomize.py) records project calls of a by-hand run.
+TRACER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tracer")
+
+
+def traced(code, d, trace, argv0="-c"):
+    env = dict(os.environ, PYTHONPATH=TRACER, REHEARSE_TRACE=trace, REHEARSE_ROOT=d)
+    cmd = [sys.executable, "-c", code] if argv0 == "-c" else [sys.executable, argv0]
+    return subprocess.run(cmd, cwd=d, env=env, capture_output=True, text=True)
+
+
+def events(trace):
+    return [json.loads(line) for line in open(trace)] if os.path.exists(trace) else []
+
+
+with tempfile.TemporaryDirectory() as d:
+    j = lambda *p: os.path.join(d, *p)  # noqa: E731
+    trace = j(".rehearsal", "trace.jsonl")
+    os.makedirs(j(".rehearsal", "scaffold"))
+    os.makedirs(j("venv", "lib", "python3", "site-packages"))
+    with open(j("oldmod.py"), "w") as f:
+        f.write("def f(x):\n    return x + 1\n\ndef g(i):\n    return i\n")
+    with open(j(".rehearsal", "scaffold", "helper.py"), "w") as f:
+        f.write("def h():\n    return 1\n")
+    with open(j("venv", "lib", "python3", "site-packages", "pkg.py"), "w") as f:
+        f.write("def p():\n    return 1\n")
+    # E1: one project call -> its call event (func, file, args) and its return event (ret).
+    assert traced("import oldmod; oldmod.f(1)", d, trace).returncode == 0
+    ev = [e for e in events(trace) if e["func"] == "f"]
+    assert [e["t"] for e in ev] == ["call", "return"], ev
+    assert ev[0]["file"].endswith("oldmod.py") and ev[0]["args"] == {"x": "1"} and ev[1]["ret"] == "2"
+    # E2: stdlib, site-packages and the scaffold leave nothing.
+    os.remove(trace)
+    code = ("import sys, json; sys.path[:0] = ['.rehearsal/scaffold', 'venv/lib/python3/site-packages']\n"
+            "import helper, pkg; helper.h(); pkg.p(); json.dumps({'a': 1})")
+    assert traced(code, d, trace).returncode == 0 and events(trace) == []
+    # E3: 10,000 project calls -> exactly 2,000 events, exit 0.
+    os.remove(trace)
+    p = traced("import oldmod\nfor i in range(10000): oldmod.g(i)", d, trace)
+    assert p.returncode == 0 and len(events(trace)) == 2000
+    # E4: an unwritable trace file changes nothing the program shows.
+    code = "import oldmod; print(oldmod.f(5)); raise SystemExit(3)"
+    plain = subprocess.run([sys.executable, "-c", code], cwd=d, capture_output=True, text=True)
+    broken = traced(code, d, j(".rehearsal"))  # a directory cannot be opened for append
+    assert (broken.returncode, broken.stdout, broken.stderr) == (plain.returncode, plain.stdout, plain.stderr) == (3, "6\n", "")
+    # Only one of the two variables set, or a test runner: nothing written.
+    os.remove(trace)
+    env = dict(os.environ, PYTHONPATH=TRACER, REHEARSE_TRACE=trace)
+    env.pop("REHEARSE_ROOT", None)
+    assert subprocess.run([sys.executable, "-c", "import oldmod; oldmod.f(1)"], cwd=d, env=env).returncode == 0
+    assert not os.path.exists(trace)
+    with open(j("runtests.py"), "w") as f:
+        f.write("import oldmod\noldmod.f(1)\n")
+    assert traced("", d, trace, argv0="runtests.py").returncode == 0 and events(trace) == []
 
 # Fail open: a payload we do not understand never blocks and never exits 1.
 assert call("not json").returncode == 0
