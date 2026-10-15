@@ -283,6 +283,13 @@ try:
     rid = p.state()["run_id"]
     p.bash("python3 /opt/plugin/bin/rehearse ending", "REHEARSE-RESULT " + json.dumps(dict(good, run=rid)))
     assert p.state()["phase"] == "confirm"
+    # Named through a shell variable (seen when bin/ is not on PATH): the result line still counts.
+    p = Proj({"main.py": BUGGY})
+    p.prompt(REQUEST)
+    rid = p.state()["run_id"]
+    p.bash("R=rehearse; command -v rehearse >/dev/null || R=/opt/plugin/bin/rehearse\n$R ending --cmd x",
+           "REHEARSE-RESULT " + json.dumps(dict(good, run=rid)))
+    assert p.state()["phase"] == "confirm"
     print("results: ok")
 
     # ---------------- second activation ----------------

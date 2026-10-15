@@ -1,6 +1,6 @@
 """Self-check for stage/server.py and `rehearse stage`. Run: python3 tests/test_stage.py
 
-Scratch projects under a temp dir, CLAUDE_PLUGIN_DATA and XDG_RUNTIME_DIR pointed there. Each block prints "<name>: ok".
+Scratch projects under a temp dir, CLAUDE_PLUGIN_DATA pointed there. Each block prints "<name>: ok".
 """
 import ast
 import json
@@ -9,13 +9,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOOK = os.path.join(ROOT, "hooks", "rehearse_hook.py")
 BIN = os.path.join(ROOT, "bin", "rehearse")
 TMP = os.path.realpath(tempfile.mkdtemp(prefix="rehearse-stage-"))
-os.environ.update(CLAUDE_PLUGIN_DATA=os.path.join(TMP, "data"), XDG_RUNTIME_DIR=TMP)
+os.environ.update(CLAUDE_PLUGIN_DATA=os.path.join(TMP, "data"))
 os.environ.pop("CONDA_PREFIX", None)
 sys.path.insert(0, os.path.join(ROOT, "hooks"))
 sys.path.insert(0, os.path.join(ROOT, "stage"))
@@ -70,17 +69,9 @@ class Proj:
                   tool_input={"command": cmd}, tool_response={"stdout": stdout, "stderr": "", "interrupted": False}))
 
 
-def alive(pid):
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
-
-
-def pid_of(p):
-    with open(os.path.join(p.state()["run_folder"], "stage.pid")) as f:
-        return int(f.read())
+def steps_of(p):
+    with open(os.path.join(p.state()["run_folder"], "stage.json")) as f:
+        return json.load(f)["steps"]
 
 
 try:
@@ -107,9 +98,7 @@ try:
     # ---- session
     p = Proj({"lib.py": "def total(items):\n    return sum(items)\n", "main.py": "import lib\n"})
     out, res = p.rh("stage", "start")
-    assert res["kind"] == "stage-start" and res["ok"] and res["socket"].startswith(TMP), res
-    p.socket = res["socket"]
-    pid = pid_of(p)
+    assert res["kind"] == "stage-start" and res["ok"] and res["python"], res
     out, res = p.step("x = 1")
     assert res["kind"] == "stage-step" and res["accepted"] and res["error"] is None, res
     out, res = p.step("print(x)")
@@ -120,7 +109,9 @@ try:
     assert "value: 2" in out, out
     out, res = p.step("for i in range(3): print(i)")
     assert REFUSAL in out and not res["accepted"] and res["error"] == REFUSAL, out
-    assert alive(pid) and pid_of(p) == pid
+    assert steps_of(p) == ["x = 1", "print(x)", "x / 0", "x + 1"], steps_of(p)  # refused steps are not replayed
+    out, res = p.step("print(x)")  # replay: output of the earlier steps stays quiet, the names stay
+    assert out.splitlines()[0] == "1" and out.count("1\n") == 1, out
     print("session: ok")
 
     # ---- call record (and the hook's direct look)
@@ -155,12 +146,7 @@ try:
     # ---- stop
     out, res = p.rh("stage", "stop")
     assert res["kind"] == "stage-stop" and res["ok"], out
-    for _ in range(50):
-        if not alive(pid):
-            break
-        time.sleep(0.1)
-    assert not alive(pid) and not os.path.exists(p.socket)
-    assert not os.path.exists(os.path.join(p.state()["run_folder"], "stage.pid"))
+    assert not os.path.exists(os.path.join(p.state()["run_folder"], "stage.json"))
     out, res = p.step("x")
     assert "stage not running; rehearse stage start" in out and res["kind"] == "stage-step" \
         and res["accepted"] is False, out
@@ -174,18 +160,11 @@ try:
     out, res = q.rh("stage", "start")
     assert res["ok"] and res["python"] == venv and ("sys.path[0] %s" % q.root) in out, (out, res)
     q.rh("stage", "stop")
-    time.sleep(0.3)
     out, res = q.rh("stage", "start", "--python", os.path.realpath(sys.executable))
     assert res["ok"] and res["python"] == os.path.realpath(sys.executable), res
     q.rh("stage", "stop")
     print("interpreter: ok")
 finally:
-    for d, _, files in os.walk(TMP):
-        if "stage.pid" in files:
-            try:
-                os.kill(int(open(os.path.join(d, "stage.pid")).read()), 9)
-            except (OSError, ValueError):
-                pass
     shutil.rmtree(TMP, ignore_errors=True)
 
 print("stage: all checks passed")

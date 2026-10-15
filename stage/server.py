@@ -1,10 +1,12 @@
-"""The stage: one Python process per run, one step per request over a Unix socket (plan 2.7).
+"""The stage: one fresh Python process per step, which replays the accepted steps before it (plan 2.7).
 
-    python server.py --root <project root> --state <state json> --socket <path> --pidfile <path>
+    python server.py --root <project root> --state <state json> [--hello]
+    stdin: {"steps": [<accepted steps so far>], "code": "<the new step>"}   stdout: one JSON reply line
 
-Started detached by `rehearse stage start` under the project's interpreter, so it keeps to old-Python syntax
-and loads the plugin's helpers under private names (never on sys.path, where they could shadow project modules).
-Requests and replies are JSON lines: {"op": "hello"|"step"|"stop", "code": ...}. Writes its pid to --pidfile.
+Run by `rehearse stage step` under the project's interpreter, so it keeps to old-Python syntax and loads the
+plugin's helpers under private names (never on sys.path, where they could shadow project modules).
+ponytail: replay from scratch on every step. A live process needs a socket and must outlive the Bash call;
+a sandboxed shell allows neither. Steps that take long or have side effects repeat on every later step.
 """
 import argparse
 import ast
@@ -14,7 +16,6 @@ import importlib.util
 import io
 import json
 import os
-import socket
 import sys
 import traceback
 
@@ -158,38 +159,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True)
     ap.add_argument("--state", required=True)
-    ap.add_argument("--socket", required=True)
-    ap.add_argument("--pidfile", required=True)
+    ap.add_argument("--hello", action="store_true")
     a = ap.parse_args()
     os.chdir(a.root)
     sys.path[0] = os.path.realpath(a.root)  # as `python -c` from the root, not this file's folder
+    if a.hello:
+        print(json.dumps({"python": sys.executable, "path0": sys.path[0]}))
+        return
+    req = json.load(sys.stdin)
     stage = Stage(a.root, a.state)
-    with contextlib.suppress(OSError):
-        os.unlink(a.socket)
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(a.socket)
-    srv.listen(4)
-    with open(a.pidfile, "w") as f:
-        f.write("%d\n" % os.getpid())
-    while True:
-        conn, _ = srv.accept()
-        with conn:
-            try:
-                req = json.loads(conn.makefile("r", encoding="utf-8").readline())
-            except ValueError:
-                continue
-            op = req.get("op")
-            if op == "step":
-                reply = stage.step(str(req.get("code") or ""))
-            else:
-                reply = {"python": sys.executable, "path0": sys.path[0], "pid": os.getpid()}
-            conn.sendall((json.dumps(reply, ensure_ascii=False) + "\n").encode("utf-8"))
-            if op == "stop":
-                break
-    srv.close()
-    for p in (a.socket, a.pidfile):
-        with contextlib.suppress(OSError):
-            os.unlink(p)
+    for code in req.get("steps") or []:
+        stage.step(str(code))  # replayed quietly; the namespace is what the earlier steps left
+    sys.stdout = sys.__stdout__
+    print(json.dumps(stage.step(str(req.get("code") or "")), ensure_ascii=False))
 
 
 if __name__ == "__main__":

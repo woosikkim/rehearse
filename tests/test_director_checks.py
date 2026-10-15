@@ -261,12 +261,8 @@ try:
          tool_response={"questions": [], "answers": {"Go on?": "Stop here and write the report"}, "annotations": {}})
     assert p.state()["stop_here"]
     assert blocked(p.stop(), '"not fixed"')
-    stage = subprocess.Popen(["sleep", "60"])
-    with open(os.path.join(p.state()["run_folder"], "stage.pid"), "w") as f:
-        f.write("%d\n" % stage.pid)
     p.report("not fixed: what is known is in the log")
     assert p.stop() is None and p.state()["phase"] == "done.not_fixed"
-    assert stage.wait(10) == -15  # an allowed Stop kills the stage
     print("stop matrix: ok")
 
     # ---------------- director edits ----------------

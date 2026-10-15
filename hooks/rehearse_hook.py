@@ -10,7 +10,6 @@ Fails open: any error or malformed input exits 0 with no decision.
 import json
 import os
 import re
-import signal
 import sys
 import time
 import urllib.parse
@@ -402,8 +401,10 @@ def on_post(p, sid):
     segs = P.parse(cmd, cwd)
     with S.locked(s) as cur:
         L.log_command(cur["run_folder"], cmd, out, cur["phase"])
-        if any(seg["prog"] == "rehearse" or os.path.basename(seg["pp"] or "") == "rehearse" for seg in segs):
-            res = last_result(out)
+        plain = any(seg["prog"] == "rehearse" or os.path.basename(seg["pp"] or "") == "rehearse" for seg in segs)
+        # `R=/path/bin/rehearse; $R ending` names the command through a variable; the result line still counts.
+        res = last_result(out) if plain or re.search(r"(?<![\w-])rehearse(?![\w-])", cmd) else None
+        if plain or res:
             if res is None:
                 msgs.append("result line missing; rerun without a pipe")
             elif res.get("run") == cur["run_id"]:
@@ -525,15 +526,6 @@ def verified(s):
     return bool(after.get("all_pass")) or bool(runs and runs[-1].get("all_pass"))
 
 
-def kill_stage(s):
-    """The stage writes its pid to <run folder>/stage.pid (stage/client.py)."""
-    try:
-        with open(os.path.join(s["run_folder"], "stage.pid"), encoding="utf-8") as f:
-            os.kill(int(f.read().split()[0]), signal.SIGTERM)
-    except (OSError, ValueError, IndexError):
-        pass
-
-
 def on_stop(p, sid):
     s = S.newest(sid)
     if not s or s["phase"] == "done.cancelled":
@@ -544,7 +536,6 @@ def on_stop(p, sid):
         if ph != "done.not_fixed":
             with S.locked(s) as cur:
                 cur["phase"] = "done.not_fixed"
-        kill_stage(s)
         return None
     nxt = None
     if ph == "done.not_fixed" or s.get("stop_here"):
@@ -572,7 +563,6 @@ def on_stop(p, sid):
     if s.get("stop_here") and ph != "done.not_fixed":
         with S.locked(s) as cur:
             cur["phase"] = "done.not_fixed"
-    kill_stage(s)
     return None
 
 
