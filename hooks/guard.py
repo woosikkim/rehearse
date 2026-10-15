@@ -541,8 +541,15 @@ def is_suite(cmd):
     return bool(TEST_CMD.search(cmd)) and ".rehearsal/scaffold" not in cmd
 
 
+def shell_edit(cmd):
+    """A shell write to project code: sed -i, patch, a redirection into a code file. Scaffold and other .rehearsal files do not count."""
+    return bool(EDIT_SHELL.search(" ".join(t for t in cmd.split() if ".rehearsal/" not in t)))
+
+
 def first_edit_record(recs):
-    return next((i for i, r in enumerate(recs) if "edit" in r or ("cmd" in r and EDIT_SHELL.search(r["cmd"]))), None)
+    """The first record that changed project code: a Write/Edit in the build phase, or a build-phase shell edit."""
+    return next((i for i, r in enumerate(recs)
+                 if "edit" in r or ("cmd" in r and r.get("phase") == "build" and shell_edit(r["cmd"]))), None)
 
 
 def log_command(payload, path):
@@ -580,10 +587,6 @@ def start_marker(cwd):
         pass
 
 
-def build_entries(d):
-    return [e for e in read(os.path.join(d, "build.log")).split("\n\n") if e.startswith(("$ ", "EDIT "))]
-
-
 def sweep_missing(d):
     """What the sweep still lacks after the first code edit, or None if no edit happened or the sweep is complete."""
     recs = records(d)
@@ -597,11 +600,6 @@ def sweep_missing(d):
     missing = [x for x, ok in (("no search of the codebase", searched),
                                ("no new by-hand call (the original reproduction and test runs do not count)", new_call)) if not ok]
     return " and ".join(missing) or None
-
-
-def first_edit_index(entries):
-    return next((i for i, e in enumerate(entries)
-                 if e.startswith("EDIT ") or EDIT_SHELL.search(e.partition("\n")[0])), None)
 
 
 def pick_repro(d):

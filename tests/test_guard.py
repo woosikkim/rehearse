@@ -650,6 +650,14 @@ os.makedirs(os.path.join(d, ".rehearsal", "replay-snapshot")); open(os.path.join
 open(os.path.join(d, "out.csv"), "w").write("clobbered")
 assert call({"tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": d}).returncode == 0
 assert open(os.path.join(d, "out.csv")).read() == "snap" and not os.path.exists(os.path.join(d, ".rehearsal", "replay-restore"))
+# Writing a specimen into the scaffold during the rehearsal is not an edit: the reproduction made after it still counts.
+d = git_repo(); os.makedirs(os.path.join(d, ".rehearsal", "scaffold"))
+assert logged_in(d, "cat > .rehearsal/scaffold/conf.py <<'EOF'\nx = 1\nEOF", "") == 0
+assert logged_in(d, repro, "1") == 0
+edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")
+logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; print(old.g())'", "g")
+assert stop_in(d) == "", stop_in(d)
+assert "replay: differs" in open(os.path.join(d, ".rehearsal", "build.log")).read()
 # A reproduction that writes is never replayed.
 d = git_repo(); assert logged_in(d, repro, "1") == 0
 assert logged_in(d, "python3 -c 'import old; print(old.f())' > out.txt", "") == 0
