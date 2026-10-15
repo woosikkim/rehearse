@@ -495,8 +495,7 @@ try:
         assert hook(bad) is None, bad
     p = Proj({"main.py": BUGGY})
     p.prompt(REQUEST)
-    for ev_name in ("SubagentStop", "Stop"):
-        assert p.ev(ev_name) is None
+    assert p.ev("SubagentStop") is None  # Stop rules are checked in test_director_checks.py
     assert p.pre("Agent", prompt="x") is None and p.pre("AskUserQuestion", questions=[]) is None
     assert p.ev("PreToolUse", tool_name="Bash", tool_input="not a dict") is None
     assert Proj({}).pre("Bash", command="echo x > main.py") is None  # no run: nothing to gate
