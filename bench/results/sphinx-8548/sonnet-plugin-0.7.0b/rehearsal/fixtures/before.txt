@@ -1,4 +1,0 @@
-t
-*
-
-class target.Derived

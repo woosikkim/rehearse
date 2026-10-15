@@ -1,3 +1,0 @@
-$ cd /testbed; rm .rehearsal/active; git status --short
-?? .rehearsal/
-

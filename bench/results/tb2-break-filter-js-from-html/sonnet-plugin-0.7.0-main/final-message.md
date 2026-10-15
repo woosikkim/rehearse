@@ -1,1 +1,0 @@
-The deliverable still works end-to-end: filter.py leaves the payload byte-for-byte unchanged (exit 0), and loading the filtered output in real headless Chromium fires `alert("1")` automatically, no interaction. `/app/out.html` is unchanged and correct — nothing needs fixing or reverting.

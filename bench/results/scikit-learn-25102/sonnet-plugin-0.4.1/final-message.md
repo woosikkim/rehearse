@@ -1,9 +1,0 @@
-Selectors now keep the input dtypes when `set_output(transform="pandas")` is on. Re-running the issue's snippet gives `float16` for `petal length (cm)` and `category` for `cat`; before the change both came out as `float64`. `sklearn/utils/tests/test_set_output.py` and `sklearn/feature_selection` pass (258 passed, 7 skipped).
-
-- **`sklearn/utils/_set_output.py`:** `_wrap_in_pandas_container` has a new `dtypes` argument. When it's given, each output column found in it is cast to that dtype. It applies whether the transformer returned an ndarray or a DataFrame. `_wrap_data_with_container` passes `original_input.dtypes` only for estimators that opt in.
-- **`sklearn/feature_selection/_base.py`:** `SelectorMixin` opts in with `_sklearn_preserve_dtypes = True`. This covers every selector that uses the mixin, not just `SelectKBest`. Selectors only pick columns, so the values are unchanged.
-- **Test:** `test_wrap_in_pandas_container_dtypes` in `sklearn/utils/tests/test_set_output.py` checks that columns present in `dtypes` are cast and others are left alone.
-
-I didn't add a public switch like the issue's `set_output` option. Preservation is on for selectors and off for other transformers. Transformers that change values should keep their current output, so each other transformer would need the same opt-in. I haven't run the rest of the test suite.
-
-I used the testbed conda environment's Python (`/opt/miniconda3/envs/testbed/bin/python`) because the default `python3` has no numpy. The rehearsal log is in `.rehearsal/REHEARSAL.md`.

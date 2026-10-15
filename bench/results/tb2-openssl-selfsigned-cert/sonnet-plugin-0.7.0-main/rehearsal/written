@@ -1,4 +1,0 @@
-/app/ssl/server.pem
-/app/ssl/verification.txt
-/app/.rehearsal/REHEARSAL.md
-/app/check_cert.py

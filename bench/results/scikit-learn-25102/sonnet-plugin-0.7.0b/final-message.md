@@ -1,3 +1,0 @@
-I've recorded the repro in `.rehearsal/REHEARSAL.md`. It is a `VarianceThreshold` call with pandas output on a float16 column and a category column. I ran it on the fixed code, and it returns `a` as `float16` and `c` as `category`.
-
-Before the change, that column type would have come back as `float64`. I didn't re-run this exact call on the original code. The "before" evidence is the `SelectKBest` run saved in `.rehearsal/fixtures/before.txt`, which showed both columns as `float64`.

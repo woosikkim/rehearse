@@ -1,3 +1,0 @@
-The broad background test run (feature selection, `test_set_output.py` and `test_common.py`) has finished with exit code 0. I didn't read its output file, so I haven't seen the pass counts. The narrower common-test run for the selectors (384 passed) and the earlier feature-selection and set-output runs are the results I've actually checked.
-
-Nothing changes in my summary, and no further action is needed from you.

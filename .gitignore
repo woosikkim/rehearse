@@ -2,3 +2,4 @@ __pycache__/
 .rehearsal/
 .omc/
 evals/results/
+bench/

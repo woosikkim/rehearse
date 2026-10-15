@@ -1,1 +1,0 @@
-Sweep done. `run_bn.py` has no other callers or siblings. It's a standalone script, and the grep found only its own writes to the CSVs. I also checked the sampled output: no NaNs, Y is 0.0 in every row, and U's mean and standard deviation (50.55 and 10.66) are close to the original's fitted values (50.48 and 10.68). The three output files are final.

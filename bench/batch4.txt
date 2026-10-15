@@ -1,5 +1,0 @@
-pydata__xarray-3993
-django__django-10554
-sphinx-doc__sphinx-8548
-sympy__sympy-13852
-sympy__sympy-12489

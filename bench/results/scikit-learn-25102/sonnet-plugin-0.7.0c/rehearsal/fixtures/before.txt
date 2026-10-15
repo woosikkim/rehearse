@@ -1,3 +1,0 @@
-petal length (cm)    float64
-cat                  float64
-dtype: object
