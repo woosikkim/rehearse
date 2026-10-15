@@ -129,7 +129,7 @@ More than 3 links means the first fix was wrong: undo it and re-diagnose from Lo
 
 Send helpers when the sweep's list is long (more than three places, or places across files that each need their own reproduction), or when a sibling's fix breaks a third file. That is a count, not a guess. The session is the manager. Helpers only look.
 
-1. **The manager starts the rehearsal** before spawning: `mkdir -p .rehearsal/fixtures && touch .rehearsal/active`.
+1. **The rehearsal is already started**: the guard created the marker when this skill loaded, and a helper loading the skill finds it in place (the guard never re-creates an existing marker).
 2. **Spawn `rehearse:rehearser`** with the Agent tool. Say what to become and whom to feed: "Become normalize.py with the 04/03/2024 rows from orders.csv. Act as the fixed file and feed its rows to price.py and report.py, one call at a time."
 3. **A helper may look, act as the fix, save fixtures and write the log.** It cannot write code. It returns exactly two lines: the log path and the fixture list. Read the log, not a summary.
 4. **Helpers pass data to each other only through files in `.rehearsal/fixtures/`**, never through prose.
