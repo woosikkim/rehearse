@@ -1,0 +1,266 @@
+{
+"fin-saccr-rwa": [
+5,
+5
+],
+"math-eval-grader": [
+5,
+5
+],
+"medical-claims-processing": [
+2,
+5
+],
+"freight-dispatch-shift": [
+0,
+5
+],
+"rs-archive-clone": [
+5,
+5
+],
+"intrastat-meldung": [
+3,
+5
+],
+"jax-speedrun-gpu": [
+5,
+5
+],
+"roy-polymorph-cn": [
+1,
+5
+],
+"vpp-loss-divergence": [
+5,
+5
+],
+"risk-scorer-replay": [
+5,
+5
+],
+"embedding-drift-monitor": [
+5,
+5
+],
+"payments-pipeline-fix": [
+5,
+5
+],
+"telecom-entity-resolution": [
+5,
+5
+],
+"vba-userform-port": [
+1,
+5
+],
+"cumulative-layout-shift": [
+5,
+5
+],
+"cargo-flight-dispatch": [
+0,
+5
+],
+"wdm-design": [
+5,
+5
+],
+"react-lead-form": [
+5,
+5
+],
+"heat-pump-warranty": [
+3,
+5
+],
+"gsea-proteomics": [
+0,
+5
+],
+"music-harmony": [
+0,
+5
+],
+"legacy-utility-triage": [
+5,
+5
+],
+"sglang-qwen-burst": [
+0,
+5
+],
+"ontology-kg-querying": [
+0,
+5
+],
+"hof-topology-interpenetration": [
+5,
+5
+],
+"data-anonymization": [
+0,
+5
+],
+"ks-solver-cpp": [
+1,
+5
+],
+"takens-embedding-lean": [
+5,
+5
+],
+"vllm-deepseek-streaming": [
+0,
+5
+],
+"satb-audio-transcription": [
+5,
+5
+],
+"freecad-platform-drawing": [
+3,
+5
+],
+"photonic-waveguide-routing": [
+5,
+5
+],
+"mvcc-lsm-compaction": [
+4,
+5
+],
+"session-window-debug": [
+0,
+5
+],
+"production-planning": [
+2,
+5
+],
+"fp8-rmsnorm-gemm": [
+5,
+5
+],
+"lake-temp-glm": [
+2,
+5
+],
+"bun-sourcemap-leak": [
+0,
+5
+],
+"foodstuff-beta-activity": [
+0,
+5
+],
+"ctr-optimization": [
+3,
+5
+],
+"live-database-cutover": [
+2,
+5
+],
+"sound-change-cascade": [
+5,
+5
+],
+"wal-recovery-ordering": [
+0,
+5
+],
+"retro-console-soc": [
+5,
+5
+],
+"uefi-bootkit": [
+2,
+5
+],
+"shadow-relay": [
+5,
+5
+],
+"html-js-filter": [
+5,
+5
+],
+"atrx-vep-crispr": [
+2,
+5
+],
+"formal-crypto": [
+5,
+5
+],
+"layout-config-recreation": [
+5,
+5
+],
+"freecad-spring-clip": [
+5,
+5
+],
+"nextjs-performance": [
+5,
+5
+],
+"coq-block-bound": [
+5,
+5
+],
+"layout-config-recreation2": [
+5,
+5
+],
+"mp-checkpoint-consolidation": [
+5,
+5
+],
+"freecad-impeller": [
+0,
+5
+],
+"distributed-dedup": [
+2,
+5
+],
+"interleaved-vigenere": [
+5,
+5
+],
+"pretrain-shard-corruption": [
+5,
+5
+],
+"glycan-ms2-elucidation": [
+0,
+5
+],
+"batched-eval-parity": [
+5,
+5
+],
+"vf2-speedup-networkx": [
+2,
+5
+],
+"protein-autointerp-disulfide": [
+0,
+5
+],
+"biped-contact-dynamics": [
+5,
+5
+],
+"cad-model": [
+3,
+5
+],
+"kv-live-surgery": [
+1,
+5
+]
+}

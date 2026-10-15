@@ -1,0 +1,13 @@
+{
+ "task": "pytest-10356",
+ "fixed": false,
+ "broke_others": 0,
+ "hidden_tests_failing": 1,
+ "announce": "full",
+ "real_run_before_edit": false,
+ "guard_blocks": 5,
+ "turns": 34,
+ "cost_usd": 0.21,
+ "minutes": 8.1,
+ "final": "I added a single-line `repro:` entry to `.rehearsal/REHEARSAL.md` and ran it on the fixed code. It prints both marks, `bar` and `foo`. The original code printed only `foo`, as in the earlier multi-line run.\n\nThe guard's complaint was probably about how it read my first reproduction. That one spanned several lines, so it likely saw only `python -c '`.\n\nI also searched the rest of `src` for other readers of `pytestmark`. The only other uses are two in `terminal.py` and one in `config/__init__.py`, and all three read it for different purposes than collecting a class's marks, so I left them alone."
+}

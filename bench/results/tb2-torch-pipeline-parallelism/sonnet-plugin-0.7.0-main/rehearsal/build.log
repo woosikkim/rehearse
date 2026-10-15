@@ -1,0 +1,22 @@
+$ cd /app; rm .rehearsal/active; ls -a .rehearsal
+.
+..
+commands.jsonl
+fixtures
+log.md
+scaffold
+trace.jsonl
+trace.offset
+written
+
+EDIT /app/pipeline_parallel.py
+
+replay: skipped: not a git repository
+
+$ cd /app; grep -rn "train_step_pipeline_afab\|pipeline_parallel" . --include=* 2>/dev/null | grep -v "^./.rehearsal" | head; python3 -c 'import ast,sys; ast.parse(open("/app/pipeline_parallel.py").read()); print("syntax ok")'
+.rehearsal/written:1:/app/pipeline_parallel.py
+.rehearsal/build.log:12:EDIT /app/pipeline_parallel.py
+.rehearsal/commands.jsonl:8:{"edit": "/app/pipeline_parallel.py"}
+pipeline_parallel.py:23:def train_step_pipeline_afab(model, inputs, targets, device, dtype):
+syntax ok
+

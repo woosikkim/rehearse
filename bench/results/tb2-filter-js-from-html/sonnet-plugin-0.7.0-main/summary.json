@@ -1,0 +1,13 @@
+{
+ "task": "tb2-filter-js-from-html",
+ "fixed": true,
+ "broke_others": 0,
+ "hidden_tests_failing": 0,
+ "announce": "-",
+ "real_run_before_edit": false,
+ "guard_blocks": 1,
+ "turns": 28,
+ "cost_usd": 0.16,
+ "minutes": 15.7,
+ "final": "The sweep found no problems, so I made no further edits.\n\n**Callers:** `grep` shows `sanitize` and `clean_url` are used only inside `filter.py`. There are no other callers or sibling implementations in `/app`.\n\n**Second sample (`.rehearsal/fixtures/sample2.html`):**\n- **Uppercase tags and attributes:** `<SCRIPT>`, `ONCLICK` and `HREF` were all handled.\n- **Scheme tricks:** `&#106;avascript:` and `java&#9;script:` had their `href` removed.\n- **`data:` URLs:** `data:text/html` had its `href` removed. The inline `data:image/png` image was kept.\n- **Other vectors:** the CSS `url(javascript:...)` style, the `<meta refresh>` to `javascript:`, svg `xlink:href` and the conditional-comment script were all removed.\n- **Unclosed script:** a trailing `<script>` with no closing tag was dropped.\n- **Preserved content:** the non-ASCII `value=\"\u00e9 \u00fcn\u00ef\"` came through intact, as did `autofocus`.\n\n**Not run:** I did not test non-UTF-8 files or deeply malformed HTML, and there is still no `REHEARSAL.md` log. Nothing else is outstanding."
+}

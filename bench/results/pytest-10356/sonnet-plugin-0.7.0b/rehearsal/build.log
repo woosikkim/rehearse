@@ -1,0 +1,92 @@
+$ rm .rehearsal/active; ls .rehearsal
+commands.jsonl
+fixtures
+log.md
+scaffold
+tests.log
+trace.offset
+written
+
+EDIT /testbed/src/_pytest/mark/structures.py
+
+EDIT /testbed/src/_pytest/mark/structures.py
+
+$ P=/opt/miniconda3/envs/testbed/bin/python; $P -m pytest .rehearsal/scaffold -m bar --collect-only -q -p no:cacheprovider 2>&1 | tail -3; grep -rn "get_unpacked_marks\|\"pytestmark\"" src | grep -v "def get_unpacked"; $P -m pytest testing/test_mark.py testing/python -q -p no:cacheprovider 2>&1 | tail -5
+.rehearsal/scaffold/test_mro.py::TestDings::test_dings
+1 test collected in 0.00s
+src/_pytest/python.py:66:from _pytest.mark.structures import get_unpacked_marks
+src/_pytest/python.py:314:                self.own_markers.extend(get_unpacked_marks(self.obj))
+src/_pytest/python.py:1717:        self.own_markers.extend(get_unpacked_marks(self.obj))
+src/_pytest/terminal.py:1351:            and "pytestmark" not in keywords
+src/_pytest/mark/structures.py:371:            mark_lists = [obj.__dict__.get("pytestmark", [])]
+src/_pytest/mark/structures.py:373:            mark_lists = [x.__dict__.get("pytestmark", []) for x in obj.__mro__]
+src/_pytest/mark/structures.py:381:        mark_attribute = getattr(obj, "pytestmark", [])
+src/_pytest/mark/structures.py:414:    obj.pytestmark = [*get_unpacked_marks(obj, consider_mro=False), mark]
+src/_pytest/config/__init__.py:354:    known_marks: set[str] = {m.name for m in getattr(method, "pytestmark", [])}
+E   ModuleNotFoundError: No module named 'hypothesis'
+=========================== short test summary info ============================
+ERROR testing/python/metafunc.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.40s
+
+$ P=/opt/miniconda3/envs/testbed/bin/python; $P -m pytest testing/test_mark.py testing/python --ignore=testing/python/metafunc.py -q -p no:cacheprovider 2>&1 | tail -5
+........................................................................ [ 59%]
+...................................................................x.... [ 74%]
+........................................................................ [ 88%]
+......................s....s.sss......................                   [100%]
+463 passed, 21 skipped, 2 xfailed in 9.95s
+
+$ cat >> testing/test_mark.py <<'EOF'
+
+
+def test_mark_mro() -> None:
+    xfail = pytest.mark.xfail
+
+    @xfail("a")
+    class A:
+        pass
+
+    @xfail("b")
+    class B:
+        pass
+
+    @xfail("c")
+    class C(A, B):
+        pass
+
+    from _pytest.mark.structures import get_unpacked_marks
+
+    all_marks = get_unpacked_marks(C)
+
+    assert all_marks == [xfail("c").mark, xfail("a").mark, xfail("b").mark]
+
+    assert get_unpacked_marks(C, consider_mro=False) == [xfail("c").mark]
+EOF
+/opt/miniconda3/envs/testbed/bin/python -m pytest testing/test_mark.py -q -p no:cacheprovider 2>&1 | tail -2
+.x................                                                       [100%]
+89 passed, 1 xfailed in 1.64s
+
+replay: skipped: no reproduction found
+
+$ P=/opt/miniconda3/envs/testbed/bin/python; $P -c 'from _pytest.mark.structures import get_unpacked_marks; print(get_unpacked_marks(int), get_unpacked_marks(len), get_unpacked_marks(None))'
+[] [] []
+
+$ P=/opt/miniconda3/envs/testbed/bin/python; $P -m pytest .rehearsal/scaffold -m foo --collect-only -q -p no:cacheprovider 2>&1 | tail -3
+.rehearsal/scaffold/test_mro.py::TestDings::test_dings
+1 test collected in 0.00s
+
+$ grep -rn "get_unpacked_marks\|own_markers" src | head -20
+src/_pytest/python.py:66:from _pytest.mark.structures import get_unpacked_marks
+src/_pytest/python.py:314:                self.own_markers.extend(get_unpacked_marks(self.obj))
+src/_pytest/python.py:317:                self.keywords.update((mark.name, mark) for mark in self.own_markers)
+src/_pytest/python.py:1717:        self.own_markers.extend(get_unpacked_marks(self.obj))
+src/_pytest/python.py:1720:            self.own_markers.extend(callspec.marks)
+src/_pytest/python.py:1726:        # Take own_markers only; NodeKeywords handles parent traversal on its own.
+src/_pytest/python.py:1727:        self.keywords.update((mark.name, mark) for mark in self.own_markers)
+src/_pytest/nodes.py:227:        self.own_markers: List[Mark] = []
+src/_pytest/nodes.py:359:            self.own_markers.append(marker_.mark)
+src/_pytest/nodes.py:361:            self.own_markers.insert(0, marker_.mark)
+src/_pytest/nodes.py:380:            for mark in node.own_markers:
+src/_pytest/mark/structures.py:358:def get_unpacked_marks(
+src/_pytest/mark/structures.py:414:    obj.pytestmark = [*get_unpacked_marks(obj, consider_mro=False), mark]
+

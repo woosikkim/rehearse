@@ -1,0 +1,9 @@
+{"cmd": "cd /app; ls -a . .rehearsal 2>&1 | head -30; python3 -c 'import torch, transformers; print(torch.__version__, transformers.__version__)'", "phase": "marker"}
+{"cmd": "cd /app; command -v -a python python3 pip; ls /opt /opt/*/envs 2>&1 | head; pip list 2>/dev/null | grep -i -E \"torch|transformers|numpy\"; find / -name \"torch\" -maxdepth 6 -type d 2>/dev/null | head", "phase": "marker"}
+{"cmd": "cd /app; which python3 pip pip3; python3 --version; timeout 60 pip download torch --no-deps -d /tmp/x 2>&1 | tail -3", "phase": "marker"}
+{"cmd": "cd /app; timeout 90 python3 -m pip --version 2>&1 | tail -2; timeout 20 curl -sI https://pypi.org | head -1", "phase": "marker"}
+{"cmd": "cd /tmp; python3 -m venv /tmp/venv 2>&1 | tail -2; ls /tmp/venv/bin 2>&1 | head", "phase": "marker"}
+{"cmd": "cd /tmp && timeout 580 /tmp/venv/bin/pip install -q torch --index-url https://download.pytorch.org/whl/cpu 2>&1 | tail -3", "phase": "marker"}
+{"cmd": "cd /app; rm .rehearsal/active; ls -a .rehearsal", "phase": "build"}
+{"edit": "/app/pipeline_parallel.py"}
+{"cmd": "cd /app; grep -rn \"train_step_pipeline_afab\\|pipeline_parallel\" . --include=* 2>/dev/null | grep -v \"^./.rehearsal\" | head; python3 -c 'import ast,sys; ast.parse(open(\"/app/pipeline_parallel.py\").read()); print(\"syntax ok\")'", "phase": "build"}

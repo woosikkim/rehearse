@@ -1,0 +1,13 @@
+{
+ "task": "sphinx-8548",
+ "fixed": true,
+ "broke_others": 0,
+ "hidden_tests_failing": 0,
+ "announce": "full",
+ "real_run_before_edit": false,
+ "guard_blocks": 2,
+ "turns": 57,
+ "cost_usd": 0.33,
+ "minutes": 6.0,
+ "final": "`:inherited-members:` now documents inherited attributes, both class-level ones (`attr = 1  #: doc`) and instance ones (`self.attr = 1  #: doc`). I checked it with a small docs project, once with the base class in the same module and once in another module.\n\nTests: the new test and the rest of `tests/test_ext_autodoc_autoclass.py` pass (5 passed). Across the autodoc and autosummary test files, 5 tests fail (`test_autodoc` and four in `test_ext_autosummary.py`). They fail identically without my change. I didn't run the rest of the test suite.\n\n**The cause:** the source-comment docs are stored under the class that defines them (`('Base', 'attr1')`), but autodoc looked them up under the class being documented (`('Derived', 'attr1')`), so they never matched.\n\n**The fix:**\n- **Member filter** (`sphinx/ext/autodoc/__init__.py`): with `:inherited-members:`, docs from base classes now count for the derived class, so inherited attributes are kept.\n- **Doc lookup** (`Documenter.add_content`, same file): if the attribute has no docs under the current class, it searches the base classes in order and uses the first match.\n- **Instance attributes** (`get_class_members` in `sphinx/ext/autodoc/importer.py`): `self.x` comments in base classes are now collected. They were never listed before.\n\nWithout `:inherited-members:`, the inherited attributes stay hidden, as before.\n\n**Regression test:** `test_autodoc_inherited_members_attributes` in `tests/test_ext_autodoc_autoclass.py`, using a new `tests/roots/test-ext-autodoc/target/inherited_attrs.py`.\n\n**Not covered:** `sphinx/ext/autosummary` has its own attribute-doc lookups (`generate.py`, `__init__.py`). I didn't change or test them, so inherited attributes there may still be missed.\n\nThe rehearsal log and scaffold are in `.rehearsal/`. I left them in place for you to delete."
+}

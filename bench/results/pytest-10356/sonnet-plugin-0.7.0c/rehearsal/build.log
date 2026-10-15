@@ -1,0 +1,63 @@
+$ rm .rehearsal/active; cat >> .rehearsal/REHEARSAL.md <<'EOF'
+# Rehearsal: marks lost with multiple inheritance
+### S1: collect scaffold/t with -m bar -> 1 deselected (bar lost); -m foo -> collected
+repro: /opt/miniconda3/envs/testbed/bin/python -m pytest .rehearsal/scaffold/t -q --collect-only -m bar
+EOF
+
+EDIT /testbed/src/_pytest/mark/structures.py
+
+EDIT /testbed/src/_pytest/mark/structures.py
+
+$ grep -rn "get_unpacked_marks" src testing | grep -v "def get_unpacked"; cat >> testing/test_mark.py <<'EOF'
+
+
+def test_mark_mro() -> None:
+    xfail = pytest.mark.xfail
+
+    @xfail("a")
+    class A:
+        pass
+
+    @xfail("b")
+    class B:
+        pass
+
+    @xfail("c")
+    class C(A, B):
+        pass
+
+    from _pytest.mark.structures import get_unpacked_marks
+
+    all_marks = get_unpacked_marks(C)
+
+    assert all_marks == [xfail("b").mark, xfail("a").mark, xfail("c").mark]
+
+    assert get_unpacked_marks(C, consider_mro=False) == [xfail("c").mark]
+EOF
+echo "Fixed missing marks when a test class inherits from multiple marked base classes; marks are now collected following the MRO." > changelog/10299.bugfix.rst
+/opt/miniconda3/envs/testbed/bin/python -m pytest .rehearsal/scaffold/t -q --collect-only -m bar 2>&1 | tail -3; /opt/miniconda3/envs/testbed/bin/python -m pytest testing/test_mark.py testing/python/metafunc.py testing/test_skipping.py -q 2>&1 | tail -4
+src/_pytest/python.py:66:from _pytest.mark.structures import get_unpacked_marks
+src/_pytest/python.py:314:                self.own_markers.extend(get_unpacked_marks(self.obj))
+src/_pytest/python.py:1717:        self.own_markers.extend(get_unpacked_marks(self.obj))
+src/_pytest/mark/structures.py:416:    obj.pytestmark = [*get_unpacked_marks(obj, consider_mro=False), mark]
+.rehearsal/scaffold/t/test_mro.py::TestDings::test_dings
+1 test collected in 0.00s
+=========================== short test summary info ============================
+ERROR testing/python/metafunc.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.18s
+
+$ git stash -q; /opt/miniconda3/envs/testbed/bin/python -m pytest testing/python/metafunc.py -q 2>&1 | tail -4; git stash pop -q; /opt/miniconda3/envs/testbed/bin/python -m pytest testing/test_mark.py testing/test_skipping.py testing/python/collect.py -q 2>&1 | tail -4
+=========================== short test summary info ============================
+ERROR testing/python/metafunc.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.05s
+....x................................................................... [ 55%]
+........................................................................ [ 83%]
+............................................                             [100%]
+259 passed, 1 xfailed in 6.60s
+
+replay: differs (stashed: src/_pytest/mark/structures.py testing/test_mark.py changelog/10299.bugfix.rst)
+  original: exit 5; no tests collected (1 deselected) in
+  fixed:    exit 0; .rehearsal/scaffold/t/test_mro.py::TestDings::test_dings /  / 1 test collected in
+

@@ -1,0 +1,34 @@
+$ rm .rehearsal/active
+
+EDIT /app/filter.py
+
+EDIT /app/filter.py
+
+EDIT /app/filter.py
+
+$ cp .rehearsal/fixtures/sample1.html /tmp/t1.html && python3 filter.py /tmp/t1.html && cat /tmp/t1.html
+<!DOCTYPE html>
+<html><head><title>T</title><style>p{color:red}</style></head>
+<body><h1 class="a">Head</h1>
+<table border="1"><tr><td>1</td></tr></table>
+<a>bad</a> <a>bad2</a> <a href="http://ok/">ok</a>
+<img src="x"/>
+<svg></svg><!-- c --><p style="color:red">hi &amp; bye</p>
+<form><button>b</button></form>
+</body></html>
+
+replay: skipped: not a git repository
+
+$ grep -rn "sanitize\|clean_url\|filter.py" /app --include=*.py --include=*.md --exclude-dir=.rehearsal
+/app/filter.py:22:def clean_url(value):
+/app/filter.py:30:def sanitize(soup):
+/app/filter.py:51:            elif lname in URL_ATTRS and clean_url(value):
+/app/filter.py:71:    sanitize(soup)
+
+$ cp .rehearsal/fixtures/sample2.html /tmp/t2.html && python3 filter.py /tmp/t2.html && cat /tmp/t2.html
+<div><a>a</a><a>b</a>
+<a>c</a><img src="data:image/png;base64,AAAA"/>
+<p>s</p>
+<svg><a><text>t</text></a></svg>
+<input autofocus="" value="é ünï"/></div>
+

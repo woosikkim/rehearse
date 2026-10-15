@@ -1,0 +1,6 @@
+t
+*
+
+class mod.Derived
+
+   Derived doc

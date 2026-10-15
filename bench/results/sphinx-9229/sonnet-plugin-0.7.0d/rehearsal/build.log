@@ -1,0 +1,27 @@
+$ cd /testbed; rm .rehearsal/active; cat >> .rehearsal/REHEARSAL.md <<'EOF'
+# Rehearsal: alias docstring vs "alias of"
+repro: /opt/miniconda3/envs/testbed/bin/python -m sphinx -q -E -b text .rehearsal/scaffold/p .rehearsal/out && cat .rehearsal/out/index.txt
+### S1: built scaffold with 3 typing aliases + class alias Bar=Foo with comment
+- saw: py3.9 shows comments for all; class alias Bar shows comment AND "alias of file.Foo"
+- means: ClassDocumenter (doc_as_attr) always overrides content with "alias of"; fix: skip it when a variable comment exists (and drop class docstring)
+EOF
+
+EDIT /testbed/sphinx/ext/autodoc/__init__.py
+
+EDIT /testbed/sphinx/ext/autodoc/__init__.py
+
+EDIT /testbed/sphinx/ext/autodoc/__init__.py
+
+$ cd /testbed; P=/opt/miniconda3/envs/testbed/bin/python; $P -m sphinx -q -E -b text .rehearsal/scaffold/p .rehearsal/out && head -9 .rehearsal/out/index.txt; grep -rn "get_variable_comment\|doc_as_attr" sphinx | grep -v "autodoc/__init__"; $P -m pytest -q tests/test_ext_autodoc*.py 2>&1 | tail -5
+T
+*
+file.Bar
+   Doc of Bar alias.
+file.FileContents
+  Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+    declare_namespace(pkg)
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+163 passed, 7 warnings in 4.49s
+
+replay: skipped: no reproduction found
+

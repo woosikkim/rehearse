@@ -1,0 +1,271 @@
+$ cd /testbed; rm .rehearsal/active
+
+EDIT /testbed/sphinx/ext/autodoc/__init__.py
+
+$ cd /testbed; P=/opt/miniconda3/envs/testbed/bin/python; $P -m sphinx -q -E -b text .rehearsal/scaffold/proj .rehearsal/out 2>&1 | tail -5; cat .rehearsal/out/index.txt
+WARNING: while setting up extension sphinx.addnodes: node class 'meta' is already registered, its visitors will be overridden
+t
+*
+class mod.Derived
+   Derived doc
+   attr1 = 'a'
+
+$ cd /testbed; grep -n "class AttributeDocumenter" sphinx/ext/autodoc/__init__.py; sed -n 2455,2475p sphinx/ext/autodoc/__init__.py; grep -n "def get_doc\|def add_content\|def import_object\|def get_real_modname\|def should_suppress" sphinx/ext/autodoc/__init__.py | awk -F: '$1>2300'
+2249:class AttributeDocumenter(GenericAliasMixin, NewTypeMixin, SlotsMixin,  # type: ignore
+    return safe_getattr(obj, name, *defargs)
+def migrate_autodoc_member_order(app: Sphinx, config: Config) -> None:
+    if config.autodoc_member_order == 'alphabetic':
+        # RemovedInSphinx50Warning
+        logger.warning(__('autodoc_member_order now accepts "alphabetical" '
+                          'instead of "alphabetic". Please update your setting.'))
+        config.autodoc_member_order = 'alphabetical'  # type: ignore
+# for compatibility
+from sphinx.ext.autodoc.deprecated import DataDeclarationDocumenter  # NOQA
+from sphinx.ext.autodoc.deprecated import GenericAliasDocumenter  # NOQA
+from sphinx.ext.autodoc.deprecated import InstanceAttributeDocumenter  # NOQA
+from sphinx.ext.autodoc.deprecated import SingledispatchFunctionDocumenter  # NOQA
+from sphinx.ext.autodoc.deprecated import SingledispatchMethodDocumenter  # NOQA
+from sphinx.ext.autodoc.deprecated import SlotsAttributeDocumenter  # NOQA
+from sphinx.ext.autodoc.deprecated import TypeVarDocumenter  # NOQA
+2324:    def import_object(self, raiseerror: bool = False) -> bool:
+2345:    def get_real_modname(self) -> str:
+2373:    def get_doc(self, encoding: str = None, ignore: int = None) -> List[List[str]]:
+2387:    def add_content(self, more_content: Optional[StringList], no_docstring: bool = False
+2414:    def get_real_modname(self) -> str:
+2444:def get_documenters(app: Sphinx) -> Dict[str, "Type[Documenter]"]:
+
+$ cd /testbed; sed -n 2320,2345p sphinx/ext/autodoc/__init__.py; sed -n 2370,2412p sphinx/ext/autodoc/__init__.py
+                    pass
+        except AttributeError:
+            pass
+    def import_object(self, raiseerror: bool = False) -> bool:
+        try:
+            ret = super().import_object(raiseerror=True)
+            if inspect.isenumattribute(self.object):
+                self.object = self.object.value
+        except ImportError as exc:
+            if self.isinstanceattribute():
+                self.object = INSTANCEATTR
+                ret = True
+            elif raiseerror:
+                raise
+            else:
+                logger.warning(exc.args[0], type='autodoc', subtype='import_object')
+                self.env.note_reread()
+                ret = False
+        if self.parent:
+            self.update_annotations(self.parent)
+        return ret
+    def get_real_modname(self) -> str:
+            except ValueError:
+                pass
+    def get_doc(self, encoding: str = None, ignore: int = None) -> List[List[str]]:
+        if self.object is INSTANCEATTR:
+            return []
+        try:
+            # Disable `autodoc_inherit_docstring` temporarily to avoid to obtain
+            # a docstring from the value which descriptor returns unexpectedly.
+            # ref: https://github.com/sphinx-doc/sphinx/issues/7805
+            orig = self.config.autodoc_inherit_docstrings
+            self.config.autodoc_inherit_docstrings = False  # type: ignore
+            return super().get_doc(encoding, ignore)
+        finally:
+            self.config.autodoc_inherit_docstrings = orig  # type: ignore
+    def add_content(self, more_content: Optional[StringList], no_docstring: bool = False
+                    ) -> None:
+        if more_content is None:
+            more_content = StringList()
+
+EDIT /testbed/sphinx/ext/autodoc/importer.py
+
+$ cd /testbed; sed -n 10,35p sphinx/ext/autodoc/importer.py
+import importlib
+import traceback
+import warnings
+from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Tuple
+from sphinx.deprecation import RemovedInSphinx40Warning, deprecated_alias
+from sphinx.pycode import ModuleAnalyzer
+from sphinx.util import logging
+from sphinx.util.inspect import (getannotations, getmro, getslots, isclass, isenumclass,
+                                 safe_getattr)
+if False:
+    # For type annotation
+    from typing import Type  # NOQA
+logger = logging.getLogger(__name__)
+def mangle(subject: Any, name: str) -> str:
+    """mangle the given name."""
+    try:
+        if isclass(subject) and name.startswith('__') and not name.endswith('__'):
+            return "_%s%s" % (subject.__name__, name)
+    except AttributeError:
+        pass
+
+EDIT /testbed/sphinx/ext/autodoc/importer.py
+
+$ cd /testbed; P=/opt/miniconda3/envs/testbed/bin/python; $P -m sphinx -q -E -b text .rehearsal/scaffold/proj .rehearsal/out 2>&1 | tail -5; cat .rehearsal/out/index.txt
+WARNING: while setting up extension sphinx.addnodes: node class 'meta' is already registered, its visitors will be overridden
+t
+*
+class mod.Derived
+   Derived doc
+   attr1 = 'a'
+   attr2
+      base attr2 doc
+
+EDIT /testbed/sphinx/ext/autodoc/__init__.py
+
+$ cd /testbed; P=/opt/miniconda3/envs/testbed/bin/python; $P -m sphinx -q -E -b text .rehearsal/scaffold/proj .rehearsal/out 2>&1 | tail -5; cat .rehearsal/out/index.txt; $P -m pytest -q tests/test_ext_autodoc*.py tests/test_ext_autosummary.py 2>&1 | tail -8
+WARNING: while setting up extension sphinx.addnodes: node class 'meta' is already registered, its visitors will be overridden
+t
+*
+class mod.Derived
+   Derived doc
+   attr1 = 'a'
+      base attr1 doc
+   attr2
+      base attr2 doc
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_ext_autodoc.py::test_autodoc - AssertionError: assert '\x1b...
+FAILED tests/test_ext_autosummary.py::test_extract_summary - ValueError: Empt...
+FAILED tests/test_ext_autosummary.py::test_get_items_summary - AssertionError...
+FAILED tests/test_ext_autosummary.py::test_autosummary_filename_map - Asserti...
+FAILED tests/test_ext_autosummary.py::test_autosummary_mock_imports - Asserti...
+5 failed, 149 passed, 2194 warnings in 5.39s
+
+$ cd /testbed; P=/opt/miniconda3/envs/testbed/bin/python; git stash -q; $P -m pytest -q tests/test_ext_autodoc*.py tests/test_ext_autosummary.py 2>&1 | tail -7; git stash pop -q; git status --short; grep -rn "inherited-members\|inherited_members" sphinx/ext/autodoc/__init__.py | head -3
+=========================== short test summary info ============================
+FAILED tests/test_ext_autodoc.py::test_autodoc - AssertionError: assert '\x1b...
+FAILED tests/test_ext_autosummary.py::test_extract_summary - ValueError: Empt...
+FAILED tests/test_ext_autosummary.py::test_get_items_summary - AssertionError...
+FAILED tests/test_ext_autosummary.py::test_autosummary_filename_map - Asserti...
+FAILED tests/test_ext_autosummary.py::test_autosummary_mock_imports - Asserti...
+5 failed, 149 passed, 2194 warnings in 5.07s
+ M sphinx/ext/autodoc/__init__.py
+ M sphinx/ext/autodoc/importer.py
+?? .rehearsal/
+sphinx/ext/autodoc/__init__.py:119:def inherited_members_option(arg: Any) -> Union[object, Set[str]]:
+sphinx/ext/autodoc/__init__.py:662:        elif self.options.inherited_members:
+sphinx/ext/autodoc/__init__.py:686:                    if cls.__name__ == self.options.inherited_members and cls != self.object:
+
+$ cd /testbed; grep -rn "attr_docs" sphinx --include=*.py | grep -v "^sphinx/pycode" ; cd .rehearsal/scaffold/proj; cat > base2.py <<'EOF'
+class B2:
+    x = 1  #: b2 x doc
+EOF
+cat > mod2.py <<'EOF'
+from base2 import B2
+
+
+class D2(B2):
+    """D2 doc"""
+EOF
+cat > index.rst <<'EOF'
+t
+=
+
+.. autoclass:: mod2.D2
+   :members:
+   :inherited-members:
+
+.. autoclass:: mod2.D2
+   :members:
+EOF
+cd /testbed; /opt/miniconda3/envs/testbed/bin/python -m sphinx -q -E -b text .rehearsal/scaffold/proj .rehearsal/out 2>&1 | tail -3; cat .rehearsal/out/index.txt
+sphinx/ext/autodoc/__init__.py:598:            attr_docs = self.analyzer.find_attr_docs()
+sphinx/ext/autodoc/__init__.py:601:                if key not in attr_docs and inspect.isclass(self.parent):
+sphinx/ext/autodoc/__init__.py:610:                        if base_key in analyzer.attr_docs:
+sphinx/ext/autodoc/__init__.py:611:                            attr_docs = analyzer.attr_docs
+sphinx/ext/autodoc/__init__.py:615:                if key in attr_docs:
+sphinx/ext/autodoc/__init__.py:619:                    docstrings = [list(attr_docs[key])]
+sphinx/ext/autodoc/__init__.py:702:            attr_docs = dict(self.analyzer.find_attr_docs())
+sphinx/ext/autodoc/__init__.py:704:            attr_docs = {}
+sphinx/ext/autodoc/__init__.py:714:                for (ns, name), doc in analyzer.attr_docs.items():
+sphinx/ext/autodoc/__init__.py:716:                        attr_docs.setdefault((namespace, name), doc)
+sphinx/ext/autodoc/__init__.py:775:            elif (namespace, membername) in attr_docs:
+sphinx/ext/autodoc/__init__.py:933:            self.analyzer.find_attr_docs()
+sphinx/ext/autodoc/__init__.py:2200:                        if key in analyzer.attr_docs:
+sphinx/ext/autodoc/__init__.py:2201:                            return list(analyzer.attr_docs[key])
+sphinx/ext/autodoc/importer.py:237:        for (ns, name) in analyzer.find_attr_docs():
+sphinx/ext/autodoc/importer.py:313:        for (ns, name), docstring in analyzer.attr_docs.items():
+sphinx/ext/autodoc/importer.py:326:            for (ns, name), docstring in base_analyzer.attr_docs.items():
+sphinx/ext/autosummary/__init__.py:363:                documenter.analyzer.find_attr_docs()
+sphinx/ext/autosummary/__init__.py:693:        if (qualname, attr) in analyzer.find_attr_docs():
+sphinx/ext/autosummary/generate.py:274:            attr_docs = analyzer.find_attr_docs()
+sphinx/ext/autosummary/generate.py:275:            for namespace, attr_name in attr_docs:
+WARNING: while setting up extension sphinx.addnodes: node class 'meta' is already registered, its visitors will be overridden
+/testbed/.rehearsal/scaffold/proj/mod2.py:docstring of mod2.D2:1: WARNING: duplicate object description of mod2.D2, other instance in index, use :noindex: for one of them
+t
+*
+class mod2.D2
+   D2 doc
+   x = 1
+      b2 x doc
+class mod2.D2
+   D2 doc
+
+$ cd /testbed; cat tests/roots/test-ext-autodoc/target/inheritance.py; grep -n "inherited_members\|inherited-members" tests/test_ext_autodoc_autoclass.py | head
+class Base(object):
+    def inheritedmeth(self):
+        """Inherited function."""
+    @classmethod
+    def inheritedclassmeth(cls):
+        """Inherited class method."""
+    @staticmethod
+    def inheritedstaticmeth(cls):
+        """Inherited static method."""
+class Derived(Base):
+    def inheritedmeth(self):
+        # no docstring here
+        pass
+
+EDIT /testbed/tests/roots/test-ext-autodoc/target/inherited_attrs.py
+
+$ cd /testbed; cat >> tests/test_ext_autodoc_autoclass.py <<'EOF'
+
+
+@pytest.mark.sphinx('html', testroot='ext-autodoc')
+def test_autodoc_inherited_members_attributes(app):
+    options = {"members": None,
+               "inherited-members": None}
+    actual = do_autodoc(app, 'class', 'target.inherited_attrs.Derived', options)
+    assert list(actual) == [
+        '',
+        '.. py:class:: Derived()',
+        '   :module: target.inherited_attrs',
+        '',
+        '',
+        '   .. py:attribute:: Derived.attr1',
+        '      :module: target.inherited_attrs',
+        "      :value: 'a'",
+        '',
+        '      docstring of attr1',
+        '',
+        '',
+        '   .. py:attribute:: Derived.attr2',
+        '      :module: target.inherited_attrs',
+        '',
+        '      docstring of attr2',
+        '',
+    ]
+
+    actual = do_autodoc(app, 'class', 'target.inherited_attrs.Derived', {"members": None})
+    assert 'attr1' not in '\n'.join(actual)
+EOF
+head -15 tests/test_ext_autodoc_autoclass.py | grep -n import; /opt/miniconda3/envs/testbed/bin/python -m pytest -q tests/test_ext_autodoc_autoclass.py 2>&1 | tail -15
+12:import sys
+14:import pytest
+../opt/miniconda3/envs/testbed/lib/python3.9/site-packages/pkg_resources/__init__.py:3154
+../opt/miniconda3/envs/testbed/lib/python3.9/site-packages/pkg_resources/__init__.py:3154
+../opt/miniconda3/envs/testbed/lib/python3.9/site-packages/pkg_resources/__init__.py:3154
+../opt/miniconda3/envs/testbed/lib/python3.9/site-packages/pkg_resources/__init__.py:3154
+  /opt/miniconda3/envs/testbed/lib/python3.9/site-packages/pkg_resources/__init__.py:3154: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('sphinxcontrib')`.
+  Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+    declare_namespace(pkg)
+sphinx/directives/patches.py:14
+  /testbed/sphinx/directives/patches.py:14: DeprecationWarning: The `docutils.parsers.rst.directive.html` module will be removed in Docutils 2.0. Since Docutils 0.18, the "Meta" node is defined in `docutils.parsers.rst.directives.misc`.
+    from docutils.parsers.rst.directives import html, images, tables
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+5 passed, 7 warnings in 0.31s
+
+replay: skipped: command writes
+

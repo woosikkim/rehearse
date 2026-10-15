@@ -1,0 +1,234 @@
+$ cd /testbed; cat >> .rehearsal/REHEARSAL.md <<'EOF'
+# Rehearsal: autodoc alias docstring
+### S1: build scaffold project with 3 aliases (cmd: python -m sphinx -b text .rehearsal/scaffold/proj .rehearsal/out)
+- saw: docstring shown, then "alias of ..." appended for Dict/Union/Callable aliases
+- means: DataDocumenter.add_content always calls update_content; a docstring-comment should replace the default
+repro: /opt/miniconda3/envs/testbed/bin/python -m sphinx -q -E -b text .rehearsal/scaffold/proj .rehearsal/out
+EOF
+rm .rehearsal/active
+
+EDIT /testbed/sphinx/ext/autodoc/__init__.py
+
+$ cd /testbed; P=/opt/miniconda3/envs/testbed/bin/python; $P -m sphinx -q -E -b text .rehearsal/scaffold/proj .rehearsal/out && cat .rehearsal/out/index.txt; grep -rn "update_content\|def get_module_comment" sphinx | grep -v "def update_content\|super()"; sed -n 2585,2605p sphinx/ext/autodoc/__init__.py
+T
+*
+file.FileContents
+   Contents doc.
+file.FileOp
+   FileOp doc.
+file.ScaffoldOpts
+   Dictionary doc.
+sphinx/ext/autodoc/__init__.py:1989:    def get_module_comment(self, attrname: str) -> Optional[List[str]]:
+sphinx/ext/autodoc/__init__.py:2020:            self.update_content(more_content)
+sphinx/ext/autodoc/__init__.py:2600:        self.update_content(more_content)
+            # ref: https://github.com/sphinx-doc/sphinx/issues/7805
+            orig = self.config.autodoc_inherit_docstrings
+            self.config.autodoc_inherit_docstrings = False  # type: ignore
+            return super().get_doc(ignore)
+        finally:
+            self.config.autodoc_inherit_docstrings = orig  # type: ignore
+    def add_content(self, more_content: Optional[StringList], no_docstring: bool = False
+                    ) -> None:
+        # Disable analyzing attribute comment on Documenter.add_content() to control it on
+        # AttributeDocumenter.add_content()
+        self.analyzer = None
+        if more_content is None:
+            more_content = StringList()
+        self.update_content(more_content)
+        super().add_content(more_content, no_docstring)
+class PropertyDocumenter(DocstringStripSignatureMixin, ClassLevelDocumenter):  # type: ignore
+    """
+
+$ cd /testbed; grep -n "def get_attribute_comment" -A22 sphinx/ext/autodoc/__init__.py | head -40; sed -n 2560,2585p sphinx/ext/autodoc/__init__.py
+2559:    def get_attribute_comment(self, parent: Any, attrname: str) -> Optional[List[str]]:
+2560-        for cls in inspect.getmro(parent):
+2561-            try:
+2562-                module = safe_getattr(cls, '__module__')
+2563-                qualname = safe_getattr(cls, '__qualname__')
+2564-
+2565-                analyzer = ModuleAnalyzer.for_module(module)
+2566-                analyzer.analyze()
+2567-                if qualname and self.objpath:
+2568-                    key = (qualname, attrname)
+2569-                    if key in analyzer.attr_docs:
+2570-                        return list(analyzer.attr_docs[key])
+2571-            except (AttributeError, PycodeError):
+2572-                pass
+2573-
+2574-        return None
+2575-
+2576-    def get_doc(self, ignore: int = None) -> Optional[List[List[str]]]:
+2577-        # Check the attribute has a docstring-comment
+2578-        comment = self.get_attribute_comment(self.parent, self.objpath[-1])
+2579-        if comment:
+2580-            return [comment]
+2581-
+        for cls in inspect.getmro(parent):
+            try:
+                module = safe_getattr(cls, '__module__')
+                qualname = safe_getattr(cls, '__qualname__')
+                analyzer = ModuleAnalyzer.for_module(module)
+                analyzer.analyze()
+                if qualname and self.objpath:
+                    key = (qualname, attrname)
+                    if key in analyzer.attr_docs:
+                        return list(analyzer.attr_docs[key])
+            except (AttributeError, PycodeError):
+                pass
+        return None
+    def get_doc(self, ignore: int = None) -> Optional[List[List[str]]]:
+        # Check the attribute has a docstring-comment
+        comment = self.get_attribute_comment(self.parent, self.objpath[-1])
+        if comment:
+
+EDIT /testbed/sphinx/ext/autodoc/__init__.py
+
+$ cd /testbed; P=/opt/miniconda3/envs/testbed/bin/python; $P -m pytest tests/test_ext_autodoc*.py -q 2>&1 | tail -8
+FAILED tests/test_ext_autodoc.py::test_autodoc_TypeVar - assert ['', '.. py:m...
+FAILED tests/test_ext_autodoc_autoattribute.py::test_autoattribute_GenericAlias
+FAILED tests/test_ext_autodoc_autoattribute.py::test_autoattribute_NewType - ...
+FAILED tests/test_ext_autodoc_autoattribute.py::test_autoattribute_TypeVar - ...
+FAILED tests/test_ext_autodoc_autodata.py::test_autodata_GenericAlias - Asser...
+FAILED tests/test_ext_autodoc_autodata.py::test_autodata_NewType - AssertionE...
+FAILED tests/test_ext_autodoc_autodata.py::test_autodata_TypeVar - assert [''...
+8 failed, 155 passed, 7 warnings in 4.56s
+
+$ cd /testbed; P=/opt/miniconda3/envs/testbed/bin/python; $P -m pytest tests/test_ext_autodoc_autodata.py -q -k GenericAlias 2>&1 | head -40; git stash -q; $P -m pytest tests/test_ext_autodoc*.py -q 2>&1 | tail -2; git stash pop -q
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________________________ test_autodata_GenericAlias __________________________
+app = <SphinxTestApp buildername='html'>
+    @pytest.mark.sphinx('html', testroot='ext-autodoc')
+    def test_autodata_GenericAlias(app):
+        actual = do_autodoc(app, 'data', 'target.genericalias.T')
+        if sys.version_info < (3, 7):
+            assert list(actual) == [
+                '',
+                '.. py:data:: T',
+                '   :module: target.genericalias',
+                '   :value: typing.List[int]',
+                '',
+                '   A list of int',
+                '',
+            ]
+        else:
+>           assert list(actual) == [
+                '',
+                '.. py:data:: T',
+                '   :module: target.genericalias',
+                '',
+                '   A list of int',
+                '',
+                '   alias of :class:`~typing.List`\\ [:class:`int`]',
+                '',
+            ]
+E           AssertionError: assert ['', '.. py:d...t of int', ''] == ['', '.. py:d...int', '', ...]
+E             
+E             Right contains 2 more items, first extra item: '   alias of :class:`~typing.List`\\ [:class:`int`]'
+E             Use -v to get more diff
+tests/test_ext_autodoc_autodata.py:92: AssertionError
+--------------------------- Captured stdout teardown ---------------------------
+# testroot: root
+# builder: html
+# srcdir: /tmp/pytest-of-root/pytest-1/ext-autodoc
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+163 passed, 7 warnings in 4.30s
+
+$ cd /testbed; git stash -q; P=/opt/miniconda3/envs/testbed/bin/python; cd .rehearsal/scaffold/proj && cat > file.py <<'EOF'
+from pathlib import Path
+from typing import Any, Callable, Dict, Union
+
+ScaffoldOpts = Dict[str, Any]
+"""Dictionary with PyScaffold's options, see ``pyscaffold.api.create_project``.
+Should be treated as immutable (if required, copy before changing).
+
+Please notice some behaviours.
+"""
+
+FileContents = Union[str, None]
+"""When the file content is ``None``, the file should not be written to
+disk (empty files are represented by an empty string ``""`` as content).
+"""
+
+FileOp = Callable[[Path, FileContents, ScaffoldOpts], Union[Path, None]]
+"""Signature of functions considered file operations::
+
+    Callable[[Path, FileContents, ScaffoldOpts], Union[Path, None]]
+
+- **path** (:obj:`pathlib.Path`): file path.
+
+.. note::
+    A **FileOp** usually has side effects.
+"""
+EOF
+cd /testbed; $P -m sphinx -q -E -b text .rehearsal/scaffold/proj .rehearsal/out && cat .rehearsal/out/index.txt; git stash pop -q
+T
+*
+file.FileContents
+   When the file content is "None", the file should not be written to
+   disk (empty files are represented by an empty string """" as
+   content).
+   alias of "Optional"["str"]
+file.FileOp
+   Signature of functions considered file operations:
+      Callable[[Path, FileContents, ScaffoldOpts], Union[Path, None]]
+   * **path** ("pathlib.Path"): file path.
+   Note:
+     A **FileOp** usually has side effects.
+   alias of "Callable"[["pathlib.Path", "Optional"["str"],
+   "Dict"["str", "Any"]], "Optional"["pathlib.Path"]]
+file.ScaffoldOpts
+   Dictionary with PyScaffold's options, see
+   "pyscaffold.api.create_project". Should be treated as immutable (if
+   required, copy before changing).
+   Please notice some behaviours.
+   alias of "Dict"["str", "Any"]
+
+$ cd /testbed; git stash -q; P=/opt/miniconda3/envs/testbed/bin/python; cat > .rehearsal/scaffold/proj/file.py <<'EOF'
+from typing import Dict, List, Union, Any
+
+A = Dict[str, Any]
+B = Union[str, None]
+C = list[int]
+D = int | None
+EOF
+$P -m sphinx -q -E -b text .rehearsal/scaffold/proj .rehearsal/out && cat .rehearsal/out/index.txt; $P --version; git stash pop -q
+WARNING: autodoc: failed to import module 'file'; the following exception was raised:
+Traceback (most recent call last):
+  File "/testbed/sphinx/ext/autodoc/importer.py", line 70, in import_module
+    return importlib.import_module(modname)
+  File "/opt/miniconda3/envs/testbed/lib/python3.9/importlib/__init__.py", line 127, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+  File "<frozen importlib._bootstrap>", line 1030, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1007, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 986, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 680, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 850, in exec_module
+  File "<frozen importlib._bootstrap>", line 228, in _call_with_frames_removed
+  File "/testbed/.rehearsal/scaffold/proj/file.py", line 6, in <module>
+    D = int | None
+TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'
+T
+*
+Python 3.9.20
+
+$ cd /testbed; git stash -q; P=/opt/miniconda3/envs/testbed/bin/python; sed -i '/^D = /d' .rehearsal/scaffold/proj/file.py
+$P -m sphinx -q -E -b text .rehearsal/scaffold/proj .rehearsal/out && cat .rehearsal/out/index.txt; git stash pop -q
+T
+*
+
+$ cd /testbed; git stash -q; P=/opt/miniconda3/envs/testbed/bin/python; printf "T\n=\n\n.. automodule:: file\n   :members:\n   :undoc-members:\n" > .rehearsal/scaffold/proj/index.rst
+$P -m sphinx -q -E -b text .rehearsal/scaffold/proj .rehearsal/out && cat .rehearsal/out/index.txt; git stash pop -q
+T
+*
+
+$ cd /testbed; git checkout sphinx/ext/autodoc/__init__.py; git status --short; cat >> .rehearsal/REHEARSAL.md <<'EOF'
+### S2: replay with exact issue docstrings on unmodified HEAD
+- saw: all three docstrings render; "alias of ..." is appended after each. Not ignored.
+- my edit (skip alias when a comment exists) broke 8 existing tests that expect docstring + "alias of" (test_autodata_GenericAlias etc.), so it was reverted.
+EOF
+Updated 1 path from the index
+?? .rehearsal/
+
+replay: skipped: command writes
+

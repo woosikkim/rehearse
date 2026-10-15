@@ -1,0 +1,13 @@
+{
+ "task": "tb2-mailman",
+ "fixed": true,
+ "broke_others": 0,
+ "hidden_tests_failing": 0,
+ "announce": "full",
+ "real_run_before_edit": false,
+ "guard_blocks": 5,
+ "turns": 52,
+ "cost_usd": 0.33,
+ "minutes": 23.4,
+ "final": "That notification was for the first `mailman start` and `postfix start` command I ran. The `| tail` in that command kept its output open, so the shell treated it as still running until the background time limit stopped it. It isn't a problem. The services it started are still up:\n\n- **Mailman:** the master process and its runners are running, and the REST API answers on port 8001.\n- **Postfix:** running.\n- **List:** `reading-group@local.edu` still exists.\n\nMy earlier report holds: join, leave and posting all worked. I didn't reload the rehearse skill, because there was nothing left to build or change."
+}

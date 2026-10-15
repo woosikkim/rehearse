@@ -1,0 +1,10 @@
+{"cmd": "ls -la . .rehearsal 2>&1; python3 -c 'import bs4; print(bs4.__version__)' 2>&1; python3 -c 'import lxml; print(lxml.__version__)' 2>&1; python3 -c 'import html5lib; print(html5lib.__version__)' 2>&1; python3 -c 'import bleach; print(bleach.__version__)' 2>&1; python3 --version", "phase": "marker"}
+{"cmd": "ls .rehearsal/fixtures; python3 -I -c 'import sys; from bs4 import BeautifulSoup; print(str(BeautifulSoup(sys.stdin.read(),\"html.parser\")))' < .rehearsal/fixtures/sample1.html", "phase": "marker"}
+{"cmd": "python3 -I -c 'import sys; from bs4 import BeautifulSoup; print(str(BeautifulSoup(sys.stdin.read(),\"html.parser\")))' < .rehearsal/fixtures/sample1.html", "phase": "marker"}
+{"cmd": "rm .rehearsal/active", "phase": "build"}
+{"edit": "/app/filter.py"}
+{"edit": "/app/filter.py"}
+{"edit": "/app/filter.py"}
+{"cmd": "cp .rehearsal/fixtures/sample1.html /tmp/t1.html && python3 filter.py /tmp/t1.html && cat /tmp/t1.html", "phase": "build"}
+{"cmd": "grep -rn \"sanitize\\|clean_url\\|filter.py\" /app --include=*.py --include=*.md --exclude-dir=.rehearsal", "phase": "build"}
+{"cmd": "cp .rehearsal/fixtures/sample2.html /tmp/t2.html && python3 filter.py /tmp/t2.html && cat /tmp/t2.html", "phase": "build"}

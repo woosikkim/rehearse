@@ -1,0 +1,10 @@
+{"cmd": "cd /app/.rehearsal/fixtures && curl -sL https://huggingface.co/datasets/ryanmarten/OpenThoughts-1k-sample/raw/main/README.md -o README.md; head -c 4000 README.md", "phase": "marker"}
+{"cmd": "python3 -c 'import datasets, transformers; print(1)'", "phase": "marker"}
+{"cmd": "cd /app; pip list 2>/dev/null | grep -iE \"datasets|transformers|tokenizers|huggingface|pandas|pyarrow\"; pip --version", "phase": "marker"}
+{"cmd": "cd /app; pip install -q datasets transformers 2>&1 | tail -3", "phase": "marker"}
+{"cmd": "cd /app; python3 -I -c 'from datasets import load_dataset; ds=load_dataset(\"ryanmarten/OpenThoughts-1k-sample\",\"metadata\",split=\"train\"); print(ds.column_names); print(set(ds[\"domain\"])); print(ds[0][\"domain\"], len(ds))' 2>&1 | tail -5", "phase": "marker"}
+{"cmd": "rm /app/.rehearsal/active; ls -a /app/.rehearsal", "phase": "build"}
+{"edit": "/tmp/work/count.py"}
+{"cmd": "python3 -I /tmp/work/count.py 2>&1 | tail -3; cat /app/answer.txt", "phase": "build"}
+{"cmd": "grep -rn \"answer.txt\\|count.py\" /app /tmp/work --include=*.py --include=*.txt -l 2>/dev/null | head", "phase": "build"}
+{"cmd": "python3 -I -c 'from transformers import AutoTokenizer; t=AutoTokenizer.from_pretrained(\"Qwen/Qwen2.5-1.5B-Instruct\"); print(len(t(\"hello world\")[\"input_ids\"]))' 2>&1 | tail -1", "phase": "build"}

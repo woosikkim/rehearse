@@ -1,0 +1,117 @@
+$ mkdir -p .rehearsal/scaffold/t && cat > .rehearsal/scaffold/t/test_mro.py <<'EOF'
+import pytest
+
+@pytest.mark.foo
+class Foo: pass
+
+@pytest.mark.bar
+class Bar: pass
+
+class TestDings(Foo, Bar):
+    def test_dings(self): pass
+EOF
+python -m pytest .rehearsal/scaffold/t -q --collect-only -m bar 2>&1 | tail -5; sed -n 380,400p src/_pytest/mark/structures.py; sed -n 305,318p src/_pytest/python.py
+/opt/miniconda3/bin/python: No module named pytest
+        yield mark_obj
+def store_mark(obj, mark: Mark) -> None:
+    """Store a Mark on an object.
+    This is used to implement the Mark declarations/decorators correctly.
+    """
+    assert isinstance(mark, Mark), mark
+    # Always reassign name to avoid updating pytestmark in a reference that
+    # was only borrowed.
+    obj.pytestmark = [*get_unpacked_marks(obj), mark]
+# Typing for builtin pytest marks. This is cheating; it gives builtin marks
+# special privilege, and breaks modularity. But practicality beats purity...
+if TYPE_CHECKING:
+    from _pytest.scope import _ScopeName
+    class _SkipMarkDecorator(MarkDecorator):
+        @overload  # type: ignore[override,misc,no-overload-impl]
+    @property
+    def obj(self):
+        """Underlying Python object."""
+        obj = getattr(self, "_obj", None)
+        if obj is None:
+            self._obj = obj = self._getobj()
+            # XXX evil hack
+            # used to avoid Function marker duplication
+            if self._ALLOW_MARKERS:
+                self.own_markers.extend(get_unpacked_marks(self.obj))
+                # This assumes that `obj` is called before there is a chance
+                # to add custom keys to `self.keywords`, so no fear of overriding.
+                self.keywords.update((mark.name, mark) for mark in self.own_markers)
+        return obj
+
+$ ls /opt /opt/miniconda3/envs 2>&1; which -a python python3 pytest
+Exit code 1
+/opt:
+miniconda3
+/opt/miniconda3/envs:
+testbed
+/opt/miniconda3/bin/python
+/usr/bin/python
+/bin/python
+/opt/miniconda3/bin/python3
+/usr/bin/python3
+/bin/python3
+
+$ /opt/miniconda3/envs/testbed/bin/python -m pytest .rehearsal/scaffold/t -q --collect-only -m bar 2>&1 | tail -5; /opt/miniconda3/envs/testbed/bin/python -m pytest .rehearsal/scaffold/t -q --collect-only -m foo 2>&1 | tail -5
+no tests collected (1 deselected) in 0.00s
+.rehearsal/scaffold/t/test_mro.py::TestDings::test_dings
+1 test collected in 0.00s
+
+$ rm .rehearsal/active; cat >> .rehearsal/REHEARSAL.md <<'EOF'
+# Rehearsal: marks lost with multiple inheritance
+### S1: collect scaffold/t with -m bar -> 1 deselected (bar lost); -m foo -> collected
+repro: /opt/miniconda3/envs/testbed/bin/python -m pytest .rehearsal/scaffold/t -q --collect-only -m bar
+EOF
+
+$ grep -rn "get_unpacked_marks" src testing | grep -v "def get_unpacked"; cat >> testing/test_mark.py <<'EOF'
+
+
+def test_mark_mro() -> None:
+    xfail = pytest.mark.xfail
+
+    @xfail("a")
+    class A:
+        pass
+
+    @xfail("b")
+    class B:
+        pass
+
+    @xfail("c")
+    class C(A, B):
+        pass
+
+    from _pytest.mark.structures import get_unpacked_marks
+
+    all_marks = get_unpacked_marks(C)
+
+    assert all_marks == [xfail("b").mark, xfail("a").mark, xfail("c").mark]
+
+    assert get_unpacked_marks(C, consider_mro=False) == [xfail("c").mark]
+EOF
+echo "Fixed missing marks when a test class inherits from multiple marked base classes; marks are now collected following the MRO." > changelog/10299.bugfix.rst
+/opt/miniconda3/envs/testbed/bin/python -m pytest .rehearsal/scaffold/t -q --collect-only -m bar 2>&1 | tail -3; /opt/miniconda3/envs/testbed/bin/python -m pytest testing/test_mark.py testing/python/metafunc.py testing/test_skipping.py -q 2>&1 | tail -4
+src/_pytest/python.py:66:from _pytest.mark.structures import get_unpacked_marks
+src/_pytest/python.py:314:                self.own_markers.extend(get_unpacked_marks(self.obj))
+src/_pytest/python.py:1717:        self.own_markers.extend(get_unpacked_marks(self.obj))
+src/_pytest/mark/structures.py:416:    obj.pytestmark = [*get_unpacked_marks(obj, consider_mro=False), mark]
+.rehearsal/scaffold/t/test_mro.py::TestDings::test_dings
+1 test collected in 0.00s
+=========================== short test summary info ============================
+ERROR testing/python/metafunc.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.18s
+
+$ git stash -q; /opt/miniconda3/envs/testbed/bin/python -m pytest testing/python/metafunc.py -q 2>&1 | tail -4; git stash pop -q; /opt/miniconda3/envs/testbed/bin/python -m pytest testing/test_mark.py testing/test_skipping.py testing/python/collect.py -q 2>&1 | tail -4
+=========================== short test summary info ============================
+ERROR testing/python/metafunc.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.05s
+....x................................................................... [ 55%]
+........................................................................ [ 83%]
+............................................                             [100%]
+259 passed, 1 xfailed in 6.60s
+

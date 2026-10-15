@@ -1,3 +1,5 @@
+Practice runs used to find failure modes; not a performance measurement.
+
 # Benchmark notes
 
 This folder holds everything needed to repeat the measurements quoted in the main README, plus the raw results of every run.

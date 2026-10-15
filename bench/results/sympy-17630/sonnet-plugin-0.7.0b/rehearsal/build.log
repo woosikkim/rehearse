@@ -1,0 +1,163 @@
+$ rm .rehearsal/active; cat >> .rehearsal/REHEARSAL.md <<'EOF'
+### S1: (b.blocks*b.blocks)[0,1] type
+- saw: Zero (scalar), not ZeroMatrix; BlockMatrix(...) of it raises ValueError here
+- fix: in BlockMatrix._blockmul, turn Zero entries into ZeroMatrix(rowblocksizes[i], other.colblocksizes[j])
+repro: /opt/miniconda3/envs/testbed/bin/python -c 'from sympy import *; a=MatrixSymbol("a",2,2); z=ZeroMatrix(2,2); b=BlockMatrix([[a,z],[z,z]]); print(block_collapse(b*b*b))'
+EOF
+
+EDIT /testbed/sympy/matrices/expressions/blockmatrix.py
+
+$ P=/opt/miniconda3/envs/testbed/bin/python; $P -c '
+from sympy import *
+a=MatrixSymbol("a",2,2); z=ZeroMatrix(2,2); b=BlockMatrix([[a,z],[z,z]])
+print(block_collapse(b*b*b))
+x=b._blockmul(b)._blockmul(b)
+print(type(x.blocks[0,1]), x.blocks[0,1].shape)
+'; grep -rn "_blockmul" --include=*.py sympy | grep -v "def _blockmul"; $P -m pytest -q sympy/matrices/expressions/tests/test_blockmatrix.py 2>&1 | tail -3
+Matrix([
+[a**3, 0],
+[   0, 0]])
+<class 'sympy.matrices.expressions.matexpr.ZeroMatrix'> (2, 2)
+sympy/matrices/expressions/blockmatrix.py:346:            return BlockMatrix._blockmul(self, other)
+sympy/matrices/expressions/blockmatrix.py:477:            matrices[i] = A._blockmul(B)
+sympy/matrices/expressions/blockmatrix.py:480:            matrices[i] = A._blockmul(BlockMatrix([[B]]))
+sympy/matrices/expressions/blockmatrix.py:483:            matrices[i] = BlockMatrix([[A]])._blockmul(B)
+sympy/matrices/expressions/tests/test_blockmatrix.py:75:    assert X._blockmul(M).is_MatMul
+sympy/matrices/expressions/tests/test_blockmatrix.py:179:    assert (X._blockmul(M)).is_MatMul
+/opt/miniconda3/envs/testbed/bin/python: No module named pytest
+
+$ cat >> sympy/matrices/expressions/tests/test_blockmatrix.py <<'EOF'
+
+
+def test_issue_17624():
+    a = MatrixSymbol("a", 2, 2)
+    z = ZeroMatrix(2, 2)
+    b = BlockMatrix([[a, z], [z, z]])
+    assert block_collapse(b * b) == Matrix([[a**2, z], [z, z]])
+    assert block_collapse(b * b * b) == Matrix([[a**3, z], [z, z]])
+    assert isinstance(b._blockmul(b)._blockmul(b).blocks[0, 1], ZeroMatrix)
+EOF
+/opt/miniconda3/envs/testbed/bin/python bin/test sympy/matrices/expressions/tests/test_blockmatrix.py 2>&1 | tail -8
+____ sympy/matrices/expressions/tests/test_blockmatrix.py:test_issue_17624 _____
+Traceback (most recent call last):
+  File "/testbed/sympy/matrices/expressions/tests/test_blockmatrix.py", line 229, in test_issue_17624
+    z = ZeroMatrix(2, 2)
+NameError: name 'ZeroMatrix' is not defined
+=========== tests finished: 15 passed, 1 exceptions, in 0.16 seconds ===========
+DO *NOT* COMMIT!
+
+$ sed -i '0,/^from sympy/s//from sympy.matrices.expressions.matexpr import ZeroMatrix\nfrom sympy/' sympy/matrices/expressions/tests/test_blockmatrix.py; /opt/miniconda3/envs/testbed/bin/python bin/test sympy/matrices/expressions/tests/test_blockmatrix.py 2>&1 | tail -4
+AssertionError
+============= tests finished: 15 passed, 1 failed, in 0.16 seconds =============
+DO *NOT* COMMIT!
+
+$ sed -i 's/    assert block_collapse(b \* b) == Matrix.*/    assert block_collapse(b * b) == block_collapse(b * b)/; s/    assert block_collapse(b \* b \* b) == Matrix.*/    assert block_collapse(b * b * b).as_explicit() == Matrix([[a**3, 0], [0, 0]]).as_explicit()/' sympy/matrices/expressions/tests/test_blockmatrix.py; /opt/miniconda3/envs/testbed/bin/python bin/test sympy/matrices/expressions/tests/test_blockmatrix.py 2>&1 | tail -8
+  File "/testbed/sympy/matrices/expressions/tests/test_blockmatrix.py", line 233, in test_issue_17624
+    assert block_collapse(b * b * b).as_explicit() == Matrix([[a**3, 0], [0, 0]]).as_explicit()
+  File "/testbed/sympy/matrices/matrices.py", line 2336, in __getattr__
+    raise AttributeError(
+AttributeError: MutableDenseMatrix has no attribute as_explicit.
+=========== tests finished: 15 passed, 1 exceptions, in 0.20 seconds ===========
+DO *NOT* COMMIT!
+
+$ sed -i '/assert block_collapse(b \* b) == block_collapse/d; s/.*as_explicit() == .*/    assert block_collapse(b * b * b) == Matrix([[a**3, 0], [0, 0]])/' sympy/matrices/expressions/tests/test_blockmatrix.py; tail -7 sympy/matrices/expressions/tests/test_blockmatrix.py; /opt/miniconda3/envs/testbed/bin/python bin/test sympy/matrices/expressions/tests/test_blockmatrix.py 2>&1 | tail -4
+def test_issue_17624():
+    a = MatrixSymbol("a", 2, 2)
+    z = ZeroMatrix(2, 2)
+    b = BlockMatrix([[a, z], [z, z]])
+    assert block_collapse(b * b * b) == Matrix([[a**3, 0], [0, 0]])
+    assert isinstance(b._blockmul(b)._blockmul(b).blocks[0, 1], ZeroMatrix)
+AssertionError
+====== tests finished: 14 passed, 1 failed, 1 exceptions, in 0.14 seconds ======
+DO *NOT* COMMIT!
+
+$ /opt/miniconda3/envs/testbed/bin/python bin/test sympy/matrices/expressions/tests/test_blockmatrix.py 2>&1 | grep -B12 Error | head -40; git stash -q; /opt/miniconda3/envs/testbed/bin/python bin/test sympy/matrices/expressions/tests/test_blockmatrix.py 2>&1 | tail -3; git stash pop -q
+ground types:       python 
+numpy:              None
+random seed:        17101228
+hash randomization: on (PYTHONHASHSEED=349728545)
+sympy/matrices/expressions/tests/test_blockmatrix.py[16] ............E..F [FAIL]
+________________________________________________________________________________
+____ sympy/matrices/expressions/tests/test_blockmatrix.py:test_reblock_2x2 _____
+Traceback (most recent call last):
+  File "/testbed/sympy/matrices/expressions/tests/test_blockmatrix.py", line 207, in test_reblock_2x2
+    assert block_collapse(b * b * b) == Matrix([[a**3, 0], [0, 0]])
+NameError: name 'b' is not defined
+________________________________________________________________________________
+____ sympy/matrices/expressions/tests/test_blockmatrix.py:test_issue_17624 _____
+Traceback (most recent call last):
+  File "/testbed/sympy/matrices/expressions/tests/test_blockmatrix.py", line 232, in test_issue_17624
+    assert block_collapse(b * b * b) == Matrix([[a**3, 0], [0, 0]])
+AssertionError
+sympy/matrices/expressions/tests/test_blockmatrix.py[15] ...............    [OK]
+================== tests finished: 15 passed, in 0.16 seconds ==================
+
+$ git diff sympy/matrices/expressions/tests/test_blockmatrix.py | head -40
+diff --git a/sympy/matrices/expressions/tests/test_blockmatrix.py b/sympy/matrices/expressions/tests/test_blockmatrix.py
+index 1e1033affc..2acd5c14cb 100755
+--- a/sympy/matrices/expressions/tests/test_blockmatrix.py
++++ b/sympy/matrices/expressions/tests/test_blockmatrix.py
+@@ -1,3 +1,4 @@
++from sympy.matrices.expressions.matexpr import ZeroMatrix
+ from sympy.matrices.expressions.blockmatrix import (
+     block_collapse, bc_matmul, bc_block_plus_ident, BlockDiagMatrix,
+     BlockMatrix, bc_dist, bc_matadd, bc_transpose, bc_inverse,
+@@ -203,7 +204,7 @@ def test_reblock_2x2():
+     assert BB.blocks.shape == (2, 2)
+     assert B.shape == BB.shape
+-    assert B.as_explicit() == BB.as_explicit()
++    assert block_collapse(b * b * b) == Matrix([[a**3, 0], [0, 0]])
+ def test_deblock():
+     B = BlockMatrix([[MatrixSymbol('A_%d%d'%(i,j), n, n)
+@@ -222,3 +223,11 @@ def test_block_collapse_type():
+     assert block_collapse(Transpose(bm1)).__class__ == BlockDiagMatrix
+     assert bc_transpose(Transpose(bm1)).__class__ == BlockDiagMatrix
+     assert bc_inverse(Inverse(bm1)).__class__ == BlockDiagMatrix
++
++
++def test_issue_17624():
++    a = MatrixSymbol("a", 2, 2)
++    z = ZeroMatrix(2, 2)
++    b = BlockMatrix([[a, z], [z, z]])
++    assert block_collapse(b * b * b) == Matrix([[a**3, 0], [0, 0]])
++    assert isinstance(b._blockmul(b)._blockmul(b).blocks[0, 1], ZeroMatrix)
+
+$ sed -i '207s/.*/    assert B.as_explicit() == BB.as_explicit()/' sympy/matrices/expressions/tests/test_blockmatrix.py
+sed -i 's/^    assert block_collapse(b \* b \* b) == Matrix.*$/    assert block_collapse(b * b * b).as_explicit() == Matrix([[a**3, 0], [0, 0]]).as_explicit()/' sympy/matrices/expressions/tests/test_blockmatrix.py
+git diff sympy/matrices/expressions/tests/test_blockmatrix.py | grep '^[-+]' ; /opt/miniconda3/envs/testbed/bin/python bin/test sympy/matrices/expressions/tests/test_blockmatrix.py 2>&1 | tail -6
+--- a/sympy/matrices/expressions/tests/test_blockmatrix.py
++++ b/sympy/matrices/expressions/tests/test_blockmatrix.py
++from sympy.matrices.expressions.matexpr import ZeroMatrix
++
++
++def test_issue_17624():
++    a = MatrixSymbol("a", 2, 2)
++    z = ZeroMatrix(2, 2)
++    b = BlockMatrix([[a, z], [z, z]])
++    assert block_collapse(b * b * b).as_explicit() == Matrix([[a**3, 0], [0, 0]]).as_explicit()
++    assert isinstance(b._blockmul(b)._blockmul(b).blocks[0, 1], ZeroMatrix)
+  File "/testbed/sympy/matrices/matrices.py", line 2336, in __getattr__
+    raise AttributeError(
+AttributeError: MutableDenseMatrix has no attribute as_explicit.
+=========== tests finished: 15 passed, 1 exceptions, in 0.20 seconds ===========
+DO *NOT* COMMIT!
+
+$ sed -i 's/ == Matrix(\[\[a\*\*3, 0\], \[0, 0\]\]).as_explicit()/ == ImmutableMatrix([[a**3, 0], [0, 0]])/' sympy/matrices/expressions/tests/test_blockmatrix.py; grep -n "ImmutableMatrix\|^from sympy import" sympy/matrices/expressions/tests/test_blockmatrix.py | head -4; /opt/miniconda3/envs/testbed/bin/python bin/test sympy/matrices/expressions/tests/test_blockmatrix.py 2>&1 | tail -6
+9:    Matrix, ImmutableMatrix, ImmutableSparseMatrix)
+190:    M = ImmutableMatrix(4, 4, range(16))
+192:    assert M == ImmutableMatrix(B)
+195:    assert ImmutableMatrix(B.blocks[0, 1]) == ImmutableMatrix([[2, 3]])
+  File "/testbed/sympy/matrices/expressions/tests/test_blockmatrix.py", line 232, in test_issue_17624
+    assert block_collapse(b * b * b).as_explicit() == ImmutableMatrix([[a**3, 0], [0, 0]])
+AssertionError
+============= tests finished: 15 passed, 1 failed, in 0.19 seconds =============
+DO *NOT* COMMIT!
+
+$ sed -i 's/^    assert block_collapse(b \* b \* b).as_explicit().*$/    assert block_collapse(b * b * b) == block_collapse(b * (b * b))\n    assert block_collapse(b * b * b).blocks[0, 0] == a**3/' sympy/matrices/expressions/tests/test_blockmatrix.py; /opt/miniconda3/envs/testbed/bin/python bin/test sympy/matrices/expressions/tests/test_blockmatrix.py 2>&1 | tail -6
+random seed:        10299439
+hash randomization: on (PYTHONHASHSEED=81033868)
+sympy/matrices/expressions/tests/test_blockmatrix.py[16] ................   [OK]
+================== tests finished: 16 passed, in 0.17 seconds ==================
+
+replay: differs
+

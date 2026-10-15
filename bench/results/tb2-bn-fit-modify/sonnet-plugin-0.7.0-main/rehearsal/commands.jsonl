@@ -1,0 +1,7 @@
+{"cmd": "cd /app; ls -a; head -5 bn_sample_10k.csv; wc -l bn_sample_10k.csv; python3 -c 'import pgmpy;print(pgmpy.__version__)'; python3 -c 'import pandas,numpy,scipy;print(1)'", "phase": "marker"}
+{"cmd": "cd /app; pip install pandas numpy scipy 2>&1 | tail -1; python3 -I -c 'import pandas as pd;d=pd.read_csv(\"bn_sample_10k.csv\");print(d.corr().round(3));import numpy as np;print(np.round(np.linalg.inv(d.corr().values),2))'", "phase": "marker"}
+{"cmd": "cd /app; pip install --break-system-packages pandas numpy scipy 2>&1 | tail -1; python3 -I -c 'import pandas as pd;d=pd.read_csv(\"bn_sample_10k.csv\");print(d.corr().round(3));import numpy as np;print(np.round(np.linalg.inv(d.corr().values),2))'", "phase": "marker"}
+{"cmd": "cd /app; rm .rehearsal/active; cat >> .rehearsal/REHEARSAL.md <<'EOF'\n# Rehearsal: BN recovery\nS1: inverse correlation matrix partial corrs -> edges U-Y,U-R,U-D,U-M,Y-D,R-M (6). Tie rule: D<-Y, M<-R.\nEOF", "phase": "build"}
+{"edit": "/app/run_bn.py"}
+{"cmd": "cd /app; python3 run_bn.py; cat learned_dag.csv intervened_dag.csv; head -3 final_bn_sample.csv; wc -l final_bn_sample.csv", "phase": "build"}
+{"cmd": "cd /app; grep -rn \"run_bn\\|learned_dag\\|intervened_dag\" --include=* . 2>/dev/null | grep -v \"^./.rehearsal\" | head; python3 -I -c 'import pandas as pd;a=pd.read_csv(\"/app/final_bn_sample.csv\");print(a.describe().loc[[\"mean\",\"std\"]].round(2));print(a.isna().sum().sum())'", "phase": "build"}
