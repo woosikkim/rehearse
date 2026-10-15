@@ -98,10 +98,13 @@ def fixture(old, new):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--old", default="HEAD")
-    ap.add_argument("--new", default="HEAD")
+    ap.add_argument("--old", default=None)
+    ap.add_argument("--new", default=None)
     ap.add_argument("--fixture", action="store_true")
     a = ap.parse_args()
+    if a.fixture:  # the fixture states expectations for v0.6.3 and the current tree
+        a.old = a.old or "v0.6.3"; a.new = a.new or "worktree"
+    a.old = a.old or "HEAD"; a.new = a.new or "HEAD"
     old, new = load(a.old), load(a.new)
     if a.fixture:
         return fixture(old, new)

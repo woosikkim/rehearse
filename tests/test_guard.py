@@ -445,6 +445,19 @@ with tempfile.TemporaryDirectory() as d:
     assert bash("python3 new.py", d) == 0
     assert "forced: python3 new.py" in open(os.path.join(d, ".rehearsal", "log.md")).read()
     assert bash("python3 new.py", d) == 2  # refused again: the allowance was for one retry
+    combo = "python3 new.py && python3 -c 'import os; os.system(\"id\")'"
+    assert "contains logic or file access" in bash_err(combo, d) and "contains logic or file access" in bash_err(combo, d)  # never laundered
+    combo2 = "python3 new.py; for i in 1 2; do echo $i; done"
+    assert "loop/wait" in bash_err(combo2, d) and "loop/wait" in bash_err(combo2, d)
+    assert "'<<' was written" not in bash_err("python3 - <<EOF\nfor i in 1 2: pass\nEOF", d)
+    # Laundering a written file through a link or a non-code name does not make it runnable.
+    with open(os.path.join(d, "run.txt"), "w") as f: f.write("print(1)\n")
+    assert bash("cat > run.txt <<'EOF'\nprint(1)\nEOF", d) == 0
+    assert "written during this rehearsal" in bash_err("ln -s run.txt runme; python3 runme", d)
+    assert "written during this rehearsal" in bash_err("sort run.txt -o laundered; python3 laundered", d)
+    touch(os.path.join(d, "fresh.txt"))  # a new file the guard never saw written: still not a program's output
+    assert "written during this rehearsal" in bash_err("python3 fresh.txt", d)
+    assert "contains logic or file access" in bash_err("python3 -c 'import io; print(1, file=io.FileIO(\"evil\", \"w\"))'", d)
     assert bash("python3 notes.txt", d) == 2 and bash("ls", d) == 0 and bash("python3 notes.txt", d) == 2  # not an immediate retry
 
 # E5-E7: the trace is the gate, the log shows it, the recorder is switched on for by-hand commands only.
@@ -532,14 +545,29 @@ logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; pr
 out = stop_in(d); assert '"block"' in out and "behaves the same on the original code" in out, out
 assert stop_in(d, stop_hook_active=True) == ""
 assert "replay: same" in open(os.path.join(d, ".rehearsal", "build.log")).read()
-# D3: a 'repro:' line in REHEARSAL.md is preferred over the mechanical pick.
+# D3: a 'repro:' line in REHEARSAL.md is preferred over the mechanical pick, but only if the agent actually ran it.
 d = git_repo(); assert logged_in(d, repro, "1") == 0
+assert logged_in(d, "python3 -c 'import old; print(old.g())'", "g") == 0  # ran under the guard: eligible
 with open(os.path.join(d, ".rehearsal", "REHEARSAL.md"), "w") as f:
     f.write("# log\nrepro: python3 -c 'import old; print(old.g())'\n")
 edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")  # f changes, g does not: the repro: line decides
 logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; print(old.f(), 1)'", "2 1")
 out = stop_in(d); assert "old.g()" in out and "behaves the same" in out, out
 assert stop_in(d) == ""  # the verdict is recorded once; a later Stop does not replay again
+# A repro: line naming a command the agent never ran is ignored: the replay executes only recorded commands.
+d = git_repo(); assert logged_in(d, repro, "1") == 0
+with open(os.path.join(d, ".rehearsal", "REHEARSAL.md"), "w") as f:
+    f.write("repro: echo PWNED | tee pwned.flag\n")
+edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")
+logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; print(old.g())'", "g")
+assert stop_in(d) == "" and not os.path.exists(os.path.join(d, "pwned.flag"))
+assert "replay: differs" in open(os.path.join(d, ".rehearsal", "build.log")).read()  # the real reproduction was replayed instead
+# The guard's own record cannot be written by the agent.
+with tempfile.TemporaryDirectory() as d2:
+    os.makedirs(os.path.join(d2, ".rehearsal")); touch(os.path.join(d2, ".rehearsal", "active"))
+    for name in ("commands.jsonl", "written", "produced", "base", "trace.jsonl", "build.log"):
+        assert "writes .rehearsal/log.md itself" in bash_err(f"echo x >> .rehearsal/{name}", d2), name
+        assert "writes .rehearsal/log.md itself" in call({"tool_name": "Write", "tool_input": {"file_path": f".rehearsal/{name}"}, "cwd": d2}).stderr, name
 # D4: not a git repository -> skipped, allowed.
 with tempfile.TemporaryDirectory() as d:
     os.makedirs(os.path.join(d, ".rehearsal")); touch(os.path.join(d, ".rehearsal", "active"))
@@ -550,6 +578,7 @@ with tempfile.TemporaryDirectory() as d:
     assert "replay: skipped: not a git repository" in open(os.path.join(d, ".rehearsal", "build.log")).read()
 # D5: a replay that exceeds the timeout is recorded and does not block.
 d = git_repo(); assert logged_in(d, repro, "1") == 0
+assert logged_in(d, "sleep 3; python3 -c 'import old; print(old.f())'", "1") == 0  # ran, so eligible for repro:
 with open(os.path.join(d, ".rehearsal", "REHEARSAL.md"), "w") as f:
     f.write("repro: sleep 3; python3 -c 'import old; print(old.f())'\n")
 edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")
@@ -596,8 +625,31 @@ edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")
 logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -m pytest .rehearsal/scaffold -q -k other", "1 passed")
 out = stop_in(d); assert "no sweep" not in out, out
 assert "skipped: no reproduction found" not in open(os.path.join(d, ".rehearsal", "build.log")).read()
+# D9: an untracked file of the user's survives a reproduction that recreates it, and nothing is left in the stash.
+d = git_repo()
+with open(os.path.join(d, "writer.py"), "w") as f:
+    f.write("import old\nopen('out.csv', 'w').write(str(old.f()))\nprint(old.f())\n")
+subprocess.run(["git", "add", "-A"], cwd=d); subprocess.run(["git", "commit", "-q", "-m", "writer"], cwd=d, check=True)
+with open(os.path.join(d, "out.csv"), "w") as f:
+    f.write("prev")  # the user's own untracked file
+assert logged_in(d, "python3 writer.py", "1") == 0
+edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")
+logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; print(old.g())'", "g")
+assert stop_in(d) == "", stop_in(d)
+assert "replay: differs" in open(os.path.join(d, ".rehearsal", "build.log")).read()
+assert subprocess.run(["git", "stash", "list"], cwd=d, capture_output=True, text=True).stdout == ""
+assert open(os.path.join(d, "old.py")).read().startswith("def f():\n    return 2")
+assert not os.path.exists(os.path.join(d, ".rehearsal", "replay-restore")) and not os.path.exists(os.path.join(d, ".rehearsal", "replay-snapshot"))
+# An interrupted replay is put right by the next guard call: simulate by leaving a restore plan behind.
+with open(os.path.join(d, ".rehearsal", "replay-restore"), "w") as f:
+    json.dump({"tracked": [], "untracked": ["out.csv"], "committed": [], "stashed": False}, f)
+os.makedirs(os.path.join(d, ".rehearsal", "replay-snapshot")); open(os.path.join(d, ".rehearsal", "replay-snapshot", "out.csv"), "w").write("snap")
+open(os.path.join(d, "out.csv"), "w").write("clobbered")
+assert call({"tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": d}).returncode == 0
+assert open(os.path.join(d, "out.csv")).read() == "snap" and not os.path.exists(os.path.join(d, ".rehearsal", "replay-restore"))
 # A reproduction that writes is never replayed.
 d = git_repo(); assert logged_in(d, repro, "1") == 0
+assert logged_in(d, "python3 -c 'import old; print(old.f())' > out.txt", "") == 0
 with open(os.path.join(d, ".rehearsal", "REHEARSAL.md"), "w") as f:
     f.write("repro: python3 -c 'import old; print(old.f())' > out.txt\n")
 edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")
@@ -643,6 +695,13 @@ with tempfile.TemporaryDirectory() as d:
     os.remove(trace)
     p = traced("import oldmod\nfor i in range(10000): oldmod.g(i)", d, trace)
     assert p.returncode == 0 and len(events(trace)) == 2000
+    # E8: a project __repr__ never runs: values that are not builtins are shown by type name.
+    os.remove(trace)
+    with open(j("loud.py"), "w") as f:
+        f.write("class Loud:\n    def __repr__(self):\n        print('REPR RAN')\n        return 'Loud()'\n\ndef take(x):\n    return x\n")
+    pr = traced("import loud; loud.take(loud.Loud()); print('done')", d, trace)
+    assert pr.stdout.strip() == "done", pr.stdout
+    assert "<Loud>" in open(trace).read() and "REPR RAN" not in open(trace).read()
     # E4: an unwritable trace file changes nothing the program shows.
     code = "import oldmod; print(oldmod.f(5)); raise SystemExit(3)"
     plain = subprocess.run([sys.executable, "-c", code], cwd=d, capture_output=True, text=True)

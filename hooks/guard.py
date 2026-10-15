@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -68,7 +69,7 @@ CONTROL = re.compile(r"\b(for|while|until|do|if|elif|elsif|else|unless|def|funct
 ACCESS = re.compile(r"\b(exec\w*|spawn\w*|eval|compile|__import__|__builtins__|getattr|importlib|runpy|subprocess|"
                     r"child_process|worker_threads|vm|os|fs|shutil|pathlib|system|popen|chdir|open|write\w*|"
                     r"append\w*|copy\w*|rename\w*|unlink\w*|utime|touch|rmtree|move|symlink|replace|send|Kernel|"
-                    r"Open3|FileUtils|IO|File|mainModule|sys\.path|PYTHONPATH|NODE_PATH)\b|%x|require\(\s*[\"']node:|`")
+                    r"Open3|FileUtils|IO|File|FileIO|open_code|io|mainModule|sys\.path|PYTHONPATH|NODE_PATH)\b|%x|require\(\s*[\"']node:|`")
 ONE_SHAPE = ("inline code may use any interpreter and flags, quoted or in a quoted heredoc, but may not contain loops, "
              "branches, definitions or file/process access")
 NO_STEPS = ("rehearsal started but nothing has been run yet; while .rehearsal/active exists, make one real call "
@@ -76,6 +77,8 @@ NO_STEPS = ("rehearsal started but nothing has been run yet; while .rehearsal/ac
             "then rm the marker. Reading files and writing notes do not count. If the marker is already down, put it "
             "back on its own first. Or delete .rehearsal/ entirely if no rehearsal is needed")
 OWN_LOG = "the guard writes .rehearsal/log.md itself; put notes in .rehearsal/REHEARSAL.md"
+GUARD_OWNED = {"log.md", "build.log", "tests.log", "commands.jsonl", "trace.jsonl", "trace.offset", "written", "refused",
+               "base", "produced", "replay-restore", "replay-snapshot"}  # the guard's own record: never written by the agent
 SCAFFOLD_HINT = ("A specimen a real tool reads (a docs project, a sample package, a settings module, a dummy class) goes "
                  "under .rehearsal/scaffold/; you still cannot run or import it yourself")
 
@@ -100,7 +103,9 @@ REPRO_SAME = ("rehearse: your reproduction `{cmd}` behaves the same on the origi
               "(same output and exit code), so it never showed the bug. Find a call that gives the wrong result before "
               "your change and the right one after, write it as `repro: <command>` in .rehearsal/REHEARSAL.md, run it, "
               "then finish.")
-UNSAFE_REPLAY = re.compile(r"(?:^|[\s;&|(])rm\s|(?<![<>&\d])>(?!&)|curl\b[^|;&]*-X\s*(?:POST|PUT|DELETE|PATCH)", re.I)
+UNSAFE_REPLAY = re.compile(r"(?:^|[\s;&|(])(?:rm|tee|cp|mv|dd|install|ln|chmod|chown|wget|pip3?|npm|apt(?:-get)?|sqlite3|psql|mysql|"
+                           r"mongosh|redis-cli|git\s+(?:commit|push|stash|checkout|reset|rebase|merge|apply|am|cherry-pick|tag|clean))\b"
+                           r"|(?<![<\d])>(?!&)|&>|curl\b[^|;&]*(?:\s-[A-Za-z]*[dFTX]\b|--data|--form|--upload-file|--request)", re.I)
 REPLAY_NOISE = re.compile(r"0x[0-9a-fA-F]{4,}|\b\d+\.\d+s\b|\d{2}:\d{2}:\d{2}")
 NOT_DONE = ("rehearse: your last test run shows failures: `{cmd}`. A test that passed before your change and fails after it "
             "means the fix is not done. Fix the cause or undo your change (git stash, git checkout -- <file>), run the "
@@ -156,13 +161,17 @@ def written_list(m):
     return os.path.join(os.path.dirname(m), "written")
 
 
-def record_written(d, paths, cur):
-    """Remember files the agent wrote during the rehearsal: those may never be run or imported."""
+def realpath(cur, path):
+    return os.path.realpath(os.path.join(cur, os.path.expanduser(str(path))))
+
+
+def record_written(d, paths, cur, name="written"):
+    """Remember files the agent wrote during the rehearsal (or, with name="produced", files a program built for it)."""
     try:
-        with open(os.path.join(d, "written"), "a", encoding="utf-8") as f:
+        with open(os.path.join(d, name), "a", encoding="utf-8") as f:
             for p in paths:
                 if p and p != "/dev/null":
-                    f.write(os.path.abspath(os.path.join(cur, os.path.expanduser(str(p)))) + "\n")
+                    f.write(realpath(cur, p) + "\n")
     except OSError:
         pass
 
@@ -170,12 +179,14 @@ def record_written(d, paths, cur):
 def may_run(path, m, cur):
     """True if path is an existing file outside .rehearsal/ that the agent did not write during the rehearsal.
     A code file newer than the marker is refused too, as a backstop for a write the guard did not see."""
-    p = os.path.abspath(os.path.join(cur, os.path.expanduser(path)))
+    p = realpath(cur, path)
     if ".rehearsal" in p.split(os.sep) or not os.path.isfile(p):
         return False
     if p in set(read(written_list(m)).splitlines()):
         return False
-    return os.path.splitext(p)[1] not in CODE_EXT or os.path.getmtime(p) < os.path.getmtime(m)
+    if os.path.getmtime(p) < os.path.getmtime(m):
+        return True  # existed before the rehearsal
+    return p in set(read(os.path.join(os.path.dirname(m), "produced")).splitlines())  # new: only a program's output may run
 
 
 def resolve_module(name, cur, js=False):
@@ -301,6 +312,7 @@ def check_shell(cmd, cwd, m, full=True):
     if full and re.search(r"(?<![&>|])&(?![&>])", bare):
         return "background job (&); run one command at a time and wait for it"
     cur = cwd
+    deferred = None
     produced = set()  # files an earlier segment of this same command builds (cobc -o prog ... && ./prog)
     for seg in segs:
         try:
@@ -322,9 +334,11 @@ def check_shell(cmd, cwd, m, full=True):
         if snippet is not None and path_override(toks, prog_index(toks)):
             return "module path override; import from the project directory instead"
         reason = check_snippet(snippet, cur, m) if snippet is not None else check_tokens(toks, cur, m, produced)
-        if reason:
+        if reason and "was written during this rehearsal" in reason:
+            deferred = deferred or reason  # keep looking: any other objection outranks a provenance one
+        elif reason:
             return reason
-    return None
+    return deferred
 
 
 def is_interpreter(toks):
@@ -383,27 +397,29 @@ def check_shell_writes(toks, cur="", d=None, produced=None):
         if t in {">", ">>", ">|", "&>", "&>>"} or (t == ">&" and not re.fullmatch(r"\d+|-", nxt)):
             targets.append(nxt)
         elif t in {"-o", "--output"} or (prog == "curl" and re.fullmatch(r"-[A-Za-z]*o", t)):
-            (targets if prog == "curl" else outputs).append(nxt)
+            (targets if prog == "curl" or prog in READ_ONLY else outputs).append(nxt)  # a text tool's -o is the agent's write
         elif t.startswith("--output="):
-            (targets if prog == "curl" else outputs).append(t.split("=", 1)[1])
+            (targets if prog == "curl" or prog in READ_ONLY else outputs).append(t.split("=", 1)[1])
     if prog == "tee":
         targets += [a for a in args if not a.startswith("-")]
-    if prog in {"cp", "mv", "install"} and args:
+    if prog in {"cp", "mv", "install", "ln"} and args:
         targets.append(args[-1])
     if prog == "dd":
         targets += [a[3:] for a in args if a.startswith("of=")]
     if prog == "curl" and any(re.fullmatch(r"-[A-Za-z]*O", a) for a in args):  # curl -O saves under the URL's file name
         targets += [a.rsplit("/", 1)[-1] for a in args if not a.startswith("-")]
     for t in targets + outputs:
-        if os.path.basename(t) == "log.md":
+        if os.path.basename(t) in GUARD_OWNED:
             return OWN_LOG
         if t != "/dev/null" and os.path.splitext(t)[1] in CODE_EXT and not in_scaffold(t, cur):
             return (f"writing code file '{t}' through the shell; code is written in the build phase, "
                     f"after rm .rehearsal/active. {SCAFFOLD_HINT}, or save a code-like fixture as .txt.")
     if d and targets:
         record_written(d, targets, cur)
+    if d and outputs:
+        record_written(d, outputs, cur, name="produced")
     if produced is not None:
-        produced.update(os.path.abspath(os.path.join(cur, o)) for o in outputs if o and o != "/dev/null")
+        produced.update(realpath(cur, o) for o in outputs if o and o != "/dev/null")
     return None
 
 
@@ -413,7 +429,7 @@ def written(path):
 
 def check_tokens(toks, cur, m, produced=()):
     def runnable(path):
-        return may_run(path, m, cur) or os.path.abspath(os.path.join(cur, os.path.expanduser(path))) in produced
+        return may_run(path, m, cur) or realpath(cur, path) in produced
     i = prog_index(toks)
     override = path_override(toks, i)
     if i >= len(toks):
@@ -440,11 +456,11 @@ def check_tokens(toks, cur, m, produced=()):
                          if os.path.splitext(a)[1] in CODE_EXT and not may_run(a, m, cur)), None)
         if args and args[0] == "<" and len(args) > 1:  # code fed from a file: the file must have existed before
             return None if runnable(args[1]) else written(args[1])
-        if args and args[0] in {"<<", "<<<"}:  # an unquoted heredoc: its lines were checked as separate segments
+        if "<<" in args or "<<<" in args:  # an unquoted heredoc: its lines were checked as separate segments
             return None
         if any(a in inline_flags(toks) for a in args):
             return f"inline code must be quoted; {ONE_SHAPE}"
-        target = next((a for a in args if not a.startswith("-")), None)  # the file to run, after any flags
+        target = next((a for a in args if not a.startswith("-") and a not in {"<", ">", "<<", "<<<", ">>"}), None)  # the file to run
         if target is None:  # nothing to run but stdin: piped or interactive code
             return f"interpreter '{prog}' reading code from stdin; run a file that existed before the rehearsal, or {ONE_SHAPE}"
         return None if runnable(target) else written(target)
@@ -484,7 +500,7 @@ def check_write(tool_input, m, empty_log):
     paths = [tool_input.get(k) for k in ("file_path", "path", "notebook_path")]
     paths += re.findall(r"\*\*\* (?:Add|Update) File: (\S+?)(?:\\n|\s)", text)  # apply_patch format
     for p in filter(None, paths):
-        if os.path.basename(str(p)) == "log.md":
+        if os.path.basename(str(p)) in GUARD_OWNED:
             return OWN_LOG
         if os.path.splitext(str(p))[1] not in CODE_EXT:
             continue
@@ -587,25 +603,25 @@ def first_edit_index(entries):
 
 def pick_repro(d):
     """The reproduction to replay: a `repro:` line in REHEARSAL.md, else the last by-hand run before the first edit."""
-    m = re.search(r"^repro:\s*`?(.+?)`?\s*$", read(os.path.join(d, "REHEARSAL.md")), re.M)
-    if m:
-        return m.group(1).strip()
     recs = records(d)
+    ran = {r["cmd"] for r in recs if "cmd" in r}
+    m = re.search(r"^repro:\s*`?(.+?)`?\s*$", read(os.path.join(d, "REHEARSAL.md")), re.M)
+    if m and m.group(1).strip() in ran:  # only a command the agent actually ran under the guard is ever replayed
+        return m.group(1).strip()
     first = first_edit_record(recs)
     cmds = [r["cmd"] for r in recs[:first if first is not None else len(recs)]
             if "cmd" in r and executed(r["cmd"]) and not is_suite(r["cmd"])]
     return cmds[-1] if cmds else None
 
 
-GUARD_FILES = {"active", "log.md", "build.log", "tests.log", "trace.jsonl", "trace.offset", "commands.jsonl",
-               "written", "refused", "base", "REHEARSAL.md"}
+GUARD_FILES = GUARD_OWNED | {"active", "REHEARSAL.md"}  # not part of what a run "leaves behind"
 
 
 def rehearsal_digest(d):
     """A digest of what a run left under .rehearsal/ (scaffold output, fixtures), ignoring the guard's own files."""
     h = hashlib.sha256()
     for root, dirs, files in os.walk(d):
-        dirs[:] = sorted(x for x in dirs if not x.startswith("pycache-"))
+        dirs[:] = sorted(x for x in dirs if not x.startswith("pycache-") and x != "replay-snapshot")
         for f in sorted(files):
             if root == d and f in GUARD_FILES:
                 continue
@@ -618,7 +634,7 @@ def rehearsal_digest(d):
 
 
 def run_for_replay(cmd, cwd, d=None):
-    timeout = float(os.environ.get("REHEARSE_REPLAY_TIMEOUT", "120"))
+    timeout = float(os.environ.get("REHEARSE_REPLAY_TIMEOUT", "100"))
     # A fresh bytecode cache per run: a stale .pyc with the same mtime second and size would hide the change.
     cache = os.path.join(cwd, ".rehearsal", "pycache-%d" % time.time_ns())
     env = dict(os.environ, PYTHONPYCACHEPREFIX=cache)
@@ -651,30 +667,46 @@ def replay(d, cmd, cwd):
     if git("rev-parse", "--is-inside-work-tree").returncode != 0:
         note("skipped: not a git repository")
         return None
-    changed = []
+    tracked, untracked = [], []
     for item in git("status", "--porcelain", "-z").stdout.split("\0"):
         path = item[3:].split(" -> ")[-1] if len(item) > 3 else ""
         if path and not path.replace("\\", "/").startswith((".rehearsal", "__pycache__")):
-            changed.append(path)
+            (untracked if item.startswith("??") else tracked).append(path)
+    if len(tracked) + len(untracked) > 50:
+        note("skipped: more than 50 changed files")
+        return None
     base = read(os.path.join(d, "base")).strip()
     committed = []
     if base and git("rev-parse", "HEAD").stdout.strip() != base:  # the agent committed: revert those files too
         committed = [p for p in git("diff", "--name-only", base, "HEAD").stdout.splitlines() if p]
     stashes = git("stash", "list").stdout
-    if changed and git("stash", "push", "-u", "-q", "--", *changed).returncode != 0:
-        note("skipped: git stash failed")
-        return None
-    if committed:
-        git("checkout", "-q", base, "--", *committed)
+    snapshot = os.path.join(d, "replay-snapshot")
+    plan = {"tracked": tracked, "untracked": untracked, "committed": committed, "stashed": False}
+    with open(os.path.join(d, "replay-restore"), "w", encoding="utf-8") as f:
+        json.dump(plan, f)  # if this process dies mid-replay, the next guard call restores from this
     try:
-        before = run_for_replay(cmd, cwd, d)
-    except subprocess.TimeoutExpired:
-        before = None
-    finally:
+        # Untracked files are the agent's new files: snapshot them ourselves (git stash -u cannot restore over a
+        # file the original run recreates), then put the tree back to the original code.
+        for p in untracked:
+            src, dst = os.path.join(cwd, p), os.path.join(snapshot, p)
+            os.makedirs(os.path.dirname(dst.rstrip(os.sep)) or snapshot, exist_ok=True)
+            (shutil.copytree if os.path.isdir(src) else shutil.copy2)(src, dst)
+            (shutil.rmtree if os.path.isdir(src) else os.remove)(src)
+        if tracked:
+            if git("stash", "push", "-q", "--", *tracked).returncode != 0:
+                note("skipped: git stash failed")
+                return None
+            plan["stashed"] = True
+            with open(os.path.join(d, "replay-restore"), "w", encoding="utf-8") as f:
+                json.dump(plan, f)
         if committed:
-            git("checkout", "-q", "HEAD", "--", *committed)
-        if changed:
-            git("stash", "pop", "-q")
+            git("checkout", "-q", base, "--", *committed)
+        try:
+            before = run_for_replay(cmd, cwd, d)
+        except subprocess.TimeoutExpired:
+            before = None
+    finally:
+        restore_replay(d, cwd)
     if git("stash", "list").stdout != stashes:
         note("warning: the stash list changed; check git stash list")
     if before is None:
@@ -687,8 +719,45 @@ def replay(d, cmd, cwd):
         return None
     differs = before != after
     head = lambda r: ("exit %d; " % r[0]) + " / ".join(r[1].strip().splitlines()[:4])[:300]
-    note(("differs" if differs else "same") + " (stashed: %s)\n  original: %s\n  fixed:    %s" % (" ".join(changed) or "nothing", head(before), head(after)))
+    note(("differs" if differs else "same") + " (reverted: %s)\n  original: %s\n  fixed:    %s"
+         % (" ".join(tracked + untracked + committed) or "nothing", head(before), head(after)))
     return differs
+
+
+def restore_replay(d, cwd):
+    """Put the working tree back after a replay, from the plan written before it started. Safe to call twice."""
+    path = os.path.join(d, "replay-restore")
+    try:
+        plan = json.loads(read(path) or "{}")
+    except ValueError:
+        plan = {}
+    if not plan:
+        return
+    git = lambda *a: subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True)
+    if plan.get("committed"):
+        git("checkout", "-q", "HEAD", "--", *plan["committed"])
+    if plan.get("tracked"):
+        git("checkout", "-q", "--", *plan["tracked"])  # drop anything the original run changed, so the pop is clean
+        if plan.get("stashed"):
+            git("stash", "pop", "-q")
+    snapshot = os.path.join(d, "replay-snapshot")
+    for p in plan.get("untracked", []):
+        src, dst = os.path.join(snapshot, p), os.path.join(cwd, p)
+        if not os.path.exists(src):
+            continue
+        if os.path.isdir(dst) and not os.path.isdir(src):
+            shutil.rmtree(dst)
+        elif os.path.isdir(dst):
+            shutil.rmtree(dst)
+        elif os.path.exists(dst):
+            os.remove(dst)
+        os.makedirs(os.path.dirname(dst.rstrip(os.sep)) or cwd, exist_ok=True)
+        (shutil.copytree if os.path.isdir(src) else shutil.copy2)(src, dst)
+    shutil.rmtree(snapshot, ignore_errors=True)
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def last_test_run(d):
@@ -709,6 +778,9 @@ def main():
         return 0
     event = payload.get("hook_event_name") or "PreToolUse"
     m = marker(payload)
+    d0 = rehearsal_dir(payload)
+    if d0 and os.path.exists(os.path.join(d0, "replay-restore")):  # a replay was interrupted: put the tree back first
+        restore_replay(d0, payload.get("cwd") or os.getcwd())
     if event == "SessionStart":
         note = f" A rehearsal marker exists at .rehearsal/active ({int(marker_age_hours(m))} h old)." if m else ""
         print(SESSION_RULE + note)

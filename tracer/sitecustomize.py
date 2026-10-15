@@ -4,7 +4,8 @@ Does nothing unless REHEARSE_TRACE (a .jsonl path) and REHEARSE_ROOT (the projec
 directory) are both set. Then it appends one JSON line per call, return or escaped
 exception of a function whose file lives under REHEARSE_ROOT, so a by-hand run
 leaves a record of the project code it executed. Stdlib only; runs on 3.6+.
-It must never change the traced program: every path swallows its own errors.
+It must never change the traced program: every path swallows its own errors, and values are shown by
+type name unless they are builtin scalars or containers of them, so no project __repr__ ever runs.
 """
 import os
 import sys
@@ -39,9 +40,21 @@ def _start(trace_path, root):
     state = {"n": 0, "depth": 0, "checked": False}
     pending = {}  # id(frame) -> exception raised inside it, not yet known to escape
 
-    def r(v):
+    SAFE = (bool, int, float, complex, str, bytes, type(None))
+
+    def r(v, depth=0):
+        """A repr that never runs project code: builtin scalars and containers of them; anything else by type name."""
         try:
-            return short.repr(v)[:MAX_REPR]
+            if isinstance(v, SAFE):
+                return short.repr(v)[:MAX_REPR]
+            if depth < 2 and isinstance(v, (list, tuple, set, frozenset)):
+                items = [r(x, depth + 1) for x in list(v)[:8]]
+                more = ", ..." if len(v) > 8 else ""
+                return (type(v).__name__ + "[" if not isinstance(v, (list, tuple)) else "[") + ", ".join(items) + more + "]"
+            if depth < 2 and isinstance(v, dict):
+                items = ["%s: %s" % (r(k, depth + 1), r(x, depth + 1)) for k, x in list(v.items())[:8]]
+                return "{" + ", ".join(items) + (", ...}" if len(v) > 8 else "}")
+            return "<%s>" % type(v).__name__
         except Exception:
             return "<repr failed>"
 
