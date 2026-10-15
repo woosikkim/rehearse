@@ -556,6 +556,14 @@ try:
 finally:
     del os.environ["REHEARSE_REPLAY_TIMEOUT"]
 assert "replay: timed out" in open(os.path.join(d, ".rehearsal", "build.log")).read()
+# A multi-line reproduction (a quoted heredoc) is replayed whole, not just its first line.
+d = git_repo()
+multi = "python3 - <<'EOF'\nimport old\nprint(old.f())\nEOF"
+assert logged_in(d, multi, "1") == 0
+edit_old(d, "def f():\n    return 2\n\ndef g():\n    return 'g'\n")
+logged_in(d, "grep -rn f old.py", "x"); logged_in(d, "python3 -c 'import old; print(old.g())'", "g")
+assert stop_in(d) == "", stop_in(d)
+assert "replay: differs" in open(os.path.join(d, ".rehearsal", "build.log")).read()
 # A reproduction that writes is never replayed.
 d = git_repo(); assert logged_in(d, repro, "1") == 0
 with open(os.path.join(d, ".rehearsal", "REHEARSAL.md"), "w") as f:

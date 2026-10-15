@@ -497,8 +497,32 @@ def check_write(tool_input, m, empty_log):
 TRACER_PREFIX = re.compile(r"^REHEARSE_TRACE=\S+ REHEARSE_ROOT=\S+ PYTHONPATH=\S+ ")
 
 
+def record(d, entry):
+    """Append one machine-readable record (a command with its phase, or an edit) to .rehearsal/commands.jsonl."""
+    try:
+        with open(os.path.join(d, "commands.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass
+
+
+def records(d):
+    out = []
+    for ln in read(os.path.join(d, "commands.jsonl")).splitlines():
+        try:
+            out.append(json.loads(ln))
+        except ValueError:
+            continue
+    return out
+
+
+def first_edit_record(recs):
+    return next((i for i, r in enumerate(recs) if "edit" in r or ("cmd" in r and EDIT_SHELL.search(r["cmd"]))), None)
+
+
 def log_command(payload, path):
     cmd = TRACER_PREFIX.sub("", shell_text((payload.get("tool_input") or {}).get("command")))  # the guard's own prefix is noise
+    record(os.path.dirname(path), {"cmd": cmd, "phase": "build" if path.endswith("build.log") else "marker"})
     out = payload.get("tool_response")
     if payload.get("hook_event_name") == "PostToolUseFailure":
         out = payload.get("error") or out
@@ -533,13 +557,12 @@ def build_entries(d):
 
 def sweep_missing(d):
     """What the sweep still lacks after the first code edit, or None if no edit happened or the sweep is complete."""
-    entries = build_entries(d)
-    first = next((i for i, e in enumerate(entries)
-                  if e.startswith("EDIT ") or EDIT_SHELL.search(e.partition("\n")[0])), None)
+    recs = records(d)
+    first = first_edit_record(recs)
     if first is None:
         return None
-    before = {ln[2:] for ln in read(os.path.join(d, "log.md")).splitlines() if ln.startswith("$ ")}
-    after = [e.partition("\n")[0][2:] for e in entries[first + 1:] if e.startswith("$ ")]
+    before = {r["cmd"] for r in recs[:first] if "cmd" in r}
+    after = [r["cmd"] for r in recs[first + 1:] if "cmd" in r]
     searched = any(SEARCH_CMD.search(c) for c in after)
     new_call = any(executed(c) and not TEST_CMD.search(c) and c not in before for c in after)
     missing = [x for x, ok in (("no search of the codebase", searched),
@@ -557,11 +580,10 @@ def pick_repro(d):
     m = re.search(r"^repro:\s*`?(.+?)`?\s*$", read(os.path.join(d, "REHEARSAL.md")), re.M)
     if m:
         return m.group(1).strip()
-    cmds = [ln[2:] for ln in read(os.path.join(d, "log.md")).splitlines() if ln.startswith("$ ")]
-    entries = build_entries(d)
-    first = first_edit_index(entries)
-    cmds += [e.partition("\n")[0][2:] for e in (entries[:first] if first is not None else entries) if e.startswith("$ ")]
-    cmds = [c for c in cmds if executed(c) and not TEST_CMD.search(c)]
+    recs = records(d)
+    first = first_edit_record(recs)
+    cmds = [r["cmd"] for r in recs[:first if first is not None else len(recs)]
+            if "cmd" in r and executed(r["cmd"]) and not TEST_CMD.search(r["cmd"])]
     return cmds[-1] if cmds else None
 
 
@@ -679,7 +701,7 @@ def main():
         if last and RED.search(last[1]) and "git stash" not in last[0]:
             print(json.dumps({"decision": "block", "reason": NOT_DONE.format(cmd=last[0][:200])}))
             return 0
-        if d and not payload.get("stop_hook_active") and first_edit_index(build_entries(d)) is not None \
+        if d and not payload.get("stop_hook_active") and first_edit_record(records(d)) is not None \
                 and "replay: " not in read(os.path.join(d, "build.log")):
             cmd = pick_repro(d)
             if replay(d, cmd, payload.get("cwd") or os.getcwd()) is False:
@@ -713,6 +735,7 @@ def main():
                 if p and os.path.splitext(str(p))[1] in CODE_EXT:
                     with open(os.path.join(d, "build.log"), "a", encoding="utf-8") as f:
                         f.write(f"EDIT {p}\n\n")
+                    record(d, {"edit": str(p)})
     if not reason:
         if m and tool in SHELL_TOOLS and os.path.exists(os.path.join(os.path.dirname(m), "refused")):
             os.remove(os.path.join(os.path.dirname(m), "refused"))  # any other command ends the one-retry allowance
