@@ -276,6 +276,23 @@ try:
     assert p.state()["phase"] == "work" and "void" in p.state()["verdicts"][-1]
     print("director edits: ok")
 
+    # ---------------- confirmation via question ----------------
+    def ask(p, answer):
+        return p.ev("PostToolUse", tool_name="AskUserQuestion", tool_input={"questions": []},
+                    tool_response={"questions": [], "answers": {"Is this the ending?": answer}, "annotations": {}})
+    p = in_confirm()
+    ask(p, "Not quite, the total should include tax")
+    s = p.state()
+    assert s["phase"] == "confirm" and s["confirmation"]["answer"].startswith("Not quite") \
+        and not s["confirmation"]["affirmative"] and not s.get("stop_here"), s["confirmation"]
+    ask(p, " Yes ")
+    s = p.state()
+    assert s["phase"] == "work" and s["confirmation"]["affirmative"] and s["confirmation"]["by"] == "user"
+    p = in_confirm()
+    ask(p, "Stop here and write the report")
+    assert p.state()["stop_here"] and p.state()["phase"] == "confirm"
+    print("confirmation via question: ok")
+
     # ---------------- shortcut findings ----------------
     tests = {"tests/test_main.py": "def test_total():\n    assert True\n",
              "tests/test_other.py": "import pytest\n\ndef test_other():\n    assert True\n"}

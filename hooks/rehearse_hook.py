@@ -357,6 +357,15 @@ def on_post(p, sid):
     if tool == "AskUserQuestion":
         resp = p.get("tool_response") if isinstance(p.get("tool_response"), dict) else {}
         answers = resp.get("answers") if isinstance(resp.get("answers"), dict) else {}
+        first = str(next(iter(answers.values()), "")).strip()
+        if s["phase"] == "confirm" and first:
+            yes = first.lower().rstrip(".!") in AFFIRMATIVE
+            with S.locked(s) as cur:
+                cur["confirmation"] = {"by": "user", "answer": first, "affirmative": yes, "at": time.time()}
+                if yes:
+                    cur["phase"] = "work"
+            if yes:
+                return context("PostToolUse", "[rehearse] the user confirmed the ending; edits are open.")
         if any(str(a).strip().lower().startswith("stop here") for a in answers.values()):
             with S.locked(s) as cur:
                 cur["stop_here"] = True
