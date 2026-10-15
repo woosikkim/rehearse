@@ -29,6 +29,11 @@ PYTHONPATH=$PWD/.. harbor run -p tasks/swe-bench-verified/django__django-13344 \
 python3 collect.py jobs/my-run my-label
 ```
 
+Add `--artifact /testbed/.rehearsal` (or `/app/.rehearsal` for Terminal-Bench) to the run so the rehearsal folder, with the command log, the call record and the replay verdict, is collected into `results/<task>/<label>/rehearsal/`.
+
+```
+```
+
 Set `REHEARSE_GIT_REF` to pin a plugin version (a tag or commit); the default is `main`.
 
 ## Honest caveats
