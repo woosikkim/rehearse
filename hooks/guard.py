@@ -300,6 +300,7 @@ def check_shell(cmd, cwd, m, full=True):
     if full and re.search(r"(?<![&>|])&(?![&>])", bare):
         return "background job (&); run one command at a time and wait for it"
     cur = cwd
+    produced = set()  # files an earlier segment of this same command builds (cobc -o prog ... && ./prog)
     for seg in segs:
         try:
             toks = tokens(seg)
@@ -308,7 +309,7 @@ def check_shell(cmd, cwd, m, full=True):
         if toks[:1] == ["cd"] and len(toks) == 2:
             cur = os.path.join(cur, os.path.expanduser(toks[1]))
             continue
-        reason = check_shell_writes(toks, cur, d)
+        reason = check_shell_writes(toks, cur, d, produced)
         if reason:
             return reason
         body = bodies.pop(0) if "<<" in seg and bodies else None
@@ -319,7 +320,7 @@ def check_shell(cmd, cwd, m, full=True):
             snippet = body  # python3 - <<'EOF' ... EOF: the body is the inline code
         if snippet is not None and path_override(toks, prog_index(toks)):
             return "module path override; import from the project directory instead"
-        reason = check_snippet(snippet, cur, m) if snippet is not None else check_tokens(toks, cur, m)
+        reason = check_snippet(snippet, cur, m) if snippet is not None else check_tokens(toks, cur, m, produced)
         if reason:
             return reason
     return None
@@ -366,7 +367,7 @@ def check_marker_start(cmd):
     return None
 
 
-def check_shell_writes(toks, cur="", d=None):
+def check_shell_writes(toks, cur="", d=None, produced=None):
     i = prog_index(toks)
     prog = os.path.basename(toks[i]) if i < len(toks) else ""
     args = toks[i + 1:]
@@ -400,6 +401,8 @@ def check_shell_writes(toks, cur="", d=None):
                     f"after rm .rehearsal/active. {SCAFFOLD_HINT}, or save a code-like fixture as .txt.")
     if d and targets:
         record_written(d, targets, cur)
+    if produced is not None:
+        produced.update(os.path.abspath(os.path.join(cur, o)) for o in outputs if o and o != "/dev/null")
     return None
 
 
@@ -407,7 +410,9 @@ def written(path):
     return f"'{path}' was written during this rehearsal or does not exist; run only files that existed before it began"
 
 
-def check_tokens(toks, cur, m):
+def check_tokens(toks, cur, m, produced=()):
+    def runnable(path):
+        return may_run(path, m, cur) or os.path.abspath(os.path.join(cur, os.path.expanduser(path))) in produced
     i = prog_index(toks)
     override = path_override(toks, i)
     if i >= len(toks):
@@ -433,7 +438,7 @@ def check_tokens(toks, cur, m):
             return next((written(a) for a in args[2:]
                          if os.path.splitext(a)[1] in CODE_EXT and not may_run(a, m, cur)), None)
         if args and args[0] == "<" and len(args) > 1:  # code fed from a file: the file must have existed before
-            return None if may_run(args[1], m, cur) else written(args[1])
+            return None if runnable(args[1]) else written(args[1])
         if args and args[0] in {"<<", "<<<"}:  # an unquoted heredoc: its lines were checked as separate segments
             return None
         if any(a in inline_flags(toks) for a in args):
@@ -441,14 +446,14 @@ def check_tokens(toks, cur, m):
         target = next((a for a in args if not a.startswith("-")), None)  # the file to run, after any flags
         if target is None:  # nothing to run but stdin: piped or interactive code
             return f"interpreter '{prog}' reading code from stdin; run a file that existed before the rehearsal, or {ONE_SHAPE}"
-        return None if may_run(target, m, cur) else written(target)
+        return None if runnable(target) else written(target)
     if name in RUNNERS and args and args[0] in RUNNERS[name]:
         target = next((a for a in args[1:] if not a.startswith("-")), "")
-        if name == "go" and target.endswith(".go") and may_run(target, m, cur):
+        if name == "go" and target.endswith(".go") and runnable(target):
             return None
         return f"'{prog} {args[0]}' target cannot be checked; run the underlying command directly"
     if prog.startswith("./") or os.path.splitext(prog)[1] in CODE_EXT:
-        return None if may_run(prog, m, cur) else written(prog)
+        return None if runnable(prog) else written(prog)
     return None
 
 

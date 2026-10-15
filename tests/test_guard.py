@@ -424,6 +424,10 @@ with tempfile.TemporaryDirectory() as d:
     with open(os.path.join(d, "prog"), "wb") as f:  # the compiler's output: new, no code extension, not written by the agent
         f.write(b"\x7fELF"); os.chmod(os.path.join(d, "prog"), 0o755)
     assert bash("./prog", d) == 0
+    # Build and run in one command: the output of an earlier segment may be run even though it does not exist yet.
+    assert bash("cobc -x -o prog2 src/program.cbl && ./prog2", d) == 0
+    assert bash("mkdir -p /tmp/t && cd /tmp/t && cobc -x -o prog3 src/program.cbl && ./prog3; od -c out.dat", d) == 0
+    assert "does not exist" in bash_err("./prog4", d)
     assert bash("cat > new.sh <<'EOF'\necho hi\nEOF", d) == 2  # a code file: refused and never written
     with open(os.path.join(d, "notes.txt"), "w") as f: f.write("print(1)\n")
     assert bash("cat > notes.txt <<'EOF'\nprint(1)\nEOF", d) == 0  # a note is allowed, and remembered as agent-written
