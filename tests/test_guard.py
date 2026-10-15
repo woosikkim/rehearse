@@ -454,7 +454,11 @@ with tempfile.TemporaryDirectory() as d:
     touch(os.path.join(d, "oldmod.py"), time.time() - 3600)
     # E6: the rewrite function
     out = g3.inject_tracer("python3 -c 'import oldmod; print(oldmod.f(1))'", d, os.path.join(d, ".rehearsal"))
-    assert out.startswith("REHEARSE_TRACE=") and "PYTHONPATH=" in out and out.endswith("print(oldmod.f(1))'"), out
+    assert out.startswith("export REHEARSE_TRACE=") and "PYTHONPATH=" in out and out.endswith("print(oldmod.f(1))'"), out
+    # The variables reach every command of a chain, not only the first.
+    chained = g3.inject_tracer("cd sub; python3 -c 'import os; print(os.environ.get(\"REHEARSE_ROOT\", \"missing\"))'", d, os.path.join(d, ".rehearsal"))
+    os.makedirs(os.path.join(d, "sub"), exist_ok=True)
+    assert subprocess.run(chained, shell=True, cwd=d, capture_output=True, text=True).stdout.strip() == os.path.abspath(d)
     assert g3.inject_tracer("pytest -q", d, d) == "pytest -q" and g3.inject_tracer("python tests/runtests.py x", d, d) == "python tests/runtests.py x"
     assert g3.inject_tracer(out, d, d) == out  # never twice
     # The guard's own prefix is not a path override; a foreign one still is.

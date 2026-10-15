@@ -228,7 +228,8 @@ def inject_tracer(cmd, cwd, d):
     """Switch the Python call recorder on for a by-hand command; test runners and non-shell text are left alone."""
     if not cmd or TEST_CMD.search(cmd) or "REHEARSE_TRACE=" in cmd:
         return cmd
-    env = ("REHEARSE_TRACE=%s REHEARSE_ROOT=%s PYTHONPATH=%s${PYTHONPATH:+:$PYTHONPATH} "
+    # `export`, not a bare prefix: a prefix would bind the variables to the first command of a `cd x; python ...` chain only
+    env = ("export REHEARSE_TRACE=%s REHEARSE_ROOT=%s PYTHONPATH=%s${PYTHONPATH:+:$PYTHONPATH}; "
            % (shlex.quote(os.path.join(d, "trace.jsonl")), shlex.quote(os.path.abspath(cwd)), shlex.quote(TRACER_DIR)))
     return env + cmd
 
@@ -494,7 +495,7 @@ def check_write(tool_input, m, empty_log):
     return None
 
 
-TRACER_PREFIX = re.compile(r"^REHEARSE_TRACE=\S+ REHEARSE_ROOT=\S+ PYTHONPATH=\S+ ")
+TRACER_PREFIX = re.compile(r"^export REHEARSE_TRACE=\S+ REHEARSE_ROOT=\S+ PYTHONPATH=\S+; ")
 
 
 def record(d, entry):
