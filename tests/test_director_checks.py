@@ -98,8 +98,8 @@ class Proj:
 
     def state(self):
         d = os.path.join(DATA, "sessions", self.sid)
-        names = sorted(n for n in os.listdir(d) if n.endswith(".json")) if os.path.isdir(d) else []
-        return json.load(open(os.path.join(d, names[-1]))) if names else None
+        names = sorted(os.listdir(d)) if os.path.isdir(d) else []
+        return json.load(open(open(os.path.join(d, names[-1])).read().strip())) if names else None
 
     def set(self, **kw):
         s = self.state()
@@ -241,6 +241,13 @@ try:
         assert blocked(p.stop(), "say built, not verified against the real target"), phase
         p.report("built, not verified against the real target: no credentials here")
         assert blocked(p.stop(), "next: spawn rehearse:director"), phase
+
+    for make in (in_work, lambda: Proj({"main.py": BUGGY})):  # an honest give-up ends the run in any phase
+        p = make()
+        if p.state() is None:
+            p.ev("UserPromptSubmit", prompt="rehearse fix the report; it should print total: 12")
+        p.report("not fixed: the sandbox hides the tool, nothing was changed")
+        assert p.stop() is None and p.state()["phase"] == "done.not_fixed"
 
     p = in_confirm()  # stop here, from the confirmation answer
     p.ev("UserPromptSubmit", prompt="stop here and write the report")

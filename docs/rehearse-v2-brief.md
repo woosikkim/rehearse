@@ -65,7 +65,7 @@ The intent behind the sweep and test walls stays: it moves into the director's j
 
 ## 6. State
 
-- One state per activation, keyed by session id, stored outside the project: `${CLAUDE_PLUGIN_DATA}/sessions/<session_id>/<run_id>.json` if that directory exists for plugins (open question 14.2), else `~/.claude/rehearse/<session_id>/<run_id>.json`. The working agent never writes it; hooks refuse any shell write or tool write whose real path resolves into it (reuse the provenance code, section 16).
+- One state per activation, keyed by session id. *Changed after the first eval run (section 17a):* the state file lives in the run folder, `<root>/.rehearsal/<run_id>/state.json`, because a sandboxed shell (the plugin eval, and any sandbox that hides the config folder) cannot read `${CLAUDE_PLUGIN_DATA}`; the data folder keeps only a one-line pointer per run so hooks find the session's newest run. The working agent never writes it (easy-path threat model: no refusal needed).
 - Fields: mode, phase, project root (the working directory at activation, recorded because agents in benchmark containers work in `/workspace` or `/app/<repo>`, not a fixed path), ending (section 7.2), confirmation (by whom, when, how), edit-round counter, direct-look counter since the last edit round, consecutive-failure counter, director verdicts with their provenance, the activation snapshot (section 9), timestamps.
 - Human-readable artifacts go to `.rehearsal/<run_id>/` in the project: `log.md` (hook-written, redacted), `fixtures/`, `scaffold/`, `ending.json`, `report.md`, `verdict.json`. Every activation starts a new folder. Nothing from a previous run can satisfy a gate in a new run.
 - `.rehearsal/<run_id>/scaffold/` keeps its 0.7 meaning: specimens a real tool must read under their true names (a tiny docs project, a settings module). The agent may create them during Observe; it may not execute or import them itself. Existing programs may read them.
@@ -263,3 +263,8 @@ Do not keep: `CONTROL`, `ACCESS`, `READ_ONLY`, `SETUP`, `INLINE_FLAGS`, `inline_
 - Section 14 adds fallbacks to every open question and four new questions (Agent tool in headless mode, expected-value provenance in fix mode, baseline without stashing, hook visibility of MCP tool calls), and records what the Claude Code docs already settle: `agent_type` in hook input, `CLAUDE_PLUGIN_DATA`, `CLAUDE_PLUGIN_OPTION_<KEY>`, plugin MCP tool naming, the 8-block Stop cap and its override, and that plugins cannot set the status line.
 - Section 15 updates the counts to all 176 runs and adds the Terminal-Bench 4.0 evidence.
 - Section 16 is new: what to reuse and what to delete, by name.
+
+Found by the first full plugin-eval run (all six cases failed at the same step):
+- The state file moves into the run folder (`.rehearsal/<run_id>/state.json`); the plugin data folder keeps a one-line pointer per run. A sandboxed shell cannot read the plugin data folder, so `rehearse ending` answered "no active run" and no case got past observe.
+- The activation note names the command's absolute path for shells where the plugin's `bin/` is not on PATH (the eval sandbox).
+- A report whose first line is "not fixed" ends the run in any phase. Without it a stuck agent in observe looped on the Stop hook for 150 turns; an honest give-up is not the easy path the chokepoints guard against.

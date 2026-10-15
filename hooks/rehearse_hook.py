@@ -63,7 +63,8 @@ def instructions(mode, run_id):
             text = f.read().replace("${CLAUDE_PLUGIN_ROOT}", os.path.dirname(HERE))
     except OSError:
         text = "[rehearse] instructions pending"
-    return text.rstrip() + "\n[rehearse] run %s activated" % run_id
+    return text.rstrip() + "\n[rehearse] run %s activated · command: rehearse (if not on PATH: %s)" % (
+        run_id, os.path.join(os.path.dirname(HERE), "bin", "rehearse"))
 
 
 def on_prompt(p, sid):
@@ -510,16 +511,6 @@ def void_pass(s):
 
 # ---------- Stop ----------
 
-def newest(sid):
-    """The session's newest run in any phase (S.current hides ended runs)."""
-    d = S.session_dir(sid)
-    try:
-        names = sorted((n for n in os.listdir(d) if n.endswith(".json")), reverse=True)
-    except OSError:
-        return None
-    return S.load(os.path.join(d, names[0])) if names else None
-
-
 def report_line(s):
     try:
         with open(os.path.join(s["run_folder"], "report.md"), encoding="utf-8") as f:
@@ -544,11 +535,17 @@ def kill_stage(s):
 
 
 def on_stop(p, sid):
-    s = newest(sid)
+    s = S.newest(sid)
     if not s or s["phase"] == "done.cancelled":
         return None
     first = report_line(s)
     ph = s["phase"]
+    if (first or "").startswith("not fixed"):  # an honest give-up ends the run in any phase
+        if ph != "done.not_fixed":
+            with S.locked(s) as cur:
+                cur["phase"] = "done.not_fixed"
+        kill_stage(s)
+        return None
     nxt = None
     if ph == "done.not_fixed" or s.get("stop_here"):
         if not (first or "").startswith("not fixed"):

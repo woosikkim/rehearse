@@ -1,8 +1,9 @@
 """One state file per activation, written only by hooks, under flock.
 
-$CLAUDE_PLUGIN_DATA/sessions/<session_id>/<run_id>.json, else ~/.claude/rehearse/sessions/<session_id>/.
-The run folder <root>/.rehearsal/<run_id>/ holds a one-line `state-path` so bin/rehearse, which does not
-see the plugin's variables, can find the state and read it.
+The state lives in the run folder, <root>/.rehearsal/<run_id>/state.json, so bin/rehearse (no plugin variables,
+possibly a sandboxed shell that cannot see the plugin's data folder) finds it from the working directory.
+$CLAUDE_PLUGIN_DATA/sessions/<session_id>/<run_id> (else ~/.claude/rehearse/sessions/...) holds one line, the
+state path, so hooks find the session's newest run.
 """
 import contextlib
 import datetime
@@ -41,14 +42,20 @@ def _save(s):
     os.replace(tmp, s["path"])
 
 
-def current(session_id):
-    """The session's newest run unless it has ended (cancelled or not fixed); None otherwise. Read-only."""
+def newest(session_id):
+    """The session's newest run in any phase. Read-only."""
     d = session_dir(session_id)
     try:
-        names = sorted((n for n in os.listdir(d) if n.endswith(".json")), reverse=True)
-    except OSError:
+        names = sorted(os.listdir(d), reverse=True)
+        with open(os.path.join(d, names[0]), encoding="utf-8") as f:
+            return load(f.read().strip())
+    except (OSError, IndexError):
         return None
-    s = load(os.path.join(d, names[0])) if names else None
+
+
+def current(session_id):
+    """The session's newest run unless it has ended (cancelled or not fixed); None otherwise. Read-only."""
+    s = newest(session_id)
     return s if s and s.get("phase") not in ENDED else None
 
 
@@ -59,11 +66,7 @@ def find_for_cwd(cwd):
         rd = os.path.join(d, ".rehearsal")
         if os.path.isdir(rd):
             for run in sorted(os.listdir(rd), reverse=True):
-                try:
-                    with open(os.path.join(rd, run, "state-path"), encoding="utf-8") as f:
-                        s = load(f.read().strip())
-                except OSError:
-                    continue
+                s = load(os.path.join(rd, run, "state.json"))
                 if s and s.get("phase") not in ENDED:
                     return s
         parent = os.path.dirname(d)
@@ -79,14 +82,14 @@ def new_run(session_id, root, mode, request, fp):
     folder = os.path.join(root, ".rehearsal", run_id)
     os.makedirs(os.path.join(folder, "fixtures"), exist_ok=True)
     os.makedirs(session_dir(session_id), exist_ok=True)
-    s = {"run_id": run_id, "session_id": session_id, "path": os.path.join(session_dir(session_id), run_id + ".json"),
+    s = {"run_id": run_id, "session_id": session_id, "path": os.path.join(folder, "state.json"),
          "mode": mode, "phase": "observe", "root": root, "run_folder": folder, "request": request, "prompts": [],
          "ending": None, "confirmation": None, "rounds": [], "round_open": False, "failing_rounds": 0,
          "direct_looks": 0, "rejections": 0, "verdicts": [], "spawn_fingerprint": None,
          "fp_activation": fp, "fp_phase_entry": fp, "created": [], "produced": [], "config_edits": [],
          "fixtures": [], "notes": [], "created_at": time.time(), "updated_at": time.time()}
     _save(s)
-    with open(os.path.join(folder, "state-path"), "w", encoding="utf-8") as f:
+    with open(os.path.join(session_dir(session_id), run_id), "w", encoding="utf-8") as f:
         f.write(s["path"] + "\n")
     return s
 
