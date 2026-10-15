@@ -3,7 +3,7 @@
 REHEARSE-RESULT <json>, which the plugin's hook records.
 
   rehearse ending --cmd '<cmd>' [--tests '<cmd>'] --expect '<requirement>' <check> <value> --cite <citation> ...
-  rehearse run
+  rehearse run [--as-director]
   rehearse fetch <url> [curl args]
   rehearse status
 
@@ -133,6 +133,8 @@ def cmd_run(s, argv):
         return result(s["run_id"], "run", ok=False, error="no ending")
     r = run_ending(s)
     print("all expectations pass" if r["all_pass"] else "not every expectation passes")
+    if "--as-director" in argv:
+        r["as_director"] = True
     return result(s["run_id"], "run", ok=True, **r)
 
 
@@ -165,8 +167,14 @@ def cmd_status(s, argv):
     return result(s["run_id"], "status", ok=True, phase=s["phase"])
 
 
+def cmd_stage(s, argv):
+    sys.path.insert(0, os.path.join(PLUGIN, "stage"))
+    import client
+    client.main(s, argv)
+
+
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ("ending", "run", "fetch", "status"):
+    if len(sys.argv) < 2 or sys.argv[1] not in ("ending", "run", "fetch", "status", "stage"):
         print(__doc__)
         return result(None, "usage", ok=False)
     kind = sys.argv[1]
@@ -174,7 +182,7 @@ def main():
     if not s:
         print("no active rehearse run in this directory or above it")
         return result(None, kind, ok=False, error="no run")
-    {"ending": cmd_ending, "run": cmd_run, "fetch": cmd_fetch, "status": cmd_status}[kind](s, sys.argv[2:])
+    {"ending": cmd_ending, "run": cmd_run, "fetch": cmd_fetch, "status": cmd_status, "stage": cmd_stage}[kind](s, sys.argv[2:])
 
 
 if __name__ == "__main__":
