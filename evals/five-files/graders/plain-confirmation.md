@@ -1,5 +1,5 @@
 ---
-type: llm
-focus: trace
+type: regex
+target: trace
+pattern: '(?is)(should|would) (show|print|read|say)\W{0,4}162\.50.{0,400}80\.00'
 ---
-Before the first Edit or Write to a project .py file, the assistant stated the ending in one plain-language sentence that names what the user would see, the expected value 162.50 and the current value 80.00 (for example "When I run the report, March should show 162.50; right now it shows 80.00"), followed by the command.
