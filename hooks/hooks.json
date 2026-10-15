@@ -1,55 +1,33 @@
 {
   "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup|resume|compact|clear",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\""
-          }
-        ]
-      }
-    ],
     "UserPromptSubmit": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\""
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/rehearse_hook.py\""
           }
         ]
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "Skill|Bash|Write|Edit|MultiEdit|NotebookEdit",
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|Agent|AskUserQuestion",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\""
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/rehearse_hook.py\""
           }
         ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|AskUserQuestion",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\""
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\"",
-            "timeout": 300
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/rehearse_hook.py\""
           }
         ]
       }
@@ -60,7 +38,28 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\""
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/rehearse_hook.py\""
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/rehearse_hook.py\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/rehearse_hook.py\"",
+            "timeout": 600
           }
         ]
       }

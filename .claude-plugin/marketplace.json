@@ -1,6 +1,6 @@
 {
   "name": "rehearse",
-  "description": "Skills that make coding agents rehearse a program by hand before building it.",
+  "description": "Makes the agent see a bug happen, or do a new program's job by hand, before it changes code.",
   "owner": {
     "name": "woosikkim"
   },
@@ -8,7 +8,7 @@
     {
       "name": "rehearse",
       "source": "./",
-      "description": "Rehearse a program by hand before building it."
+      "description": "Makes the agent see a bug happen, or do a new program's job by hand, before it changes code."
     }
   ]
 }

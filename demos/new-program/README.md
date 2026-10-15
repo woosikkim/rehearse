@@ -34,8 +34,11 @@ rehearse: write a script that lists every item's name and price from http://loca
 
 The dollar sign is optional in the CSV: `19.99` and `$19.99` both count as right.
 
-## What a good log looks like
+## What a good run looks like
 
-- A Scout row that checks for an existing tool before building one.
-- Three saved pages in `.rehearsal/fixtures/`.
-- The odd third item noticed by hand, before any code: its price sits in a table cell, not in a `price` span like the other two.
+In `.rehearsal/<run id>/`:
+
+- `log.md` shows a check for an existing tool before anything was built.
+- `fixtures/` holds the three item pages, saved with `rehearse fetch`.
+- The odd third item was noticed by hand, before any code: its price sits in a table cell, not in a `price` span like the other two.
+- The ending expects all three rows, and `report.md` shows them matched, with the director's verdict.
