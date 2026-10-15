@@ -77,12 +77,12 @@ A candidate is an assumption too. Rehearse command-line tools by hand; save fixt
 
 ## Rules of the hand
 
-1. **One action per call, no new logic.** Each step is one direct command or tool call: no script files, loops, conditions or new functions. To call code that already exists, use one console line `python3 -c '<import what exists; set literals; call; print>'`:
+1. **One action per call, no new logic.** Each step is one direct command or tool call: no script files, loops, conditions or new functions. To call code that already exists, type it inline, in any interpreter with any flags, straight-line only: `python3 -c '<import what exists; set literals; call; print>'`:
    ```
    python3 -c 'import normalize; print(normalize.parse_date("04/03/2024"))'
    python3 -c 'import sys, price; print(price.to_amount(sys.stdin.read()))' < .rehearsal/fixtures/price3.txt
    ```
-   The same shape works with `node -e`, `node -p` and `ruby -e`, and the interpreter may be a full path (`/opt/env/bin/python -c '…'`) or follow `PATH=…` when the project lives in a virtualenv or conda env. If the bare interpreter lacks the project's dependencies, find the one that has them first (`.venv/bin/python`, `ls /opt/*/envs`, `conda env list`) and use it by full path for every call, including the tests. Single quotes only, straight-line statements (up to twelve: imports, literal values, calls, print; no `for`, `if`, `def`, `with`), and a fixture fed in with `< file`. A setup that needs more than that is a sign to save a fixture and call the next layer down.
+   The same works with `node -e`, `ruby -e`, `php -r`, a quoted heredoc (`python3 - <<'EOF' … EOF`), an interpreter given by full path or held in a variable, and any flags. If the bare interpreter lacks the project's dependencies, find the one that has them first (`.venv/bin/python`, `ls /opt/*/envs`, `conda env list`) and use it for every call, including the tests. What the guard checks is the code itself: no loops, branches, definitions or file and process access, and nothing imported that was written during the rehearsal. Length is not limited; hidden steps are. A compiled program built from source that existed before may be run; a file you wrote during the rehearsal may not, and a second identical attempt goes through marked `forced` in the log, so use that only when the guard is plainly wrong.
 2. **Hand-made data are literals.** Type the value you mean, `"12.50"`, not code that computes it: no comprehensions, no `.replace`. Save code-like fixtures as `.txt` (`app.js.txt`), unless a real tool must read them under their true names: then they are a specimen and live under `.rehearsal/scaffold/`.
 3. **Observe before you act.** Write down what you saw, then choose the next step from that. "Got 403 → retry with a browser User-Agent" is your decision, and later it becomes code.
 4. **Match the program's tool.** If the program will use `requests` or `fetch`, rehearse with `curl` and the same headers, not a tool that renders the page. If it drives a browser, use a browser tool.
@@ -150,6 +150,7 @@ Now write the code, and test it with what you saw.
 - If the code and the expectation differ, fix the code, not the expectation. Change an expectation only if the log was wrong, and say so.
 - Each library from Scout must pass on the fixtures. If one fails, switch to the next candidate.
 - **Live replay**: run the program once on the same sample you rehearsed and compare with your hand results. A new failure here is a chain link.
+- **The guard replays your reproduction too**: when you finish, it runs your last by-hand reproduction on the original code and on your fixed code, and refuses once if the two behave the same. To choose which command it uses, write `repro: <command>` on its own line in `.rehearsal/REHEARSAL.md`.
 - Behaviour that was never rehearsed goes on the list of unverified risks. Anything you could still call in one line does not belong there: call it.
 - **Leave `.rehearsal/` in place when you are done.** The log is the evidence; the user decides when to delete it.
 

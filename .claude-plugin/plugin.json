@@ -1,6 +1,6 @@
 {
   "name": "rehearse",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "description": "Make the agent see a bug fail before it fixes it, and check every place the fix should reach. Look by hand, act as the fix by hand, build to match, sweep the callers and siblings, replay the hand results as tests. A guard refuses scripts during the rehearsal, code edits before a real call, a red hand-back, and a fix with no sweep.",
   "license": "MIT",
   "keywords": [

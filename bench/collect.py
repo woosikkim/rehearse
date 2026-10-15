@@ -91,6 +91,13 @@ def main(job, label):
         for name in ("report.json", "reward.txt", "test-stdout.txt"):
             if os.path.exists(os.path.join(t, "verifier", name)):
                 shutil.copy(os.path.join(t, "verifier", name), os.path.join(dest, name))
+        # The rehearsal folder, when the run was started with --artifact <workdir>/.rehearsal
+        for root, dirs, files in os.walk(os.path.join(t, "artifacts")):
+            if os.path.basename(root) == ".rehearsal":
+                if os.path.isdir(os.path.join(dest, "rehearsal")):
+                    shutil.rmtree(os.path.join(dest, "rehearsal"))
+                shutil.copytree(root, os.path.join(dest, "rehearsal"), ignore=shutil.ignore_patterns("pycache-*", "venv", "out"))
+                break
         shutil.copy(os.path.join(t, "result.json"), os.path.join(dest, "harbor-result.json"))
         if tb:
             reward = float(open(os.path.join(dest, "reward.txt")).read().strip() or 0)

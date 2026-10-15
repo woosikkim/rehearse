@@ -29,6 +29,11 @@ PYTHONPATH=$PWD/.. harbor run -p tasks/swe-bench-verified/django__django-13344 \
 python3 collect.py jobs/my-run my-label
 ```
 
+Add `--artifact /testbed/.rehearsal` (or `/app/.rehearsal` for Terminal-Bench) to the run so the rehearsal folder, with the command log, the call record and the replay verdict, is collected into `results/<task>/<label>/rehearsal/`.
+
+```
+```
+
 Set `REHEARSE_GIT_REF` to pin a plugin version (a tag or commit); the default is `main`.
 
 ## Honest caveats
@@ -36,3 +41,7 @@ Set `REHEARSE_GIT_REF` to pin a plugin version (a tag or commit); the default is
 - The plugin was improved using these very runs, so results across tasks mix plugin versions from 0.4.1 to 0.6.3. Each result folder is named with the version it ran on.
 - A single run per task is noisy: rerunning the same 22 tasks on the same version swung the fixed count by three or four either way. The regression count was stable.
 - "Fixed" means every hidden test the project's maintainers wrote for that bug passes and nothing that passed before fails. Some tasks' hidden tests check things the bug report never mentions; those are counted as failures anyway and marked as such in the write-up.
+
+## Replay harness
+
+`python3 bench/replay_guard.py --old v0.6.3 --new HEAD` runs every Bash command and file write in `results/*/*/transcript.stream.jsonl` through two versions of `hooks/guard.py` and lists what one refuses and the other allows. Use `worktree` as a ref to test the uncommitted guard on disk. Add `--fixture` to check 20 hand-picked commands in `replay_fixture.txt`. Only shape checks are replayed (file age is neutralised: the marker has modification time 0).
