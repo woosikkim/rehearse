@@ -37,7 +37,7 @@ RUNNERS = {"npm": {"run", "start", "exec", "test"}, "pnpm": {"run", "start", "ex
 WRAPPERS = {"sudo", "env", "time", "nice", "command", "exec"}
 # Logged commands that count as having run something; reading (cat, grep, sed, ls) and notes do not.
 EXEC_TOOLS = {"curl", "sqlite3", "psql", "mysql", "mongosh", "redis-cli", "http", "https", "grpcurl", "nc",
-              "ssh", "pytest", "make"}
+              "ssh", "pytest", "make", "sphinx-build", "django-admin", "flask", "uvicorn", "gunicorn"}
 # Package launchers run a tool: allowed, but the tool they launch is checked too (npx tsx a.ts is still a script).
 LAUNCHERS = {"npx": None, "bunx": None, "uvx": None, "uv": "run", "pipx": "run", "pnpm": "dlx"}
 VERSION_ARGS = {"--version", "-V", "-v", "version"}
@@ -168,6 +168,8 @@ def executed(cmd):
         name = re.sub(r"[\d.]+$", "", os.path.basename(prog)) or prog
         args = [a for a in toks[i + 1:] if not a.startswith("-")]
         if {name, os.path.basename(prog)} & EXEC_TOOLS or prog.startswith("./") or os.path.splitext(prog)[1] in CODE_EXT:
+            return True
+        if prog.startswith("$") and toks[i + 1:]:  # an interpreter held in a shell variable ($P -m sphinx ...)
             return True
         if name in INTERPRETERS and args and (os.path.splitext(args[0])[1] in CODE_EXT or toks[i + 1:i + 2] == ["-m"]):
             return True

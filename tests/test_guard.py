@@ -360,6 +360,9 @@ with tempfile.TemporaryDirectory() as d:
     assert ran("python3 -m pytest tests -q", "5 passed, 1 xfailed in 0.4s").returncode == 0
     assert stop() == ""  # last run is green
     assert ran("pytest -k foo", "Ran 3 tests\n\nOK").returncode == 0 and stop() == ""
+    import importlib.util as _u; spec=_u.spec_from_file_location("g", GUARD); g=_u.module_from_spec(spec); spec.loader.exec_module(g)
+    assert g.executed("cd /testbed; P=/opt/env/bin/python; $P -m sphinx -q -b text .rehearsal/scaffold .rehearsal/out 2>&1 | tail -5")
+    assert g.executed("sphinx-build -b html .rehearsal/scaffold out") and not g.executed("P=/opt/env/bin/python; ls")
     assert ran("git stash -q; pytest -q | tail -2; git stash pop -q", "2 failed in 0.3s").returncode == 0
     assert stop() == ""  # a red baseline run with the change stashed is deliberate
     assert "tests.log" in os.listdir(os.path.join(d, ".rehearsal"))
