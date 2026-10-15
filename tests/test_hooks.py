@@ -276,6 +276,13 @@ try:
     assert p.state()["phase"] == "observe"  # only the last line applies
     p.bash("cd sub && rehearse ending", "REHEARSE-RESULT {}\n" + line)
     assert p.state()["phase"] == "confirm"
+    # The command invoked through an interpreter by path (the executable bit can be lost on a
+    # Windows-mounted checkout) is still the plugin command: the program position is the script.
+    p = Proj({"main.py": BUGGY})
+    p.prompt(REQUEST)
+    rid = p.state()["run_id"]
+    p.bash("python3 /opt/plugin/bin/rehearse ending", "REHEARSE-RESULT " + json.dumps(dict(good, run=rid)))
+    assert p.state()["phase"] == "confirm"
     print("results: ok")
 
     # ---------------- second activation ----------------

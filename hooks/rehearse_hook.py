@@ -398,7 +398,7 @@ def on_post(p, sid):
     segs = P.parse(cmd, cwd)
     with S.locked(s) as cur:
         L.log_command(cur["run_folder"], cmd, out, cur["phase"])
-        if any(seg["prog"] == "rehearse" for seg in segs):
+        if any(seg["prog"] == "rehearse" or os.path.basename(seg["pp"] or "") == "rehearse" for seg in segs):
             res = last_result(out)
             if res is None:
                 msgs.append("result line missing; rerun without a pipe")
