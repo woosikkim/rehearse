@@ -109,10 +109,23 @@ try:
     assert "value: 2" in out, out
     out, res = p.step("for i in range(3): print(i)")
     assert REFUSAL in out and not res["accepted"] and res["error"] == REFUSAL, out
-    assert steps_of(p) == ["x = 1", "print(x)", "x / 0", "x + 1"], steps_of(p)  # refused steps are not replayed
+    assert [s["code"] for s in steps_of(p)] == ["x = 1", "print(x)", "x / 0", "x + 1"], steps_of(p)  # refused steps are not replayed
     out, res = p.step("print(x)")  # replay: output of the earlier steps stays quiet, the names stay
-    assert out.splitlines()[0] == "1" and out.count("1\n") == 1, out
+    assert out.splitlines()[0] == "1" and out.count("1\n") == 1 and "replayed 4 earlier steps" in out, out
+    assert "changed on replay" not in out
     print("session: ok")
+
+    # ---- replay drift and the network notice
+    out, res = p.step("import time")
+    out, res = p.step("time.time()")  # its value differs on every replay
+    out, res = p.step("x")
+    assert "replayed 7 earlier steps; changed on replay: step 7" in out, out
+    out, res = p.step("import socket")
+    out, res = p.step("socket.create_connection(('127.0.0.1', 9), timeout=0.2)")
+    assert "opened a network connection" in out and res["accepted"], out
+    out, res = p.step("x")
+    assert "opened a network connection" not in out, out
+    print("replay notices: ok")
 
     # ---- call record (and the hook's direct look)
     p.set(phase="work")

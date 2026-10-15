@@ -1,7 +1,8 @@
 """`rehearse stage start [--python <path>] | step '<code>' | stop`: run stage/server.py for the current run.
 
-No process outlives a Bash call: `<run folder>/stage.json` holds the interpreter and the accepted steps, and every
-step replays them in a fresh interpreter before running the new one.
+No process outlives a Bash call: `<run folder>/stage.json` holds the interpreter and the accepted steps with what
+each printed the first time, and every step replays them in a fresh interpreter before running the new one. The
+output says how many were replayed, which ones came out differently, and when a step opens a network connection.
 """
 import json
 import os
@@ -95,8 +96,14 @@ def step(s, argv):
         print("refused: " + r["error"])
     if r["project_files"]:
         print("entered: " + ", ".join(r["project_files"]))
+    if r.get("replayed"):
+        print("replayed %d earlier step%s%s" % (r["replayed"], "" if r["replayed"] == 1 else "s",
+              "; changed on replay: step " + ", ".join(str(i) for i in r["drift"]) if r.get("drift") else ""))
+    if r.get("network"):
+        print("this step opened a network connection; replay will repeat it on every later step. "
+              "For requests that change data, use rehearse fetch")
     if r["accepted"]:
-        st["steps"].append(argv[0])
+        st["steps"].append({"code": argv[0], "seen": [r["stdout"], r["value"], r["exception"]]})
         save(s, st)
     return result(s["run_id"], "stage-step", accepted=r["accepted"], project_files=r["project_files"],
                   error=r["error"])

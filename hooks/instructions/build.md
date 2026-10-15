@@ -17,7 +17,7 @@ Every command you run is logged as a step (S1, S2, ...) in `.rehearsal/<run id>/
    Look at what is installed first, then the target itself (`/api`, `/feed`, `/sitemap.xml`, `robots.txt`, its docs), then outside. A candidate is an assumption too: try it by hand. Documentation can be wrong; what the target really answers wins.
 2. **Do the job by hand on a small sample**: a typical item, an empty one, an odd one, and the last one, each as its own step. For 1000 items, never loop; sample.
    - For the web, use `rehearse fetch <url>`: it saves the response as a fixture you can cite.
-   - For Python, start the stage with `rehearse stage start` (add `--python <path>` when the project has its own interpreter) and send one statement or expression at a time with `rehearse stage step '<code>'`.
+   - For Python, start the stage with `rehearse stage start` (add `--python <path>` when the project has its own interpreter) and send one statement or expression at a time with `rehearse stage step '<code>'`. The stage replays your accepted steps before each new one; a step that opens a network connection is repeated on every later step, so a request that changes data belongs in `rehearse fetch <url> -X POST -H ... -d ...`, which sends it once and saves the answer as a fixture.
    - Never write a script of your own to do the looking.
 3. **Write down what you saw**, then pick the next step from it. "Got 403, so retry with a browser User-Agent" is a decision that later becomes code. Match the tool the program will use: if it will use plain HTTP, look with a fetch, not a browser.
 

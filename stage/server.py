@@ -1,7 +1,9 @@
 """The stage: one fresh Python process per step, which replays the accepted steps before it (plan 2.7).
 
     python server.py --root <project root> --state <state json> [--hello]
-    stdin: {"steps": [<accepted steps so far>], "code": "<the new step>"}   stdout: one JSON reply line
+    stdin: {"steps": [{"code": ..., "seen": [stdout, value, exception]}, ...], "code": "<the new step>"}
+    stdout: one JSON reply line, with "replayed" (count), "drift" (1-based steps whose rerun differed from
+    "seen") and "network" (the new step opened a network connection)
 
 Run by `rehearse stage step` under the project's interpreter, so it keeps to old-Python syntax and loads the
 plugin's helpers under private names (never on sys.path, where they could shadow project modules).
@@ -168,10 +170,22 @@ def main():
         return
     req = json.load(sys.stdin)
     stage = Stage(a.root, a.state)
-    for code in req.get("steps") or []:
-        stage.step(str(code))  # replayed quietly; the namespace is what the earlier steps left
-    sys.stdout = sys.__stdout__
-    print(json.dumps(stage.step(str(req.get("code") or "")), ensure_ascii=False))
+    steps = req.get("steps") or []
+    drift = []
+    for i, st in enumerate(steps, 1):  # replayed quietly; the namespace is what the earlier steps left
+        st = st if isinstance(st, dict) else {"code": st}
+        r = stage.step(str(st.get("code") or ""))
+        if st.get("seen") is not None and [r["stdout"], r["value"], r["exception"]] != list(st["seen"]):
+            drift.append(i)
+    net = []
+    if hasattr(sys, "addaudithook"):  # a notice, not a refusal: the agent learns a step talks to the network
+        def audit(event, args):
+            if event == "socket.connect":
+                net.append(event)
+        sys.addaudithook(audit)
+    reply = stage.step(str(req.get("code") or ""))
+    reply.update(replayed=len(steps), drift=drift, network=bool(net))
+    print(json.dumps(reply, ensure_ascii=False))
 
 
 if __name__ == "__main__":
