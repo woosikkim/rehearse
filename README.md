@@ -10,39 +10,6 @@ Coding agents guess. They read some code, edit it, rerun the program and edit ag
 
 rehearse makes that direct look the rule. The AI does the job by hand first, agrees with you on what the right result is, and only then changes code. A second AI that did not do the work checks it before it may finish.
 
-## What you'll see
-
-Here is a fix of a five-file order report whose March total is wrong. The run folder, shortened:
-
-```
-S1  python3 main.py                  -> 2024-03  80.00
-S3  parse_date("04/03/2024")         -> None, so the row is dropped
-S5  to_amount("12,50")               -> ValueError    Revealed by: S3, the date fix
-S6  March by hand                    -> 162.50
-```
-
-Before any code changes, you are asked one plain question:
-
-> When I run the report for March, it should show 162.50; right now it shows 80.00.
->
-> Command: `python3 main.py` · Right now: `2024-03 80.00` · Expected: `2024-03 162.50` (from step S6)
->
-> **yes** · **no, the expected value is wrong** · **stop here and write the report**
-
-The report you get at the end starts with an honest first line:
-
-```
-fixed
-
-| Expected            | Before | After  |      |
-|---------------------|--------|--------|------|
-| March shows 162.50  | 80.00  | 162.50 | PASS |
-
-Director: PASS, after trying date and price shapes the agent did not use.
-```
-
-Building against an API whose documentation is wrong works the same way. In the mock-server demo, the docs say `/api/items` with a `price` field. The AI asked the server directly, found `/api/v1/items` and `price_cents`, and built from what the server actually returned.
-
 ## Quick start
 
 Install it in Claude Code:
@@ -63,15 +30,7 @@ rehearse build: a script that saves every product name and price from https://ex
 
 You'll see `rehearse is on — type rehearse stop to stop`. You can end the run at any time by typing `rehearse stop`, or by choosing **stop here and write the report** when you are asked a question.
 
-To try it on a demo without installing it:
-
-```
-git clone https://github.com/woosikkim/rehearse
-cd rehearse/demos/five-files
-claude --plugin-dir ../..
-```
-
-Then prompt `rehearse: fix the missing March orders` and read the report in `.rehearsal/`. Each demo folder has its own README; the API demos need a local server started in a separate terminal first.
+Demo projects are in [`demos/`](demos/), each with its own README.
 
 **Needs:** Claude Code, Python 3 and `curl`.
 
@@ -167,7 +126,7 @@ Three lessons:
 - Five eval cases on small demo projects, three runs each, with and without the plugin (`evals/`). All five pass at 2.0.0.
 - Demos run by hand outside the eval sandbox, including the mock server whose documentation is wrong. In that run the director rejected the agent's first ending. That ending only checked the exit code, so a hard-coded script would have passed it.
 
-This shows that the plugin behaves as designed on small cases. It is not a performance claim. The practice runs are kept on the [`practice-runs`](https://github.com/woosikkim/rehearse/tree/practice-runs) branch. They were used to find failure modes, the guard was tuned on those same tasks, and plugin versions and models are mixed. A proper measurement on tasks never used in development is planned.
+This shows that the plugin behaves as designed on small cases. It is not a performance claim. The practice runs are kept on the [`practice-runs`](https://github.com/woosikkim/rehearse/tree/practice-runs) branch: 176 in all, with plugin versions and models mixed, of which the 132 above are the ones counted. They were used to find failure modes, and the guard was tuned on those same tasks. A proper measurement on tasks never used in development is planned.
 
 ### How it was built
 
