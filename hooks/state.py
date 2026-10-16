@@ -15,6 +15,37 @@ import secrets
 import time
 
 ENDED = ("done.cancelled", "done.not_fixed")
+NEED_LOOK = ("edits are locked after repeated failing rounds with no direct look; look directly (a stage step that "
+             "calls project code, or rehearse fetch to a known host) or make rehearse run pass")
+NEXT = {"observe": "register an ending with rehearse ending",
+        "rework-observe": "look directly, or make rehearse run pass",
+        "judge": "wait for the director's verdict",
+        "done.passed": "write report.md, then finish",
+        "done.not_fixed": 'write report.md starting with "not fixed"',
+        "done.cancelled": "the run is cancelled"}
+
+
+def next_step(s):
+    """What to do next, from the state alone (no plugin variables: bin/rehearse calls this in a sandboxed shell)."""
+    ph = s.get("phase")
+    if ph == "confirm":
+        if s.get("uncovered"):
+            return "register the uncovered requirements with rehearse ending, then spawn the review again"
+        return "have the ending confirmed: ask the user, or in an unattended run spawn rehearse:director to review it"
+    if ph == "work":
+        if s.get("round_open"):
+            return "rerun the ending with rehearse run"
+        return "edit the project's files, then rehearse run; when it passes, spawn rehearse:director"
+    return NEXT.get(ph, "see the instructions")
+
+
+def scratch_note(s):
+    """The copy-only reminder while every edit of the run is outside the project, else None."""
+    outside = s.get("outside_edits") or []
+    if outside and not s.get("project_edited"):
+        return ("every edit so far is outside the project (%s): the ending runs on the project's real files, and a "
+                "change that exists only in a copy is not a fix" % outside[0])
+    return None
 
 
 def live(s):
@@ -105,7 +136,8 @@ def new_run(session_id, root, mode, request, fp):
          "ending": None, "confirmation": None, "rounds": [], "round_open": False, "failing_rounds": 0,
          "direct_looks": 0, "rejections": 0, "verdicts": [], "spawn_fingerprint": None,
          "fp_activation": fp, "fp_phase_entry": fp, "created": [], "produced": [], "config_edits": [],
-         "fixtures": [], "notes": [], "created_at": time.time(), "updated_at": time.time()}
+         "fixtures": [], "notes": [], "outside_edits": [], "project_edited": False, "scratch_reminded": False,
+         "review_rounds": 0, "review_gaps": [], "created_at": time.time(), "updated_at": time.time()}
     _save(s)
     return s
 

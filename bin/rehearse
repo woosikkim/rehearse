@@ -165,6 +165,14 @@ def cmd_fetch(s, argv):
 def cmd_status(s, argv):
     print("run %s: phase %s, failing rounds %d, direct looks %d"
           % (s["run_id"], s["phase"], s.get("failing_rounds", 0), s.get("direct_looks", 0)))
+    print("next: " + S.next_step(s))
+    if s.get("review_gaps"):
+        print("review gaps (the report lists them under \"not covered by the ending\"): " + "; ".join(s["review_gaps"]))
+    if s.get("uncovered"):
+        print("uncovered: " + "; ".join(s["uncovered"]))
+    note = S.scratch_note(s)
+    if note:
+        print("reminder: " + note)
     return result(s["run_id"], "status", ok=True, phase=s["phase"])
 
 

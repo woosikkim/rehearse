@@ -185,7 +185,7 @@ All of them run [`hooks/rehearse_hook.py`](hooks/rehearse_hook.py), which uses t
 | Hook | What it does |
 |---|---|
 | `UserPromptSubmit` | Starts a run on `/rehearse` or a prompt that starts with the word `rehearse`, and injects the fix or build instructions. `rehearse stop` cancels the run. While the ending waits for confirmation, the next prompt is the answer. |
-| `PreToolUse` | Until the ending is confirmed, refuses Write, Edit, MultiEdit and NotebookEdit on project code, and shell commands that write a code file. Refuses running a file created during the run. On a `rehearse:director` spawn, sets its prompt and model. Refuses edits by the director. |
+| `PreToolUse` | Until the ending is confirmed, refuses Write, Edit, MultiEdit and NotebookEdit on project code, and shell commands that write a code file. Refuses running a file created during the run. On a `rehearse:director` spawn, sets its prompt and model and keeps it in the foreground. Refuses edits by the director. |
 | `PostToolUse` | Logs every command and its output to `log.md` and `commands.jsonl`. Reads the result line of each `rehearse` command into the state. Counts edit rounds and direct looks, and locks edits again after two failing rounds with no direct look. Records the answer to the confirmation question. |
 | `SubagentStop` | Records the director's verdict, or its review of the ending in an unattended run. A verdict is void if code changed while the director worked. |
 | `Stop` | Refuses to finish until the next step is done: register an ending, confirm it, spawn the director, or write `report.md` with an allowed first line. |
@@ -215,6 +215,8 @@ The first command runs the deterministic hook, stage and director tests, and pri
 
 - Inside other interpreters (node, ruby and so on), nothing checks what a one-line program does; only the files it writes are seen afterwards.
 - Files written outside the project are recorded, not refused.
+- An ending whose command is a bare name or an unresolved module (`make check`, `python3 -m pkg`) closes an edit round only through `rehearse run`.
+- In an unattended run the director's review of the ending stops after two rounds; what it still found uncovered is listed in the report.
 - A loop inside one command runs to the end before any check sees it.
 - Claude Code stops honouring a Stop hook after eight blocks in a row with no tool call in between (Claude Code 2.1.300, probe P7). An agent that only keeps trying to finish can therefore end without a report. Interrupts and authentication errors skip the Stop hook by design.
 - If you edit project code yourself while edits are locked, the ending cannot be registered until those files are restored.

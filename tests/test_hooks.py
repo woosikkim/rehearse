@@ -144,7 +144,10 @@ try:
     for t, mode in (("Rehearse: fix x", "fix"), ("/rehearse x", None), ("rehearse build a scraper", "build"),
                     ("REHEARSE fix: y", "fix")):
         q = Proj({})
-        assert q.prompt(t) is not None and q.state()["mode"] == mode, t
+        out = q.prompt(t)
+        assert out is not None and q.state()["mode"] == mode, t
+        if mode == "fix":  # the stopping rule is in the fix instructions
+            assert "a change that exists only in a copy is not a fix" in out["hookSpecificOutput"]["additionalContext"]
     assert p.prompt("rehearse stop")["systemMessage"].startswith("rehearse stopped")
     assert p.state()["phase"] == "done.cancelled" and "cancelled by user" in p.state()["notes"]
     print("activation: ok")
@@ -175,6 +178,7 @@ try:
     for tool in ("Write", "Edit", "MultiEdit"):
         out = p.pre(tool, file_path=p.j("main.py"))
         assert denied(out) and "register and confirm an ending first" in text(out), (tool, out)
+        assert "next: register an ending" in text(out), out
     assert denied(p.pre("NotebookEdit", notebook_path=p.j("nb.ipynb")))
     for cmd in ("echo x > main.py", "echo x | tee main.py", "cp a.py main.py", "sed -i s/10/12/ main.py",
                 "cd sub/.. && echo x >> main.py", "mv a.py main.py"):
@@ -396,6 +400,71 @@ try:
     s = p.state()
     assert s["phase"] == "work" and "reminder" in text(out) and \
         "loop breaker not enforced: no stage for this language" in s["notes"], (s["phase"], out)
+    # scratch edits (code files outside the project) count toward the loop breaker and are never refused
+    outside = os.path.join(TMP, "outside", "patch.py")
+    os.makedirs(os.path.dirname(outside), exist_ok=True)
+    open(outside, "w").write("x = 1\n")
+    COPY = "a change that exists only in a copy is not a fix"
+
+    def scratch_edit(p, path, **extra):
+        return p.ev("PostToolUse", tool_name="Edit", tool_input={"file_path": path}, tool_response={}, **extra)
+    p = in_work()
+    out = scratch_edit(p, outside)
+    s = p.state()
+    assert s["round_open"] and s["outside_edits"] == [outside], s
+    assert COPY in text(out) and "next: rerun the ending with rehearse run" in text(out), out
+    assert scratch_edit(p, outside) is None  # the reminder comes once at an edit
+    out = p.run("python3 main.py")
+    assert p.state()["failing_rounds"] == 1 and COPY in text(out), out  # and on every failing round
+    out = p.ev("Stop")
+    assert out["decision"] == "block" and COPY in out["reason"], out  # and at Stop
+    p.bash("sed -i s/1/2/ " + outside)
+    assert p.state()["round_open"] and p.state()["outside_edits"] == [outside]
+    _, out = p.rehearse("run")
+    assert p.state()["phase"] == "rework-observe" and "next: look directly" in text(out), out
+    assert denied(p.pre("Edit", file_path=p.j("main.py")))
+    p = in_work()  # a failed command's reminder carries its own event name
+    scratch_edit(p, outside)
+    out = p.ev("PostToolUseFailure", tool_name="Bash", tool_input={"command": "python3 main.py"}, error="exit 1")
+    assert out["hookSpecificOutput"]["hookEventName"] == "PostToolUseFailure" and COPY in text(out), out
+    assert "next: edit the project's files" in text(out), out  # the failing rerun closed the round
+    p = in_work()  # after a project edit the reminder stops
+    scratch_edit(p, outside)
+    p.edit("main.py", FIXED + "# x\n")
+    assert p.state()["project_edited"] and COPY not in p.ev("Stop")["reason"]
+    p = in_work()  # `rehearse status` says what to do next and repeats the reminder
+    scratch_edit(p, outside)
+    so, _ = p.rehearse("status")
+    assert "next: rerun the ending with rehearse run" in so and COPY in so, so
+    for name, call in (("redirect", lambda p: p.bash("python3 main.py > %s/outside/out.py" % TMP)),
+                       ("run folder", lambda p: scratch_edit(p, os.path.join(p.state()["run_folder"], "notes.py"))),
+                       ("director", lambda p: scratch_edit(p, outside, agent_type="rehearse:director", agent_id="a1")),
+                       ("cp", lambda p: p.bash("cp main.py %s/outside/main.py" % TMP)),
+                       ("text file", lambda p: scratch_edit(p, os.path.join(TMP, "outside", "notes.txt")))):
+        p = in_work()
+        assert not p.state()["round_open"]
+        call(p)
+        assert not p.state()["round_open"] and not p.state()["outside_edits"], name
+    p = in_work()
+    p.set_phase("judge")
+    scratch_edit(p, outside)
+    assert p.state()["phase"] == "judge" and not p.state()["outside_edits"]  # only project files void a verdict
+    p = Proj({"main.py": BUGGY})  # a scratch script while looking is not counted: looking is what it is for
+    p.prompt(REQUEST)
+    scratch_edit(p, outside)
+    so, _ = p.rehearse("status")
+    assert not p.state()["outside_edits"] and COPY not in so and "next: register an ending" in so, so
+    # a bare name in the ending's command is not a mark: only a program given as a path closes a round
+    p = Proj({"main.py": BUGGY})
+    p.prompt(REQUEST)
+    p.rehearse("ending", "--cmd", "grep total main.py; python3 main.py", "--expect", "total", "contains", "total: 12",
+               "--cite", "request")
+    p.prompt("yes")
+    p.edit("main.py", "print('total: 11')\n")
+    p.run("grep total main.py")
+    assert p.state()["round_open"] and p.state()["failing_rounds"] == 0
+    p.run("python3 main.py")
+    assert p.state()["failing_rounds"] == 1
     print("loop breaker: ok")
 
     # ---------------- code change ----------------

@@ -87,7 +87,7 @@ class Proj:
     def rehearse(self, *args, who=None):
         r = subprocess.run([sys.executable, BIN, *args], cwd=self.root, capture_output=True, text=True, env=ENV)
         assert r.returncode == 0, r.stderr
-        return self.bash(shlex.join(["rehearse", *args]), r.stdout, who)
+        return r.stdout, self.bash(shlex.join(["rehearse", *args]), r.stdout, who)
 
     def spawn(self, env=None, kind="rehearse:director"):
         return self.pre("Agent", env=env, subagent_type=kind, description="judge", prompt="judge the fix")
@@ -154,6 +154,7 @@ try:
     assert ui["prompt"].startswith(TEXT) and s["run_folder"] in ui["prompt"], ui["prompt"][-400:]
     assert "findings.json" in ui["prompt"] and s["root"] in ui["prompt"]
     assert ui["model"] == "opus" and ui["subagent_type"] == "rehearse:director", ui
+    assert ui["run_in_background"] is False, ui  # the agent waits for the verdict instead of polling
     assert s["phase"] == "judge" and s["spawn_fingerprint"] and "main.py" not in str(s["spawn_fingerprint"]["files"])
     assert p.spawn({"REHEARSE_DIRECTOR_MODEL": "sonnet"})["hookSpecificOutput"]["updatedInput"]["model"] == "sonnet"
     both = {"REHEARSE_DIRECTOR_MODEL": "sonnet", "CLAUDE_PLUGIN_OPTION_DIRECTOR_MODEL": "haiku"}
@@ -180,6 +181,7 @@ try:
     p = in_work()
     p.spawn()
     p.verdict("not quite.\n" + REWORK)
+    assert "next: edit the project's files" in p.rehearse("status")[0]  # what to do now, from the command
     s = p.state()
     assert s["phase"] == "work" and s["rejections"] == 1 and s["findings"] == ["only the sample input is handled"]
 
@@ -331,6 +333,7 @@ try:
     assert blocked(p.stop(**UN), "next: spawn rehearse:director to review the ending")
     ui = p.spawn(UN)["hookSpecificOutput"]["updatedInput"]
     assert ui["prompt"].startswith(REVIEW) and os.path.join(p.state()["run_folder"], "state.json") in ui["prompt"] and ui["model"] == "opus"
+    assert ui["run_in_background"] is False, ui
     assert p.state()["phase"] == "confirm" and not p.state()["spawn_fingerprint"]
     out = p.verdict('{"review": "uncovered", "uncovered": ["the total includes tax"]}')
     s = p.state()
@@ -349,6 +352,25 @@ try:
     assert p.spawn() is None and p.stop() is None
     p.verdict('{"review": "confirmed"}')
     assert p.state()["phase"] == "confirm" and not p.state()["confirmation"]
+    # the review stops after two rounds, with the gaps on record; a malformed review is not a round
+    p = in_confirm()
+    p.spawn(UN)
+    p.verdict('{"review": "uncovered", "uncovered": ["the total includes tax"]}')
+    assert p.state()["review_rounds"] == 1 and p.state()["phase"] == "confirm"
+    p.spawn(UN)
+    p.verdict("no JSON here")
+    s = p.state()
+    assert s["review_rounds"] == 1 and s["uncovered"] == ["no JSON review in the final message"] and s["phase"] == "confirm", s
+    p.spawn(UN)
+    out = p.verdict('Noted: do not use the network\n{"review": "uncovered", "uncovered": ["the total includes tax", "it rounds to cents"]}')
+    s = p.state()
+    assert s["phase"] == "work" and s["confirmation"]["by"] == "director" and s["confirmation"]["affirmative"], s
+    assert s["confirmation"]["answer"] == "accepted after 2 reviews" and s["uncovered"] == [], s
+    assert s["review_gaps"] == ["the total includes tax", "it rounds to cents"], s
+    assert "edits are open" in out["systemMessage"] and "next: edit the project's files" in out["systemMessage"], out
+    so, _ = p.rehearse("status")
+    assert "review gaps" in so and "it rounds to cents" in so and "next: edit the project's files" in so, so
+    assert blocked(p.stop(**UN), "next: spawn rehearse:director")
     print("unattended review: ok")
 
     # ---------------- shortcut findings ----------------

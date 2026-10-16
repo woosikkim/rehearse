@@ -1,6 +1,6 @@
 {
   "name": "rehearse",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Makes the agent see a bug happen, or do a new program's job by hand, before it changes code. It registers the ending (the command and the result it must show), you confirm it in plain words, and an independent director checks the work before it may finish. Turn it on by starting a prompt with 'rehearse'.",
   "license": "MIT",
   "keywords": [

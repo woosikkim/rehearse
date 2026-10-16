@@ -20,7 +20,7 @@ Before any edit, the person who asked confirms that the ending says the right th
   - `no, the expected value is wrong`
   - `stop here and write the report`
 - When it is not available, write the sentence and the details, then stop. The user's next message is the answer.
-- In an unattended run (the plugin's `confirm_ending` setting is off), still write the sentence and the details, then spawn `rehearse:director` with the Agent tool instead of asking. It reviews the ending against the request and either confirms it or lists what it does not cover; register those too, then spawn it again.
+- In an unattended run (the plugin's `confirm_ending` setting is off), still write the sentence and the details, then spawn `rehearse:director` with the Agent tool instead of asking. It reviews the ending against the request and either confirms it or lists what it does not cover; register those too, then spawn it again. After two reviews the plugin accepts the ending as it stands; the report lists what the review still found uncovered.
 
 **After the answer.**
 

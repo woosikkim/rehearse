@@ -71,6 +71,6 @@ Write `.rehearsal/<run id>/report.md`. Its first line is one of:
 - `built, not verified against the real target`: when something could not be checked for real (a credential, a service that is down, a side effect that was simulated)
 - `not fixed`
 
-then why, in plain words. Then: the ending table (command, before, after, expected, PASS or FAIL) with each chain link as its own row and its "Revealed by"; the director's extra inputs and their results; what was reused (tools, APIs, libraries from Scout) and what was written, file by file, in plain words; what was verified for real and what could not be (and why); if not fixed, what is known and what to try next.
+then why, in plain words. Then: the ending table (command, before, after, expected, PASS or FAIL) with each chain link as its own row and its "Revealed by"; the director's extra inputs and their results; what was reused (tools, APIs, libraries from Scout) and what was written, file by file, in plain words; what was verified for real and what could not be (and why); if not fixed, what is known and what to try next. If the ending review left gaps (`rehearse status` lists them) or noted conduct rules, list them under "not covered by the ending" and "noted".
 
 Leave `.rehearsal/` in place. It is the evidence; the user decides when to delete it.

@@ -30,15 +30,16 @@ LONG_RUN = re.compile(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:ending|run|stag
 BIN = os.path.join(os.path.dirname(HERE), "bin", "rehearse")
 BASH_CAP_MS = 600000  # Claude Code's largest Bash timeout; rehearse ending/run get it so a slow baseline is not cut off
 NEED_ENDING = "register and confirm an ending first"
-NEED_LOOK = ("edits are locked after repeated failing rounds with no direct look; look directly (a stage step that "
-             "calls project code, or rehearse fetch to a known host) or make rehearse run pass")
+NEED_LOOK = S.NEED_LOOK
+INPLACE = ("sed", "perl", "patch")  # in-place editors: their targets are edits, as a redirect's or cp's are not
+REVIEW_ROUNDS = 2  # ending reviews in an unattended run; after that the ending is accepted with its gaps on record
 URL = re.compile(r"https?://([^/\s'\"<>:]+)")
 DIRECTOR = ("rehearse:director", "director")
 REPORT_LINES = ("fixed", "built, not verified against the real target", "not fixed")
 
 
-def status_line(s):
-    return "[rehearse] run %s, phase %s" % (s["run_id"], s["phase"])
+def status_line(s, nxt=None):
+    return "[rehearse] run %s, phase %s · next: %s" % (s["run_id"], s["phase"], nxt or S.next_step(s))
 
 
 def context(event, text):
@@ -89,7 +90,8 @@ def on_prompt(p, sid):
         if is_stop:
             return {"systemMessage": "rehearse stopped (run %s cancelled)" % s["run_id"]}
         if cur["phase"] == "work" and s["phase"] == "confirm":
-            return context("UserPromptSubmit", "[rehearse] the user confirmed the ending; edits are open.")
+            return context("UserPromptSubmit", "[rehearse] the user confirmed the ending; edits are open.\n"
+                           + status_line(cur))
         return None
     if rest is None or is_stop:
         return None
@@ -97,7 +99,7 @@ def on_prompt(p, sid):
     mode = word.group(1).lower() if word else None
     root = p.get("cwd") or os.getcwd()
     s = S.new_run(sid, root, mode, prompt, F.fingerprint(root))
-    return dict(context("UserPromptSubmit", instructions(mode, s["run_id"])),
+    return dict(context("UserPromptSubmit", instructions(mode, s["run_id"]) + "\n" + status_line(s)),
                 systemMessage="rehearse is on — type `rehearse stop` to stop")
 
 
@@ -135,7 +137,8 @@ def updated(tin, name, extra):
     except OSError:
         return None
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": dict(
-        tin, prompt=text + "\n\nThis run:\n" + extra, model=option("DIRECTOR_MODEL", "opus"))}}
+        tin, prompt=text + "\n\nThis run:\n" + extra, model=option("DIRECTOR_MODEL", "opus"),
+        run_in_background=False)}}  # the agent waits for the verdict instead of polling (probe P16)
 
 
 def spawn_review(s, tin):
@@ -226,8 +229,8 @@ def ending_marks(s):
         for seg in P.parse(cmd or "", s["root"]):
             if seg["runner"]:
                 runners.add(seg["runner"])
-            elif seg["pp"] and cmd == e.get("cmd"):
-                pps.add(seg["pp"])
+            elif seg["pp"] and os.path.isabs(str(seg["pp"])) and cmd == e.get("cmd"):
+                pps.add(seg["pp"])  # a bare name (grep, make) is not a mark: only a program given as a path
     return pps, runners
 
 
@@ -269,10 +272,30 @@ def unlock_rework(cur, msgs, why):
     msgs.append("edits are open again (%s)" % why)
 
 
+def scratch(root, real):
+    """A scratch edit: a code file outside the project. Counted toward the loop breaker, never refused."""
+    return F.is_code(real) and not real.startswith(os.path.realpath(root) + os.sep)
+
+
+def record_scratch(cur, real, msgs):
+    if cur["phase"] != "work":  # scratch scripts while looking are the point of looking
+        return
+    if real not in cur.setdefault("outside_edits", []):
+        cur["outside_edits"].append(real)
+    cur["round_open"] = True
+    note = S.scratch_note(cur)
+    if note and not cur.get("scratch_reminded"):
+        cur["scratch_reminded"] = True
+        msgs.append(note)
+
+
 def close_round(cur, passing, by, msgs):
     cur["round_open"] = False
     cur["rounds"].append({"passing": passing, "by": by, "at": time.time()})
     cur["failing_rounds"] = 0 if passing else cur["failing_rounds"] + 1
+    note = None if passing else S.scratch_note(cur)
+    if note:
+        msgs.append(note)
     if cur["failing_rounds"] < int(float(option("LOOP_BREAKER_ROUNDS", "2"))):
         return
     if runs_python(cur) or known_host(cur):
@@ -363,13 +386,20 @@ def on_post(p, sid):
     tin = p.get("tool_input") if isinstance(p.get("tool_input"), dict) else {}
     cwd = p.get("cwd") or s["root"]
     msgs, refused = [], False
+    event = p.get("hook_event_name")
     if tool in EDIT_TOOLS:
         path = tin.get("file_path") or tin.get("notebook_path")
-        k = F.kind(s["root"], P.realpath(cwd, path)) if path else None
-        if not k:
+        real = P.realpath(cwd, path) if path else None
+        k = F.kind(s["root"], real) if path else None
+        if not k and not (real and scratch(s["root"], real) and p.get("agent_type") not in DIRECTOR):
             return None
         with S.locked(s) as cur:
             L.log_edit(cur["run_folder"], tool, path, cur["phase"])
+            if not k:
+                record_scratch(cur, real, msgs)
+                return context(event, "\n".join("rehearse: " + m for m in msgs) + "\n" + status_line(cur)) \
+                    if msgs else None
+            cur["project_edited"] = True
             if k == "data":
                 cur["config_edits"].append({"path": path, "phase": cur["phase"], "at": time.time()})
             if cur["phase"] in ("judge", "done.passed"):
@@ -378,7 +408,7 @@ def on_post(p, sid):
                 msgs.append("project code changed after the verdict; back to work")
             if cur["phase"] == "work":
                 cur["round_open"] = True
-        return context("PostToolUse", "\n".join("rehearse: " + m for m in msgs)) if msgs else None
+        return context(event, "\n".join("rehearse: " + m for m in msgs) + "\n" + status_line(cur)) if msgs else None
     if tool == "AskUserQuestion":
         resp = p.get("tool_response") if isinstance(p.get("tool_response"), dict) else {}
         answers = resp.get("answers") if isinstance(resp.get("answers"), dict) else {}
@@ -390,12 +420,12 @@ def on_post(p, sid):
                 if yes:
                     cur["phase"] = "work"
             if yes:
-                return context("PostToolUse", "[rehearse] the user confirmed the ending; edits are open.")
+                return context(event, "[rehearse] the user confirmed the ending; edits are open.\n" + status_line(cur))
         if any(str(a).strip().lower().startswith("stop here") for a in answers.values()):
             with S.locked(s) as cur:
                 cur["stop_here"] = True
-            return context("PostToolUse", "rehearse: the user chose to stop here; write report.md starting with "
-                                          "\"not fixed\", then finish")
+            return context(event, "rehearse: the user chose to stop here; write report.md starting with "
+                                  "\"not fixed\", then finish\n" + status_line(cur))
         return None
     if tool != "Bash":
         return None
@@ -421,9 +451,15 @@ def on_post(p, sid):
                 close_round(cur, False, "direct run", msgs)
             elif any(F.kind(cur["root"], t) for seg in segs for t in seg["targets"]):
                 cur["round_open"] = True
+                cur["project_edited"] = True
+            else:
+                for real in (t for seg in segs if seg["prog"] in INPLACE for t in seg["targets"]):
+                    if scratch(cur["root"], real) and p.get("agent_type") not in DIRECTOR:
+                        record_scratch(cur, real, msgs)
     if not msgs:
         return None
-    return block(cur, "\n".join(msgs)) if refused else context("PostToolUse", "\n".join("rehearse: " + m for m in msgs))
+    return block(cur, "\n".join(msgs)) if refused else \
+        context(event, "\n".join("rehearse: " + m for m in msgs) + "\n" + status_line(cur))
 
 
 # ---------- SubagentStop: the verdict ----------
@@ -453,10 +489,21 @@ def on_review(s, text):
             cur["phase"] = "work"
             msg = "the director confirmed the ending; edits are open"
         else:
-            cur["uncovered"] = [str(u) for u in v.get("uncovered") or []] or ["no JSON review in the final message"]
-            msg = ("uncovered: %s. Register the uncovered requirements with rehearse ending, then spawn the review "
-                   "again" % "; ".join(cur["uncovered"]))
-    return {"systemMessage": "rehearse: " + msg}
+            cur["uncovered"] = [str(u) for u in v.get("uncovered") or []] or [
+                "the review listed nothing uncovered" if review == "uncovered" else "no JSON review in the final message"]
+            if review == "uncovered":  # a malformed review is not a round
+                cur["review_rounds"] = cur.get("review_rounds", 0) + 1
+            if review == "uncovered" and cur["review_rounds"] >= REVIEW_ROUNDS:
+                cur["confirmation"] = {"by": "director", "answer": "accepted after %d reviews" % REVIEW_ROUNDS,
+                                       "affirmative": True, "at": time.time()}
+                cur["review_gaps"], cur["uncovered"] = cur["uncovered"], []
+                cur["phase"] = "work"
+                msg = ("the director still lists gaps after %d reviews; edits are open. The report lists them under "
+                       "\"not covered by the ending\": %s" % (REVIEW_ROUNDS, "; ".join(cur["review_gaps"])))
+            else:
+                msg = ("uncovered: %s. Register the uncovered requirements with rehearse ending, then spawn the "
+                       "review again" % "; ".join(cur["uncovered"]))
+    return {"systemMessage": "rehearse: " + msg + "\n" + status_line(cur)}
 
 
 def on_subagent_stop(p, sid):
@@ -499,7 +546,7 @@ def on_subagent_stop(p, sid):
             cur["phase"] = back
             msg = "the director gave no verdict. Spawn rehearse:director again"
         cur["verdicts"].append(rec)
-    return {"systemMessage": "rehearse: " + msg}
+    return {"systemMessage": "rehearse: " + msg + "\n" + status_line(cur)}
 
 
 def void_pass(s):
@@ -563,7 +610,8 @@ def on_stop(p, sid):
             with S.locked(s) as cur:
                 FD.write(cur)
     if nxt:
-        return {"decision": "block", "reason": "%s · next: %s" % (status_line(s), nxt)}
+        note = S.scratch_note(s) if ph == "work" else None
+        return {"decision": "block", "reason": status_line(s, nxt) + ("\nrehearse: " + note if note else "")}
     if s.get("stop_here") and ph != "done.not_fixed":
         with S.locked(s) as cur:
             cur["phase"] = "done.not_fixed"
