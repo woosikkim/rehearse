@@ -1,0 +1,24 @@
+name: tests
+
+# The deterministic suite only: hook scenario tests, stage tests, role checks. Standard library, no model calls.
+# The plugin evals (claude plugin eval) call a model and need credentials; they are run by hand and never here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Run the test suite
+        run: python3 tests/run_all.py

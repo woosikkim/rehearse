@@ -2,9 +2,11 @@
 
 **A Claude Code plugin that makes the AI look at the real thing before it changes code, and won't let it call the work done until an independent check passes.**
 
-Use it to fix a program that errors or gives a wrong result, to build a small program that talks to the outside world, such as a scraper, an API client, an automation or a file converter, or to run a longer job in steps, such as "collect the data, process it, write a draft, stop before upload".
+[![tests](https://github.com/woosikkim/rehearse/actions/workflows/tests.yml/badge.svg)](https://github.com/woosikkim/rehearse/actions/workflows/tests.yml) [![release](https://img.shields.io/github/v/release/woosikkim/rehearse)](https://github.com/woosikkim/rehearse/releases) [![license](https://img.shields.io/github/license/woosikkim/rehearse)](LICENSE)
 
 ## Why
+
+Use it to fix a program that errors or gives a wrong result, to build a small program that talks to the outside world, such as a scraper, an API client, an automation or a file converter, or to run a longer job in steps, such as "collect the data, process it, write a draft, stop before upload".
 
 Coding agents guess. They read some code, edit it, rerun the program and edit again, instead of looking at the thing that holds the answer: the server's real response, or the actual data one file hands to the next. One direct look usually finds the cause at once.
 
