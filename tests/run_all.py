@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCRIPTS = ["test_hooks.py", "test_stage.py", "test_director_checks.py", "test_stdlib_only.py", "test_guard.py"]
+SCRIPTS = ["test_hooks.py", "test_job.py", "test_roles.py", "test_stage.py", "test_director_checks.py", "test_stdlib_only.py", "test_guard.py"]
 
 failed = []
 for name in SCRIPTS:

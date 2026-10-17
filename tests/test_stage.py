@@ -41,7 +41,7 @@ class Proj:
             self.write(rel, body)
         hook(dict(hook_event_name="UserPromptSubmit", session_id=self.sid, cwd=self.root,
                   prompt="rehearse fix the total"))
-        assert self.state()["phase"] == "observe"
+        assert self.state()["phase"] == "goal"
 
     def write(self, rel, body):
         with open(os.path.join(self.root, rel), "w") as f:
@@ -127,29 +127,25 @@ try:
     assert "opened a network connection" not in out, out
     print("replay notices: ok")
 
-    # ---- call record (and the hook's direct look)
-    p.set(phase="work")
+    # ---- call record
+    p.set(phase="build")
     out, res = p.step("import lib")
     assert res["accepted"] and res["project_files"] == ["lib.py"], res  # importing runs the module body
     out, res = p.step("lib.total([5, 7])")
     assert "value: 12" in out and res["project_files"] == ["lib.py"], (out, res)
-    p.bash("rehearse stage step 'lib.total([5, 7])'", out)
-    assert p.state()["direct_looks"] == 1, p.state()["direct_looks"]
     out, res = p.step("import json")
     assert res["accepted"] and res["project_files"] == [], res
     out, res = p.step("json.dumps({'a': [1]})")
     assert res["accepted"] and res["project_files"] == [], res
-    p.bash("rehearse stage step \"json.dumps({'a': [1]})\"", out)
-    assert p.state()["direct_looks"] == 1, p.state()["direct_looks"]
     print("call record: ok")
 
     # ---- created-module import
     p.write("helper.py", "VALUE = 3\n")
-    p.set(phase="observe", created=[os.path.join(p.root, "helper.py")])
+    p.set(phase="look", created=[os.path.join(p.root, "helper.py")])
     for code in ("import helper", "from helper import VALUE"):
         out, res = p.step(code)
         assert not res["accepted"] and res["error"] == server.CREATED and server.CREATED in out, (code, out)
-    p.set(phase="work")
+    p.set(phase="build")
     out, res = p.step("from helper import VALUE")
     assert res["accepted"] and res["error"] is None, res
     out, res = p.step("VALUE")

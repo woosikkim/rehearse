@@ -1,7 +1,7 @@
 {
   "name": "rehearse",
-  "version": "2.0.1",
-  "description": "Makes the agent see a bug happen, or do a new program's job by hand, before it changes code. It registers the ending (the command and the result it must show), you confirm it in plain words, and an independent director checks the work before it may finish. Turn it on by starting a prompt with 'rehearse'.",
+  "version": "3.0.0",
+  "description": "Splits a job into stages and has each one done by hand against the real target before any code: a worker looks and registers the stage's ending, you confirm it in plain words, a worker builds until it passes, and an independent director checks every stage and the whole job. Turn it on by starting a prompt with 'rehearse'.",
   "license": "MIT",
   "keywords": [
     "skill",
@@ -18,19 +18,19 @@
     "confirm_ending": {
       "type": "boolean",
       "title": "Confirm the ending",
-      "description": "Ask you to confirm the ending before any edit. Turn off for unattended runs; the director reviews it instead.",
+      "description": "Ask you to confirm the goal, the plan and each ending before any edit. Turn off for unattended runs; endings are then marked not confirmed by a person.",
       "default": true
     },
-    "max_rejections": {
+    "max_strikes": {
       "type": "number",
-      "title": "Director rejections",
-      "description": "How many times the director may send the work back before the run ends with a not fixed report.",
+      "title": "Strikes per stage",
+      "description": "How many relocks and director reworks a stage may take before it is stuck (unattended: the job ends with a not fixed report).",
       "default": 3
     },
     "loop_breaker_rounds": {
       "type": "number",
       "title": "Loop breaker rounds",
-      "description": "Failing edit rounds with no direct look before edits lock again.",
+      "description": "Failing runs in a row before edits lock again.",
       "default": 2
     },
     "director_model": {
@@ -38,6 +38,12 @@
       "title": "Director model",
       "description": "The model the director runs on.",
       "default": "opus"
+    },
+    "worker_model": {
+      "type": "string",
+      "title": "Worker model",
+      "description": "The model the look and build workers run on.",
+      "default": "sonnet"
     }
   }
 }

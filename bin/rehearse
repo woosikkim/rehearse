@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""rehearse: the plugin's commands. They read the run's state, never write it; the last line they print is
+"""rehearse: the plugin's commands. They read the job file, never write it; the last line they print is
 REHEARSE-RESULT <json>, which the plugin's hook records.
 
-  rehearse ending --cmd '<cmd>' [--tests '<cmd>'] --expect '<requirement>' <check> <value> --cite <citation> ...
-  rehearse run [--as-director]
+  rehearse plan --goal <item> request|assumed '<text>' (x4) --stage-def <name> fix|build '<plan line>' <inputs> <outputs>
+                [--stage-def ...] [--assume '<text>'] [--blocker '<text>'] [--from-request] [--stage <n>]
+  rehearse ending [--job] --cmd '<cmd>' [--tests '<cmd>'] --expect '<requirement>' <check> <value> --cite <citation>
+                  ... [--unchecked '<taste item>']
+  rehearse run [--as-director] [--stage <n>]
   rehearse fetch <url> [curl args]
-  rehearse status
+  rehearse job          (also: rehearse status)
 
+goal items: purpose, deliverable, done, out_of_scope. inputs/outputs: comma-separated paths, or - for none.
 checks: equals, contains, regex, exit_code, fixture_equals. citations: fixture:<name>, step:S<n>, request.
 """
 import argparse
@@ -27,7 +31,11 @@ TIMEOUT = float(os.environ.get("REHEARSE_RUN_TIMEOUT", "270"))  # two runs (prog
 
 
 def result(run, kind, **kw):
-    print("REHEARSE-RESULT " + json.dumps(dict(run=run, kind=kind, **kw), ensure_ascii=False))
+    # field order is an interface: run, kind, ok (when given), then the rest; graders read this line from the trace
+    head = dict(run=run, kind=kind)
+    if "ok" in kw:
+        head["ok"] = kw.pop("ok")
+    print("REHEARSE-RESULT " + json.dumps(dict(head, **kw), ensure_ascii=False))
 
 
 def clip(text, n=4000):
@@ -97,38 +105,106 @@ def sources(s):
     return {"request": "\n".join([s.get("request") or ""] + s.get("prompts", [])), "steps": steps, "fixtures": fixtures}
 
 
+def cmd_plan(s, argv):
+    ap = argparse.ArgumentParser(prog="rehearse plan")
+    ap.add_argument("--goal", nargs=3, action="append", default=[], metavar=("ITEM", "SOURCE", "TEXT"))
+    ap.add_argument("--stage-def", nargs=5, action="append", default=[],
+                    metavar=("NAME", "KIND", "LINE", "INPUTS", "OUTPUTS"))
+    ap.add_argument("--assume", action="append", default=[])
+    ap.add_argument("--blocker", action="append", default=[])
+    ap.add_argument("--from-request", action="store_true")
+    ap.add_argument("--stage", type=int)
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        return result(s["run_id"], "plan", ok=False, error="bad arguments; see the usage above")
+    request, goal, problems = sources(s)["request"], {}, []
+    for item, src, text in a.goal:
+        if item not in S.GOAL_ITEMS or src not in ("request", "assumed"):
+            problems.append("--goal %s %s: the item is one of %s, the source request or assumed"
+                            % (item, src, ", ".join(S.GOAL_ITEMS)))
+        elif src == "request" and text not in request:
+            problems.append("goal %s: %r does not appear word for word in the request or the answers" % (item, text))
+        else:
+            goal[item] = {"text": text, "source": src}
+    if a.stage is None:
+        problems += ["goal item %s has no answer and no assumption" % i for i in S.GOAL_ITEMS if i not in goal]
+    split = lambda x: [] if x.strip() in ("", "-") else [v.strip() for v in x.split(",") if v.strip()]  # noqa: E731
+    stages = [{"name": n, "kind": k, "line": ln, "inputs": split(i), "outputs": split(o)}
+              for n, k, ln, i, o in a.stage_def]
+    problems += ["stage %r: the kind is fix or build" % st["name"] for st in stages if st["kind"] not in ("fix", "build")]
+    if len(stages) != 1 and a.stage is not None:
+        problems.append("--stage <n> takes exactly one --stage-def")
+    elif not stages:
+        problems.append("a plan needs at least one --stage-def")
+    why = S.plan_refused(s, a.stage)
+    if why:
+        problems.append(why)
+    if problems:
+        print("plan refused:\n" + "\n".join("  " + p for p in problems))
+        return result(s["run_id"], "plan", ok=False, error="; ".join(problems))
+    assumptions = ["%s: %s" % (i, g["text"]) for i, g in goal.items() if g["source"] == "assumed"] + a.assume
+    for i, st in enumerate(stages, a.stage or 1):
+        print("stage %d %s (%s): %s; in: %s; out: %s" % (i, st["name"], st["kind"], st["line"],
+                                                       ", ".join(st["inputs"]) or "-", ", ".join(st["outputs"]) or "-"))
+    return result(s["run_id"], "plan", ok=True, goal=goal, stages=stages, assumptions=assumptions,
+                  blockers=a.blocker, from_request=a.from_request, change=a.stage)
+
+
 def cmd_ending(s, argv):
     ap = argparse.ArgumentParser(prog="rehearse ending")
+    ap.add_argument("--job", action="store_true")
     ap.add_argument("--cmd", required=True)
     ap.add_argument("--tests")
     ap.add_argument("--expect", nargs=3, action="append", default=[], metavar=("REQUIREMENT", "CHECK", "VALUE"))
     ap.add_argument("--cite", action="append", default=[])
+    ap.add_argument("--unchecked", action="append", default=[])
+    # stage and stages_passed come right after kind: the multi-stage eval greps this line (brief section 13)
+    res = lambda **kw: result(s["run_id"], "ending", stage=s.get("stage"), stages_passed=S.passed(s), **kw)  # noqa
     try:
         a = ap.parse_args(argv)
     except SystemExit:
-        return result(s["run_id"], "ending", ok=False, error="bad arguments; see the usage above")
-    if s["phase"] not in ("observe", "confirm"):
-        print("an ending is registered in observe or confirm; the run is in %s" % s["phase"])
-        return result(s["run_id"], "ending", ok=False, error="wrong phase")
+        return res(ok=False, error="bad arguments; see the usage above")
+    why = S.ending_refused(s, a.job)
+    if not why and not (a.job and not S.final(s)) and s.get("reopen") and not s["reopen"]["looks"]:
+        why = S.NO_LOOK  # refused before the command runs: an ending with side effects must not run first
+    if why:
+        print(why)
+        return res(ok=False, error=why)
     if len(a.cite) != len(a.expect):
         print("every --expect needs its own --cite")
-        return result(s["run_id"], "ending", ok=False, error="every --expect needs its own --cite")
+        return res(ok=False, error="every --expect needs its own --cite")
     exps = [{"requirement": r, "check": c, "value": v, "cite": cite} for (r, c, v), cite in zip(a.expect, a.cite)]
     problems = E.validate(exps, sources(s))
     if problems:
         print("ending refused:\n" + "\n".join("  " + p for p in problems))
-        return result(s["run_id"], "ending", ok=False, error="; ".join(problems))
-    s = dict(s, ending={"cmd": a.cmd, "tests": a.tests, "expectations": exps})
+        return res(ok=False, error="; ".join(problems))
+    s = dict(s, ending={"cmd": a.cmd, "tests": a.tests, "expectations": exps, "unchecked": a.unchecked})
     before = run_ending(s)
     base = None
     if not before["all_pass"]:
         base = baseline(s, a.tests)
         print("baseline: %s -> %s" % (base["cmd"], base.get("note") or "rc %s" % base.get("rc")))
-    return result(s["run_id"], "ending", ok=True, ending=s["ending"], before=before, baseline=base,
-                  all_pass=before["all_pass"])
+    return res(ok=True, job=a.job, ending=s["ending"], before=before, baseline=base, all_pass=before["all_pass"])
 
 
 def cmd_run(s, argv):
+    n = None
+    if "--stage" in argv:
+        try:
+            n = int(argv[argv.index("--stage") + 1])
+        except (IndexError, ValueError):
+            print("usage: rehearse run --stage <n> --as-director")
+            return result(s["run_id"], "run", ok=False, error="bad arguments")
+        stages = s.get("stages") or []
+        why = ("--stage needs --as-director" if "--as-director" not in argv else
+               "--stage is accepted only in the final stage" if not S.final(s) else
+               "stage %d has no archived ending" % n if not (1 <= n <= len(stages) and stages[n - 1].get("ending"))
+               else None)
+        if why:
+            print(why)
+            return result(s["run_id"], "run", ok=False, error=why)
+        s = dict(s, ending=stages[n - 1]["ending"])
     if not s.get("ending"):
         print("no ending registered yet; run rehearse ending first")
         return result(s["run_id"], "run", ok=False, error="no ending")
@@ -136,6 +212,8 @@ def cmd_run(s, argv):
     print("all expectations pass" if r["all_pass"] else "not every expectation passes")
     if "--as-director" in argv:
         r["as_director"] = True
+    if n:
+        r["stage_rerun"] = n
     return result(s["run_id"], "run", ok=True, **r)
 
 
@@ -162,18 +240,9 @@ def cmd_fetch(s, argv):
                   rc=p.returncode, bytes=len(body))
 
 
-def cmd_status(s, argv):
-    print("run %s: phase %s, failing rounds %d, direct looks %d"
-          % (s["run_id"], s["phase"], s.get("failing_rounds", 0), s.get("direct_looks", 0)))
-    print("next: " + S.next_step(s))
-    if s.get("review_gaps"):
-        print("review gaps (the report lists them under \"not covered by the ending\"): " + "; ".join(s["review_gaps"]))
-    if s.get("uncovered"):
-        print("uncovered: " + "; ".join(s["uncovered"]))
-    note = S.scratch_note(s)
-    if note:
-        print("reminder: " + note)
-    return result(s["run_id"], "status", ok=True, phase=s["phase"])
+def cmd_job(s, argv):
+    print(S.job_text(s))
+    return result(s["run_id"], "job", ok=True, phase=s["phase"], stage=s.get("stage"), stages_passed=S.passed(s))
 
 
 def cmd_stage(s, argv):
@@ -183,15 +252,17 @@ def cmd_stage(s, argv):
 
 
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ("ending", "run", "fetch", "status", "stage"):
+    cmds = {"plan": cmd_plan, "ending": cmd_ending, "run": cmd_run, "fetch": cmd_fetch, "job": cmd_job,
+            "status": cmd_job, "stage": cmd_stage}
+    if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return result(None, "usage", ok=False)
     kind = sys.argv[1]
     s = S.find_for_cwd(os.getcwd())
     if not s:
-        print("no active rehearse run in this directory or above it")
+        print("no active rehearse job in this directory or above it")
         return result(None, kind, ok=False, error="no run")
-    {"ending": cmd_ending, "run": cmd_run, "fetch": cmd_fetch, "status": cmd_status, "stage": cmd_stage}[kind](s, sys.argv[2:])
+    cmds[kind](s, sys.argv[2:])
 
 
 if __name__ == "__main__":

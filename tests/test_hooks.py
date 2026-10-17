@@ -3,7 +3,6 @@
 Drives the hook with Claude Code-shaped payloads in scratch projects (git and non-git) under a temp dir,
 with CLAUDE_PLUGIN_DATA pointed at that temp dir. Each block prints "<name>: ok".
 """
-import http.server
 import json
 import os
 import shlex
@@ -11,7 +10,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOOK = os.path.join(ROOT, "hooks", "rehearse_hook.py")
@@ -96,15 +94,16 @@ class Proj:
         assert r.returncode == 0, r.stderr
         return r.stdout, self.bash(shlex.join(["rehearse", *args]), r.stdout, r.stderr)
 
+    def job(self, request=None):
+        """Activate and record a one-stage plan: the job is in look."""
+        self.prompt(request or REQUEST)
+        self.rehearse(*PLAN)
+        assert self.state()["phase"] == "look", self.state()["phase"]
+
     def state(self):
         d = os.path.join(DATA, "sessions", self.sid)
         names = sorted(n for n in os.listdir(d) if n.endswith(".json")) if os.path.isdir(d) else []
         return json.load(open(os.path.join(d, names[-1]))) if names else None
-
-    def set_phase(self, phase):  # stands in for story 4 (director verdicts) only
-        s = self.state()
-        s["phase"] = phase
-        json.dump(s, open(s["path"], "w"))
 
 
 BUGGY = "print('total: 10')\n"
@@ -112,11 +111,14 @@ FIXED = "print('total: 12')\n"
 REQUEST = "rehearse fix the report; it should print total: 12"
 ENDING = ["ending", "--cmd", "python3 main.py", "--expect", "prints the right total", "contains", "total: 12",
           "--cite", "request"]
+PLAN = ["plan", "--goal", "purpose", "assumed", "the job works", "--goal", "deliverable", "assumed", "the program",
+        "--goal", "done", "assumed", "the ending passes", "--goal", "out_of_scope", "assumed", "nothing else",
+        "--stage-def", "only", "fix", "do the job", "-", "-"]
 
 
 def in_confirm(git=True, files=None):
     p = Proj(dict({"main.py": BUGGY}, **(files or {})), git=git)
-    p.prompt(REQUEST)
+    p.job()
     p.rehearse(*ENDING)
     assert p.state()["phase"] == "confirm", p.state()["phase"]
     return p
@@ -125,7 +127,7 @@ def in_confirm(git=True, files=None):
 def in_work(**kw):
     p = in_confirm(**kw)
     p.prompt("yes")
-    assert p.state()["phase"] == "work"
+    assert p.state()["phase"] == "build"
     return p
 
 
@@ -136,18 +138,16 @@ try:
         assert p.prompt(t) is None and p.state() is None, t
     out = p.prompt("rehearse 이 스크래퍼 고쳐줘")
     s = p.state()
-    assert s and s["phase"] == "observe" and s["mode"] is None and s["root"] == os.path.realpath(p.root)
+    assert s and s["phase"] == "goal" and s["root"] == os.path.realpath(p.root)
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "[rehearse] run %s activated" % s["run_id"] in ctx and "instructions" in ctx, ctx
+    assert "[rehearse] job %s activated" % s["run_id"] in ctx and "`Rehearse: job <id>`" in ctx, ctx
     assert out["systemMessage"] == "rehearse is on — type `rehearse stop` to stop"
     assert os.path.isdir(os.path.join(s["run_folder"], "fixtures")) and s["run_folder"].startswith(p.root)
-    for t, mode in (("Rehearse: fix x", "fix"), ("/rehearse x", None), ("rehearse build a scraper", "build"),
-                    ("REHEARSE fix: y", "fix")):
-        q = Proj({})
+    for t in ("Rehearse: fix x", "/rehearse x", "rehearse build a scraper", "REHEARSE the total is wrong"):
+        q = Proj({})  # the words fix and build are no longer read: every job starts in goal
         out = q.prompt(t)
-        assert out is not None and q.state()["mode"] == mode, t
-        if mode == "fix":  # the stopping rule is in the fix instructions
-            assert "a change that exists only in a copy is not a fix" in out["hookSpecificOutput"]["additionalContext"]
+        assert out is not None and "activated" in out["hookSpecificOutput"]["additionalContext"], t
+        assert q.state()["phase"] == "goal", t
     assert p.prompt("rehearse stop")["systemMessage"].startswith("rehearse stopped")
     assert p.state()["phase"] == "done.cancelled" and "cancelled by user" in p.state()["notes"]
     print("activation: ok")
@@ -156,16 +156,18 @@ try:
     p = in_confirm()
     p.prompt("ok, but check the tax too")
     s = p.state()
-    assert s["phase"] == "confirm" and s["confirmation"]["answer"] == "ok, but check the tax too"
-    assert not s["confirmation"]["affirmative"]
-    assert "[rehearse]" in text(p.prompt("네 맞아요")) and p.state()["phase"] == "work"
+    assert s["phase"] == "look" and s["confirmation"]["answer"] == "ok, but check the tax too"  # a no: look again
+    assert not s["confirmation"]["affirmative"] and s["prompts"] == ["ok, but check the tax too"]
+    p.rehearse(*ENDING)
+    out = text(p.prompt("네 맞아요"))
+    assert "[rehearse]" in out and "next:" not in out and p.state()["phase"] == "build", out  # status line: refusals only
     p.prompt("rehearse fix something else")  # while active: stored, no new run
     s = p.state()
-    assert s["phase"] == "work" and s["prompts"] == ["rehearse fix something else"]
+    assert s["phase"] == "build" and s["prompts"][-1] == "rehearse fix something else"
     for yes in ("yes", "y", "ok", "correct", "confirmed", "네", "예", "응", "맞아", "맞아요", " YES "):
         q = in_confirm(git=False)
         q.prompt(yes)
-        assert q.state()["phase"] == "work", yes
+        assert q.state()["phase"] == "build", yes
     q = in_confirm(git=False)
     q.prompt("rehearse stop")
     assert q.state()["phase"] == "done.cancelled"
@@ -173,12 +175,12 @@ try:
 
     # ---------------- edit gate ----------------
     p = Proj({"main.py": BUGGY, "a.py": "x = 1\n", "nb.ipynb": "{}"})
-    p.prompt(REQUEST)
+    p.job()
     run = p.state()["run_folder"]
     for tool in ("Write", "Edit", "MultiEdit"):
         out = p.pre(tool, file_path=p.j("main.py"))
         assert denied(out) and "register and confirm an ending first" in text(out), (tool, out)
-        assert "next: register an ending" in text(out), out
+        assert "next: look at stage 1" in text(out), out
     assert denied(p.pre("NotebookEdit", notebook_path=p.j("nb.ipynb")))
     for cmd in ("echo x > main.py", "echo x | tee main.py", "cp a.py main.py", "sed -i s/10/12/ main.py",
                 "cd sub/.. && echo x >> main.py", "mv a.py main.py"):
@@ -189,7 +191,7 @@ try:
     assert p.pre("Write", file_path=p.j("notes.txt")) is None  # not project code
     p.write("main.py", "print('total: 11')\n")  # python3 -c open('main.py','w')... : unseen by the recorder
     _, out = p.rehearse(*ENDING)
-    assert out["decision"] == "block" and "main.py" in out["reason"] and p.state()["phase"] == "observe", out
+    assert out["decision"] == "block" and "main.py" in out["reason"] and p.state()["phase"] == "look", out
     subprocess.run(["git", "checkout", "-q", "main.py"], cwd=p.root, check=True)
     p.rehearse(*ENDING)
     assert p.state()["phase"] == "confirm"
@@ -199,7 +201,7 @@ try:
 
     # ---------------- created files ----------------
     p = Proj({"main.py": BUGGY, "x.c": "int main(){return 0;}\n", "old.sh": "echo hi\n"})
-    p.prompt(REQUEST)
+    p.job()
     run = p.state()["run_folder"]
     out_dir = os.path.join(TMP, "outside")
     os.makedirs(out_dir, exist_ok=True)
@@ -213,7 +215,7 @@ try:
     for cmd in ("python3 %s" % scaffold, "bash %s/new.sh" % out_dir, "python3 %s/dl.py" % run, "python3 new.py",
                 "python3 -m newmod", "cd . && python3 new.py", "source %s/new.sh" % out_dir):
         out = p.pre("Bash", command=cmd)
-        assert denied(out) and "was created during this run" in text(out), cmd
+        assert denied(out) and "was created during this stage" in text(out), cmd
     for cmd in ("cat new.py", "rm -f new.py.bak", "diff new.py main.py", "python3 main.py", "bash old.sh",
                 "cc -o prog x.c && ./prog", "grep print new.py"):
         assert p.pre("Bash", command=cmd) is None, cmd
@@ -222,49 +224,49 @@ try:
 
     # ---------------- ending gate ----------------
     p = Proj({"main.py": FIXED})  # already prints what the request asks for
-    p.prompt(REQUEST)
+    p.job()
     _, out = p.rehearse(*ENDING)
     assert out["decision"] == "block" and "the ending shows nothing wrong" in out["reason"], out
-    assert p.state()["phase"] == "observe" and p.state()["ending"] is None
+    assert p.state()["phase"] == "look" and p.state()["ending"] is None
     p = Proj({})
-    p.prompt("rehearse build a tool that prints done")
+    p.job("rehearse build a tool that prints done")
     _, out = p.rehearse("ending", "--cmd", "./newprog", "--expect", "says done", "contains", "done", "--cite", "request")
     s = p.state()
     assert s["phase"] == "confirm" and s["ending"]["before"]["rc"] == 127, s["ending"]
     p = Proj({"main.py": BUGGY}, git=False)
-    p.prompt(REQUEST)
+    p.job()
     p.write("main.py", "print('total: 13')\n")
     _, out = p.rehearse(*ENDING)
-    assert out["decision"] == "block" and "main.py" in out["reason"] and p.state()["phase"] == "observe"
+    assert out["decision"] == "block" and "main.py" in out["reason"] and p.state()["phase"] == "look"
     print("ending gate: ok")
 
     # ---------------- citations ----------------
     p = Proj({"main.py": BUGGY, "data.txt": "price_cents: 1250\n"})
-    p.prompt(REQUEST)
-    p.run("echo 'price_cents: 1250'")  # S1
+    p.job()
+    p.run("echo 'price_cents: 1250'")  # S2 (S1 is the plan)
     so, out = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "x", "contains", "total: 99", "--cite", "request")
-    assert "does not appear in request" in so and p.state()["phase"] == "observe"
-    for cite, value in (("step:S9", "price_cents: 1250"), ("step:S1", "price_cents: 9")):
+    assert "does not appear in request" in so and p.state()["phase"] == "look"
+    for cite, value in (("step:S9", "price_cents: 1250"), ("step:S2", "price_cents: 9")):
         so, _ = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "x", "contains", value, "--cite", cite)
-        assert "ending refused" in so and p.state()["phase"] == "observe", so
-    rid = p.state()["run_id"]  # S5: the command named through a shell variable, its refusal echoing the value
+        assert "ending refused" in so and p.state()["phase"] == "look", so
+    rid = p.state()["run_id"]  # S6: the command named through a shell variable, its refusal echoing the value
     p.bash("R=rehearse; $R ending --cmd x --expect x contains 'price_cents: 1250'",
            "ending refused: 'price_cents: 1250' does not appear in step:S9\nREHEARSE-RESULT "
            + json.dumps({"run": rid, "kind": "ending", "ok": False}))
-    for cite in ("step:S3", "step:S5"):  # the plugin's own ending output echoes values: never a source, however spelled
+    for cite in ("step:S4", "step:S6"):  # the plugin's own ending output echoes values: never a source, however spelled
         so, _ = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "x", "contains", "price_cents: 1250",
                            "--cite", cite)
-        assert "ending refused" in so and p.state()["phase"] == "observe", (cite, so)
+        assert "ending refused" in so and p.state()["phase"] == "look", (cite, so)
     so, _ = p.rehearse("fetch", "file://" + p.j("data.txt"))
     fixture = p.state()["fixtures"][0]
     assert os.path.exists(os.path.join(p.state()["run_folder"], "fixtures", fixture))
     open(os.path.join(p.state()["run_folder"], "fixtures", "fake"), "w").write("price_cents: 1250\n")
     so, _ = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "x", "contains", "1250", "--cite", "fixture:fake")
-    assert "not a plugin-written fixture" in so and p.state()["phase"] == "observe", so
+    assert "not a plugin-written fixture" in so and p.state()["phase"] == "look", so
     so, _ = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "x", "regex", r"cents: \d{5}",
                        "--cite", "fixture:" + fixture)
     assert "ending refused" in so
-    so, _ = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "x", "contains", "1250", "--cite", "step:S1",
+    so, _ = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "x", "contains", "1250", "--cite", "step:S2",
                        "--expect", "y", "regex", r"cents: \d+", "--cite", "fixture:" + fixture)
     assert p.state()["phase"] == "confirm", so
     so, _ = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "x", "contains", "1250")
@@ -273,19 +275,19 @@ try:
 
     # ---------------- results ----------------
     p = Proj({"main.py": BUGGY})
-    p.prompt(REQUEST)
+    p.job()
     rid = p.state()["run_id"]
     good = {"run": rid, "kind": "ending", "ok": True, "all_pass": False, "before": {"rc": 0},
             "ending": {"cmd": "python3 main.py", "tests": None, "expectations": []}}
     line = "REHEARSE-RESULT " + json.dumps(good)
-    assert p.bash("cat notes.txt", line) is None and p.state()["phase"] == "observe"
-    assert p.bash("grep x f | rehearse-other", line) is None and p.state()["phase"] == "observe"
+    assert p.bash("cat notes.txt", line) is None and p.state()["phase"] == "look"
+    assert p.bash("grep x f | rehearse-other", line) is None and p.state()["phase"] == "look"
     p.bash("rehearse status", "REHEARSE-RESULT " + json.dumps(dict(good, run="other-run")))
-    assert p.state()["phase"] == "observe"
+    assert p.state()["phase"] == "look"
     out = p.bash("rehearse ending --cmd x | head -5", "first lines only")
     assert "result line missing; rerun without a pipe" in text(out)
     p.bash("rehearse ending", line + "\nREHEARSE-RESULT " + json.dumps({"run": rid, "kind": "status", "ok": True}))
-    assert p.state()["phase"] == "observe"  # only the last line applies
+    assert p.state()["phase"] == "confirm"  # every result line applies, in order; a later status line changes nothing
     p.bash("cd sub && rehearse ending", "REHEARSE-RESULT {}\n" + line)
     assert p.state()["phase"] == "confirm"
     # rehearse ending / run may take minutes (the program, then the tests): they get the Bash tool's longest timeout
@@ -297,13 +299,13 @@ try:
     # The command invoked through an interpreter by path (the executable bit can be lost on a
     # Windows-mounted checkout) is still the plugin command: the program position is the script.
     p = Proj({"main.py": BUGGY})
-    p.prompt(REQUEST)
+    p.job()
     rid = p.state()["run_id"]
     p.bash("python3 /opt/plugin/bin/rehearse ending", "REHEARSE-RESULT " + json.dumps(dict(good, run=rid)))
     assert p.state()["phase"] == "confirm"
     # Named through a shell variable (seen when bin/ is not on PATH): the result line still counts.
     p = Proj({"main.py": BUGGY})
-    p.prompt(REQUEST)
+    p.job()
     rid = p.state()["run_id"]
     p.bash("R=rehearse; command -v rehearse >/dev/null || R=/opt/plugin/bin/rehearse\n$R ending --cmd x",
            "REHEARSE-RESULT " + json.dumps(dict(good, run=rid)))
@@ -312,180 +314,40 @@ try:
 
     # ---------------- second activation ----------------
     p = Proj({"main.py": BUGGY, "data.txt": "total: 12\n"})
-    p.prompt(REQUEST)
+    p.job()
     first = p.state()
     p.rehearse("fetch", "file://" + p.j("data.txt"))
     p.run("echo 'total: 12'")
     p.prompt("rehearse stop")
-    p.prompt("rehearse fix it again")
+    p.job("rehearse fix it again")
     second = p.state()
     assert second["run_id"] != first["run_id"] and second["run_folder"] != first["run_folder"]
-    assert second["phase"] == "observe" and second["fixtures"] == []
+    assert second["phase"] == "look" and second["fixtures"] == []
     fx = p.state()["fixtures"] or json.load(open(first["path"]))["fixtures"]
     for cite in ("step:S1", "fixture:" + fx[0], "step:S2"):  # S2 would be the echo of the refused ending
         so, _ = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "x", "contains", "total: 12", "--cite", cite)
-        assert "ending refused" in so and p.state()["phase"] == "observe", (cite, so)
+        assert "ending refused" in so and p.state()["phase"] == "look", (cite, so)
     assert denied(p.pre("Edit", file_path=p.j("main.py")))
     print("second activation: ok")
-
-    # ---------------- loop breaker ----------------
-    p = in_work()
-    p.edit("main.py", "print('total: 11')\n")
-    p.run("python3 main.py")
-    assert p.state()["phase"] == "work" and p.state()["failing_rounds"] == 1
-    p.run("cat main.py")
-    p.run("grep total main.py")
-    assert p.state()["failing_rounds"] == 1 and len(p.state()["rounds"]) == 1
-    p.edit("main.py", FIXED)
-    out = p.run("python3 main.py")
-    assert p.state()["phase"] == "rework-observe" and "failing rounds" in text(out), out
-    assert denied(p.pre("Edit", file_path=p.j("main.py")))
-    p.rehearse("run")
-    assert p.state()["phase"] == "work" and p.state()["failing_rounds"] == 0
-    p.edit("main.py", FIXED + "# a\n")
-    p.run("cd . && python3 main.py")
-    p.edit("main.py", FIXED + "# b\n")
-    p.run("python3 main.py")
-    assert p.state()["phase"] == "rework-observe"
-    rid = p.state()["run_id"]
-    p.bash("rehearse stage step 'main'", "REHEARSE-RESULT " + json.dumps(
-        {"run": rid, "kind": "stage-step", "project_files": []}))
-    assert p.state()["phase"] == "rework-observe"
-    p.bash("rehearse stage step 'main'", "REHEARSE-RESULT " + json.dumps(
-        {"run": rid, "kind": "stage-step", "project_files": [p.j("main.py")]}))
-    assert p.state()["phase"] == "work" and p.state()["direct_looks"] == 1
-    # with a tests command: any run of the same test runner closes a round
-    p = Proj({"report.py": BUGGY, "tests/test_report.py": "def test_x():\n    assert True\n"})
-    p.prompt(REQUEST)
-    p.rehearse("ending", "--cmd", "python3 report.py", "--tests", "pytest tests/", "--expect", "total", "contains",
-               "total: 12", "--cite", "request")
-    p.prompt("yes")
-    p.edit("report.py", "print('total: 11')\n")
-    p.bash("pytest tests/test_report.py", "1 passed")
-    p.edit("report.py", "print('total: 13')\n")
-    p.bash("pytest tests/", "1 passed")
-    assert p.state()["phase"] == "rework-observe"
-    # a fetch to a host named in the request is a direct look
-    p = Proj({"main.py": BUGGY})
-
-    class Quiet(http.server.SimpleHTTPRequestHandler):
-        def __init__(self, *a, **kw):
-            super().__init__(*a, directory=p.root, **kw)
-
-        def log_message(self, *a):
-            pass
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    base = "http://127.0.0.1:%d" % srv.server_address[1]
-    p.prompt(REQUEST + "; the data comes from %s/main.py" % base)
-    p.rehearse(*ENDING)
-    p.prompt("yes")
-    for k in (1, 2):
-        p.edit("main.py", "print('total: %d')\n" % k)
-        p.run("python3 main.py")
-    assert p.state()["phase"] == "rework-observe"
-    p.rehearse("fetch", "file:///nonexistent/never")  # fails: no fixture, no look
-    assert p.state()["phase"] == "rework-observe"
-    p.rehearse("fetch", base + "/main.py")
-    assert p.state()["phase"] == "work" and p.state()["direct_looks"] == 1
-    srv.shutdown()
-    # no stage for the language and no known host: a reminder, not a lock
-    p = Proj({"main.js": "console.log('total: 10')\n"})
-    p.prompt("rehearse fix main.js; it should print total: 12")
-    p.rehearse("ending", "--cmd", "node main.js", "--expect", "total", "contains", "total: 12", "--cite", "request")
-    p.prompt("yes")
-    for k in (1, 2):
-        p.edit("main.js", "console.log('total: %d')\n" % k)
-        out = p.bash("node main.js", "total: %d" % k)
-    s = p.state()
-    assert s["phase"] == "work" and "reminder" in text(out) and \
-        "loop breaker not enforced: no stage for this language" in s["notes"], (s["phase"], out)
-    # scratch edits (code files outside the project) count toward the loop breaker and are never refused
-    outside = os.path.join(TMP, "outside", "patch.py")
-    os.makedirs(os.path.dirname(outside), exist_ok=True)
-    open(outside, "w").write("x = 1\n")
-    COPY = "a change that exists only in a copy is not a fix"
-
-    def scratch_edit(p, path, **extra):
-        return p.ev("PostToolUse", tool_name="Edit", tool_input={"file_path": path}, tool_response={}, **extra)
-    p = in_work()
-    out = scratch_edit(p, outside)
-    s = p.state()
-    assert s["round_open"] and s["outside_edits"] == [outside], s
-    assert COPY in text(out) and "next: rerun the ending with rehearse run" in text(out), out
-    assert scratch_edit(p, outside) is None  # the reminder comes once at an edit
-    out = p.run("python3 main.py")
-    assert p.state()["failing_rounds"] == 1 and COPY in text(out), out  # and on every failing round
-    out = p.ev("Stop")
-    assert out["decision"] == "block" and COPY in out["reason"], out  # and at Stop
-    p.bash("sed -i s/1/2/ " + outside)
-    assert p.state()["round_open"] and p.state()["outside_edits"] == [outside]
-    _, out = p.rehearse("run")
-    assert p.state()["phase"] == "rework-observe" and "next: look directly" in text(out), out
-    assert denied(p.pre("Edit", file_path=p.j("main.py")))
-    p = in_work()  # a failed command's reminder carries its own event name
-    scratch_edit(p, outside)
-    out = p.ev("PostToolUseFailure", tool_name="Bash", tool_input={"command": "python3 main.py"}, error="exit 1")
-    assert out["hookSpecificOutput"]["hookEventName"] == "PostToolUseFailure" and COPY in text(out), out
-    assert "next: edit the project's files" in text(out), out  # the failing rerun closed the round
-    p = in_work()  # after a project edit the reminder stops
-    scratch_edit(p, outside)
-    p.edit("main.py", FIXED + "# x\n")
-    assert p.state()["project_edited"] and COPY not in p.ev("Stop")["reason"]
-    p = in_work()  # `rehearse status` says what to do next and repeats the reminder
-    scratch_edit(p, outside)
-    so, _ = p.rehearse("status")
-    assert "next: rerun the ending with rehearse run" in so and COPY in so, so
-    for name, call in (("redirect", lambda p: p.bash("python3 main.py > %s/outside/out.py" % TMP)),
-                       ("run folder", lambda p: scratch_edit(p, os.path.join(p.state()["run_folder"], "notes.py"))),
-                       ("director", lambda p: scratch_edit(p, outside, agent_type="rehearse:director", agent_id="a1")),
-                       ("cp", lambda p: p.bash("cp main.py %s/outside/main.py" % TMP)),
-                       ("text file", lambda p: scratch_edit(p, os.path.join(TMP, "outside", "notes.txt")))):
-        p = in_work()
-        assert not p.state()["round_open"]
-        call(p)
-        assert not p.state()["round_open"] and not p.state()["outside_edits"], name
-    p = in_work()
-    p.set_phase("judge")
-    scratch_edit(p, outside)
-    assert p.state()["phase"] == "judge" and not p.state()["outside_edits"]  # only project files void a verdict
-    p = Proj({"main.py": BUGGY})  # a scratch script while looking is not counted: looking is what it is for
-    p.prompt(REQUEST)
-    scratch_edit(p, outside)
-    so, _ = p.rehearse("status")
-    assert not p.state()["outside_edits"] and COPY not in so and "next: register an ending" in so, so
-    # a bare name in the ending's command is not a mark: only a program given as a path closes a round
-    p = Proj({"main.py": BUGGY})
-    p.prompt(REQUEST)
-    p.rehearse("ending", "--cmd", "grep total main.py; python3 main.py", "--expect", "total", "contains", "total: 12",
-               "--cite", "request")
-    p.prompt("yes")
-    p.edit("main.py", "print('total: 11')\n")
-    p.run("grep total main.py")
-    assert p.state()["round_open"] and p.state()["failing_rounds"] == 0
-    p.run("python3 main.py")
-    assert p.state()["failing_rounds"] == 1
-    print("loop breaker: ok")
 
     # ---------------- code change ----------------
     for git in (True, False):
         p = Proj({"main.py": "import json\njson.dump({'n': 10}, open('output.json', 'w'))\nprint('total: 10')\n",
                   "config.yaml": "rate: 1\n"}, git=git)
-        p.prompt(REQUEST)
+        p.job()
         p.run("python3 main.py")
         assert os.path.exists(p.j("output.json"))
         p.rehearse(*ENDING)
         assert p.state()["phase"] == "confirm", git
         assert denied(p.pre("Edit", file_path=p.j("config.yaml")))
     p = Proj({"main.py": BUGGY, "config.yaml": "rate: 1\n"}, git=False)
-    p.prompt(REQUEST)
+    p.job()
     assert denied(p.pre("Bash", command="sed -i 's/10/12/' main.py"))
     p.rehearse(*ENDING)
     p.prompt("yes")
-    p.set_phase("done.passed")
-    assert p.edit("config.yaml", "rate: 2\n") is not None
+    p.edit("config.yaml", "rate: 2\n")
     s = p.state()
-    assert s["phase"] == "work" and s["config_edits"][-1]["path"].endswith("config.yaml"), s
+    assert s["config_edits"][-1]["path"].endswith("config.yaml"), s
     print("code change: ok")
 
     # ---------------- non-git ----------------
@@ -493,7 +355,7 @@ try:
               "node_modules/left/index.js": "module.exports = 1\n", "lib/util.py": "y = 1\n"}, git=False)
     fp = F.fingerprint(p.root)
     assert not fp["git"] and sorted(fp["files"]) == ["lib/util.py", "main.py"], fp
-    p.prompt(REQUEST)
+    p.job()
     p.write("venv/lib/python3/site-packages/newpkg.py", "z = 1\n")  # what a pip install into the venv leaves
     p.write("node_modules/right/index.js", "module.exports = 2\n")
     assert F.code_change(fp, F.fingerprint(p.root)) == []
@@ -507,22 +369,22 @@ try:
     p = Proj({"main.py": BUGGY, "tests/test_main.py": "def test_ok():\n    assert True\n", ".venv/pyvenv.cfg": "x\n"})
     os.makedirs(p.j(".venv", "bin"))
     os.symlink(sys.executable, p.j(".venv", "bin", "python"))
-    p.prompt(REQUEST)
+    p.job()
     p.rehearse(*ENDING)
     b = p.state()["ending"]["baseline"]
     assert b["cmd"] == p.j(".venv", "bin", "python") + " -m pytest" and ("rc" in b or b["note"].startswith("no baseline")), b
     p = Proj({"main.py": BUGGY})
-    p.prompt(REQUEST)
+    p.job()
     p.rehearse(*ENDING[:3], "--tests", "no-such-runner-xyz", *ENDING[3:])
     b = p.state()["ending"]["baseline"]
     assert b["note"].startswith("no baseline: ") and "not found" in b["note"], b
     p = Proj({"main.py": BUGGY})
-    p.prompt(REQUEST)
+    p.job()
     p.rehearse(*ENDING[:3], "--tests", "sleep 5", *ENDING[3:], REHEARSE_RUN_TIMEOUT="1")
     s = p.state()
     assert s["phase"] == "confirm" and s["ending"]["baseline"]["note"] == "timed out; narrow with --tests", s["ending"]
     p = Proj({"main.py": BUGGY})
-    p.prompt(REQUEST)
+    p.job()
     p.rehearse(*ENDING)
     assert p.state()["ending"]["baseline"]["note"] == "no tests found"
     print("baseline: ok")
@@ -537,9 +399,9 @@ try:
     log = open(os.path.join(p.state()["run_folder"], "log.md")).read()
     assert "-u ***" in log and "Authorization: ***" in log and "https://api.x.com/items?page=2" in log, log
     assert "pw" not in log.replace("://me:***@", "") and "t0k" not in log and "abc" not in log, log
-    assert "://me:***@host" in log and "boom" in log and "S4 [observe] $ x" in log
+    assert "://me:***@host" in log and "boom" in log and "S4 [goal] $ x" in log
     recs = [json.loads(ln) for ln in open(os.path.join(p.state()["run_folder"], "commands.jsonl"))]
-    assert [r["step"] for r in recs] == ["S1", "S2", "S3", "S4"] and all(r["phase"] == "observe" for r in recs)
+    assert [r["step"] for r in recs] == ["S1", "S2", "S3", "S4"] and all(r["phase"] == "goal" for r in recs)
     print("log: ok")
 
     # ---------------- tracer (kept from 0.7, re-pointed) ----------------
@@ -581,7 +443,7 @@ try:
     assert (broken.returncode, broken.stdout, broken.stderr) == (plain.returncode, plain.stdout, plain.stderr) == (3, "6\n", "")
     # rehearse run shows the trace of the ending's project calls
     p = Proj({"calc.py": "def total(x):\n    return x + 10\n", "main.py": "import calc\nprint('total:', calc.total(0))\n"})
-    p.prompt(REQUEST)
+    p.job()
     so, _ = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "total", "contains", "total: 12",
                        "--cite", "request")
     assert "-> total(x=0) = 10" in so, so
@@ -591,7 +453,7 @@ try:
     for bad in ("not json", "42", "[]", json.dumps({"tool_name": "Bash", "tool_input": {"command": "x"}})):
         assert hook(bad) is None, bad
     p = Proj({"main.py": BUGGY})
-    p.prompt(REQUEST)
+    p.job()
     assert p.ev("SubagentStop") is None  # Stop rules are checked in test_director_checks.py
     assert p.pre("Agent", prompt="x") is None and p.pre("AskUserQuestion", questions=[]) is None
     assert p.ev("PreToolUse", tool_name="Bash", tool_input="not a dict") is None

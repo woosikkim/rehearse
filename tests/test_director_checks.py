@@ -65,6 +65,12 @@ class Proj:
         with open(self.j(rel), "w") as f:
             f.write(body)
 
+    def start(self, env=None):
+        """Activate and record a one-stage plan: the job is in look."""
+        self.ev("UserPromptSubmit", prompt="rehearse fix the report; it should print total: 12")
+        self.rehearse(*PLAN, env=env)
+        assert self.state()["phase"] == "look", self.state()["phase"]
+
     def ev(self, event, env=None, **kw):
         return hook(dict(hook_event_name=event, session_id=self.sid, cwd=self.root, **kw), **(env or {}))
 
@@ -74,8 +80,8 @@ class Proj:
     def pre(self, tool, who=None, env=None, **tin):
         return self.ev("PreToolUse", env, tool_name=tool, tool_input=tin, **(who or {}))
 
-    def bash(self, cmd, stdout="", who=None):
-        return self.ev("PostToolUse", tool_name="Bash", tool_input={"command": cmd},
+    def bash(self, cmd, stdout="", who=None, env=None):
+        return self.ev("PostToolUse", env, tool_name="Bash", tool_input={"command": cmd},
                        tool_response={"stdout": stdout, "stderr": "", "interrupted": False}, **(who or {}))
 
     def edit(self, rel, body):
@@ -84,16 +90,16 @@ class Proj:
         self.write(rel, body)
         return self.ev("PostToolUse", tool_name="Edit", tool_input={"file_path": self.j(rel)}, tool_response={})
 
-    def rehearse(self, *args, who=None):
+    def rehearse(self, *args, who=None, env=None):
         r = subprocess.run([sys.executable, BIN, *args], cwd=self.root, capture_output=True, text=True, env=ENV)
         assert r.returncode == 0, r.stderr
-        return r.stdout, self.bash(shlex.join(["rehearse", *args]), r.stdout, who)
+        return r.stdout, self.bash(shlex.join(["rehearse", *args]), r.stdout, who, env)
 
     def spawn(self, env=None, kind="rehearse:director"):
         return self.pre("Agent", env=env, subagent_type=kind, description="judge", prompt="judge the fix")
 
-    def verdict(self, text, agent_type="rehearse:director"):
-        return self.ev("SubagentStop", agent_type=agent_type, agent_id="a1b2c3", agent_transcript_path="/x",
+    def verdict(self, text, agent_type="rehearse:director", env=None):
+        return self.ev("SubagentStop", env, agent_type=agent_type, agent_id="a1b2c3", agent_transcript_path="/x",
                        stop_hook_active=False, last_assistant_message=text)
 
     def state(self):
@@ -101,14 +107,9 @@ class Proj:
         names = sorted(n for n in os.listdir(d) if n.endswith(".json")) if os.path.isdir(d) else []
         return json.load(open(os.path.join(d, names[-1]))) if names else None
 
-    def set(self, **kw):
-        s = self.state()
-        s.update(kw)
-        json.dump(s, open(s["path"], "w"))
-
     def report(self, line):
         with open(os.path.join(self.state()["run_folder"], "report.md"), "w") as f:
-            f.write(line + "\n\nbody\n")
+            f.write(line + "\n\nbody\n\n## Not verified\nnone\n")
 
     def findings(self):
         return json.load(open(os.path.join(self.state()["run_folder"], "findings.json")))
@@ -119,12 +120,15 @@ FIXED = "print('total: 12')\n"
 ENDING = ["ending", "--cmd", "python3 main.py", "--expect", "prints the right total", "contains", "total: 12",
           "--cite", "request"]
 PASS = 'Checked everything.\n{"verdict": "PASS", "findings": [], "extra_inputs": [], "tests": {"now": "ok"}}'
+PLAN = ["plan", "--goal", "purpose", "assumed", "the job works", "--goal", "deliverable", "assumed", "the program",
+        "--goal", "done", "assumed", "the ending passes", "--goal", "out_of_scope", "assumed", "nothing else",
+        "--stage-def", "only", "fix", "do the job", "-", "-"]
 REWORK = '{"verdict": "REWORK", "findings": ["only the sample input is handled"], "extra_inputs": [], "tests": {}}'
 
 
 def in_confirm(git=True, files=None):
     p = Proj(dict({"main.py": BUGGY}, **(files or {})), git=git)
-    p.ev("UserPromptSubmit", prompt="rehearse fix the report; it should print total: 12")
+    p.start()
     p.rehearse(*ENDING)
     assert p.state()["phase"] == "confirm", p.state()["phase"]
     return p
@@ -133,15 +137,15 @@ def in_confirm(git=True, files=None):
 def in_work(**kw):
     p = in_confirm(**kw)
     p.ev("UserPromptSubmit", prompt="yes")
-    assert p.state()["phase"] == "work"
+    assert p.state()["phase"] == "build"
     return p
 
 
-def rejected_three_times():
+def rejected_three_times(env=None):
     p = in_work()
     for n in range(3):
         p.spawn()
-        p.verdict(REWORK, agent_type="director" if n == 1 else "rehearse:director")
+        p.verdict(REWORK, env=env)
     return p
 
 
@@ -159,7 +163,7 @@ try:
     assert p.spawn({"REHEARSE_DIRECTOR_MODEL": "sonnet"})["hookSpecificOutput"]["updatedInput"]["model"] == "sonnet"
     both = {"REHEARSE_DIRECTOR_MODEL": "sonnet", "CLAUDE_PLUGIN_OPTION_DIRECTOR_MODEL": "haiku"}
     assert p.spawn(both)["hookSpecificOutput"]["updatedInput"]["model"] == "haiku"
-    assert p.spawn(kind="director")["hookSpecificOutput"]["updatedInput"]["prompt"].startswith(TEXT)
+    assert p.spawn(kind="director") is None  # only the namespaced rehearse:director is the plugin's director
     assert p.pre("Agent", subagent_type="general-purpose", prompt="x") is None
     print("spawn: ok")
 
@@ -170,31 +174,28 @@ try:
     before = p.state()
     p.verdict(PASS, agent_type="rehearse:rehearser")  # a foreign agent changes nothing
     after = p.state()
-    assert (after["phase"], after["verdicts"], after["rejections"]) == ("judge", [], 0), after["phase"]
+    assert (after["phase"], after["verdicts"], after["strikes"]) == ("judge", [], 0), after["phase"]
     p.verdict(PASS)
     s = p.state()
-    assert s["phase"] == "done.passed" and s["verdicts"][-1]["verdict"] == "PASS" and s["pass_fingerprint"]
-    p.write("main.py", "print('total: 13')\n")  # a code change after PASS, seen at the next hook call
-    p.pre("Bash", command="ls")
-    assert p.state()["phase"] == "work", p.state()["phase"]
+    assert s["phase"] == "done.passed" and s["verdicts"][-1]["verdict"] == "PASS"
 
     p = in_work()
     p.spawn()
     p.verdict("not quite.\n" + REWORK)
-    assert "next: edit the project's files" in p.rehearse("status")[0]  # what to do now, from the command
+    assert "next: build stage 1" in p.rehearse("status")[0]  # what to do now, from the command
     s = p.state()
-    assert s["phase"] == "work" and s["rejections"] == 1 and s["findings"] == ["only the sample input is handled"]
+    assert s["phase"] == "build" and s["strikes"] == 1 and s["findings"] == ["only the sample input is handled"]
 
     p = in_work(git=False)
     p.spawn()
     p.write("main.py", FIXED)  # changed between spawn and stop
     p.verdict(PASS)
     s = p.state()
-    assert s["phase"] == "work" and "void" in s["verdicts"][-1] and "main.py" in s["verdicts"][-1]["void"], s
+    assert s["phase"] == "build" and "void" in s["verdicts"][-1] and "main.py" in s["verdicts"][-1]["void"], s
 
-    p = rejected_three_times()
+    p = rejected_three_times({"REHEARSE_CONFIRM_ENDING": "0"})
     s = p.state()
-    assert s["phase"] == "done.not_fixed" and s["rejections"] == 3 and s["report_pending"], s["phase"]
+    assert s["phase"] == "done.not_fixed" and s["strikes"] == 3, s["phase"]
     print("verdict: ok")
 
     # ---------------- stop matrix ----------------
@@ -212,7 +213,7 @@ try:
     p.edit("main.py", FIXED + "# later, unrelated\n")  # a closed run does not come back on a later edit
     assert p.stop() is None and p.state()["phase"] == "done.passed"
 
-    p = rejected_three_times()
+    p = rejected_three_times({"REHEARSE_CONFIRM_ENDING": "0"})
     assert blocked(p.stop(), 'write report.md starting with "not fixed"')
     p.report("fixed")
     assert blocked(p.stop(), '"not fixed"')
@@ -221,19 +222,14 @@ try:
 
     p = in_confirm()
     assert p.stop() is None  # confirm, attended (the default)
-    assert blocked(p.stop(REHEARSE_CONFIRM_ENDING="false"), "next: spawn rehearse:director")
-    assert blocked(p.stop(CLAUDE_PLUGIN_OPTION_CONFIRM_ENDING="false"), "next:")
-    assert blocked(p.stop(EVAL_REHEARSE_CONFIRM_ENDING="0"), "next:")  # the eval tool's env form
     p.ev("UserPromptSubmit", prompt="rehearse stop")
     assert p.stop() is None  # done.cancelled
 
     p = Proj({"main.py": BUGGY})
-    p.ev("UserPromptSubmit", prompt="rehearse fix the report; it should print total: 12")
+    p.start()
     out = p.stop()
-    assert blocked(out, "next: register an ending with rehearse ending") and "phase observe" in out["reason"], out
+    assert blocked(out, "next: look at stage 1") and "phase look" in out["reason"], out
     p = in_work()
-    assert blocked(p.stop(), "next: spawn rehearse:director")
-    p.set(phase="rework-observe")
     assert blocked(p.stop(), "next: spawn rehearse:director")
 
     for phase in ("work", "judge"):  # the report rule: "fixed" with an expectation not verified
@@ -245,29 +241,28 @@ try:
         p.report("built, not verified against the real target: no credentials here")
         assert blocked(p.stop(), "next: spawn rehearse:director"), phase
 
-    for make in (in_work, lambda: Proj({"main.py": BUGGY})):  # an honest give-up ends the run only unattended
+    for make in (in_work, lambda: Proj({"main.py": BUGGY})):  # an honest give-up ends the job only unattended
         p = make()
         if p.state() is None:
-            p.ev("UserPromptSubmit", prompt="rehearse fix the report; it should print total: 12")
+            p.start()
         p.report("not fixed: the sandbox hides the tool, nothing was changed")
         assert blocked(p.stop(), "next:")  # attended: the user has "stop here"; the agent does not
         assert p.stop(EVAL_REHEARSE_CONFIRM_ENDING="0") is None and p.state()["phase"] == "done.not_fixed"
 
     p = in_work()  # the loop breaker rounds setting is read where it is used
     p.edit("main.py", "print('total: 11')\n")
-    p.ev("PostToolUse", {"REHEARSE_LOOP_BREAKER_ROUNDS": "1"}, tool_name="Bash", tool_input={"command": "python3 main.py"},
-         tool_response={"stdout": "total: 11\n", "stderr": "", "interrupted": False})
-    assert p.state()["phase"] == "rework-observe" and p.state()["failing_rounds"] == 1, p.state()["phase"]
+    p.rehearse("run", env={"REHEARSE_LOOP_BREAKER_ROUNDS": "1"})
+    assert p.state()["phase"] == "look" and len(p.state()["relocks"]) == 1, p.state()["phase"]
 
-    p = Proj({"main.py": BUGGY})  # the run folder deleted mid-run: decisions read the data folder, the copy comes back
-    p.ev("UserPromptSubmit", prompt="rehearse fix the report; it should print total: 12")
+    p = Proj({"main.py": BUGGY})  # the run folder deleted mid-job: decisions read the data folder, the copy comes back
+    p.start()
     folder = p.state()["run_folder"]
     shutil.rmtree(folder)
-    assert blocked(p.stop(), "next: register an ending")
+    assert blocked(p.stop(), "next: look at stage 1")
     assert json.load(open(os.path.join(folder, "state.json")))["run_id"] == p.state()["run_id"]
     with open(os.path.join(folder, "state.json"), "w") as f:  # an edited copy changes no decision
         f.write(json.dumps(dict(p.state(), phase="done.passed")))
-    assert blocked(p.stop(), "next: register an ending")
+    assert blocked(p.stop(), "next: look at stage 1")
 
     p = Proj({"main.py": BUGGY})  # a hook bug fails open, leaves a traceback, tells the user
     p.ev("UserPromptSubmit", prompt="rehearse fix the report; it should print total: 12")
@@ -294,20 +289,17 @@ try:
     assert p.stop() is None and p.state()["phase"] == "done.not_fixed"
     print("stop matrix: ok")
 
-    # ---------------- director edits ----------------
+    # ---------------- director runs ----------------
     p = in_work()
     p.spawn()
-    assert denied(p.pre("Write", who=DIRECTOR, file_path=p.j("main.py"), content=FIXED))
-    assert denied(p.pre("Edit", who=DIRECTOR, file_path=p.j("main.py"), old_string="10", new_string="12"))
-    assert p.pre("Write", who=DIRECTOR, file_path=os.path.join(TMP, "notes.txt"), content="x") is None
     assert p.pre("Bash", who=DIRECTOR, command="ls") is None
     p.rehearse("run", "--as-director", who=DIRECTOR)
     s = p.state()
-    assert s["director_runs"][-1]["agent_type"] == "rehearse:director" and s["rounds"] == [] and s["phase"] == "judge"
+    assert s["director_runs"][-1]["agent_type"] == "rehearse:director" and s["runs"] == [] and s["phase"] == "judge"
     p.write("main.py", FIXED)  # the director changed code through the shell
     p.verdict(PASS)
-    assert p.state()["phase"] == "work" and "void" in p.state()["verdicts"][-1]
-    print("director edits: ok")
+    assert p.state()["phase"] == "build" and "void" in p.state()["verdicts"][-1]
+    print("director runs: ok")
 
     # ---------------- confirmation via question ----------------
     def ask(p, answer):
@@ -316,62 +308,27 @@ try:
     p = in_confirm()
     ask(p, "Not quite, the total should include tax")
     s = p.state()
-    assert s["phase"] == "confirm" and s["confirmation"]["answer"].startswith("Not quite") \
+    assert s["phase"] == "look" and s["confirmation"]["answer"].startswith("Not quite") \
         and not s["confirmation"]["affirmative"] and not s.get("stop_here"), s["confirmation"]
+    p.rehearse(*ENDING)  # registered again after the no, then confirmed
     ask(p, " Yes ")
     s = p.state()
-    assert s["phase"] == "work" and s["confirmation"]["affirmative"] and s["confirmation"]["by"] == "user"
+    assert s["phase"] == "build" and s["confirmation"]["affirmative"] and s["confirmation"]["by"] == "user"
     p = in_confirm()
     ask(p, "Stop here and write the report")
     assert p.state()["stop_here"] and p.state()["phase"] == "confirm"
     print("confirmation via question: ok")
 
-    # ---------------- unattended review ----------------
+    # ---------------- unattended: the ending is accepted at registration ----------------
     UN = {"REHEARSE_CONFIRM_ENDING": "false"}
-    REVIEW = open(os.path.join(ROOT, "hooks", "instructions", "director-review.md")).read().rstrip()
-    p = in_confirm()
-    assert blocked(p.stop(**UN), "next: spawn rehearse:director to review the ending")
-    ui = p.spawn(UN)["hookSpecificOutput"]["updatedInput"]
-    assert ui["prompt"].startswith(REVIEW) and os.path.join(p.state()["run_folder"], "state.json") in ui["prompt"] and ui["model"] == "opus"
-    assert ui["run_in_background"] is False, ui
-    assert p.state()["phase"] == "confirm" and not p.state()["spawn_fingerprint"]
-    out = p.verdict('{"review": "uncovered", "uncovered": ["the total includes tax"]}')
+    p = Proj({"main.py": BUGGY})
+    p.start(UN)
+    _, out = p.rehearse(*ENDING, env=UN)
     s = p.state()
-    assert s["phase"] == "confirm" and s["uncovered"] == ["the total includes tax"] and not s["confirmation"]
-    assert "spawn the review again" in out["systemMessage"]
-    out = p.stop(**UN)
-    assert blocked(out, "register the uncovered requirements with rehearse ending") and "tax" in out["reason"]
-    p.rehearse(*ENDING)  # a new registration clears the uncovered list
-    assert blocked(p.stop(**UN), "next: spawn rehearse:director to review the ending")
-    p.spawn(UN)
-    p.verdict('Read both.\n{"review": "confirmed"}')
-    s = p.state()
-    assert s["phase"] == "work" and s["confirmation"]["by"] == "director" and s["confirmation"]["at"]
-
-    p = in_confirm()  # attended: no review spawn, no review verdict, Stop allowed
-    assert p.spawn() is None and p.stop() is None
-    p.verdict('{"review": "confirmed"}')
-    assert p.state()["phase"] == "confirm" and not p.state()["confirmation"]
-    # the review stops after two rounds, with the gaps on record; a malformed review is not a round
-    p = in_confirm()
-    p.spawn(UN)
-    p.verdict('{"review": "uncovered", "uncovered": ["the total includes tax"]}')
-    assert p.state()["review_rounds"] == 1 and p.state()["phase"] == "confirm"
-    p.spawn(UN)
-    p.verdict("no JSON here")
-    s = p.state()
-    assert s["review_rounds"] == 1 and s["uncovered"] == ["no JSON review in the final message"] and s["phase"] == "confirm", s
-    p.spawn(UN)
-    out = p.verdict('Noted: do not use the network\n{"review": "uncovered", "uncovered": ["the total includes tax", "it rounds to cents"]}')
-    s = p.state()
-    assert s["phase"] == "work" and s["confirmation"]["by"] == "director" and s["confirmation"]["affirmative"], s
-    assert s["confirmation"]["answer"] == "accepted after 2 reviews" and s["uncovered"] == [], s
-    assert s["review_gaps"] == ["the total includes tax", "it rounds to cents"], s
-    assert "edits are open" in out["systemMessage"] and "next: edit the project's files" in out["systemMessage"], out
-    so, _ = p.rehearse("status")
-    assert "review gaps" in so and "it rounds to cents" in so and "next: edit the project's files" in so, so
+    assert s["phase"] == "build" and s["confirmation"]["by"] == "unattended" and s["confirmation"]["affirmative"], s
+    assert "not confirmed by a person" in json.dumps(out), out
     assert blocked(p.stop(**UN), "next: spawn rehearse:director")
-    print("unattended review: ok")
+    print("unattended: ok")
 
     # ---------------- shortcut findings ----------------
     tests = {"tests/test_main.py": "def test_total():\n    assert True\n",

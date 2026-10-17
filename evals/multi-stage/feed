@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""feed: a stand-in for an outside data source. `feed list` prints items as JSON; `feed publish <file>` publishes a file.
+Every call is appended to feed.log. The documentation in FEED.md is out of date on purpose: it names the fields differently."""
+import json, os, sys, time
+HERE = os.path.dirname(os.path.abspath(__file__))
+def log(line):
+    with open(os.path.join(HERE, "feed.log"), "a") as f:
+        f.write("%s %s\n" % (time.strftime("%H:%M:%S"), line))
+cmd = sys.argv[1:2]
+if cmd == ["list"]:
+    log("list")
+    with open(os.path.join(HERE, "items.json")) as f:
+        print(f.read().strip())
+elif cmd == ["publish"] and len(sys.argv) == 3:
+    log("publish %s" % sys.argv[2])
+    with open(os.path.join(HERE, ".published"), "w") as f:
+        f.write(sys.argv[2] + "\n")
+    print("published " + sys.argv[2])
+else:
+    print("usage: feed list | feed publish <file>", file=sys.stderr); sys.exit(2)

@@ -23,7 +23,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|AskUserQuestion",
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|AskUserQuestion|Agent",
         "hooks": [
           {
             "type": "command",
@@ -34,7 +34,7 @@
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|Agent",
         "hooks": [
           {
             "type": "command",

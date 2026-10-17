@@ -24,7 +24,7 @@ import traceback
 HERE = os.path.dirname(os.path.realpath(__file__))
 REFUSAL = "one step at a time; put the loop in the program, not the rehearsal"
 CREATED = "written during this rehearsal; the program that existed may read it, you may not import it"
-LOCKED = ("observe", "confirm", "rework-observe")
+LOCKED = ("goal", "job-confirm", "look", "confirm", "stuck")
 ALLOWED = (ast.Expr, ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Import, ast.ImportFrom)
 REFUSED = tuple(t for t in (getattr(ast, n, None) for n in (
     "FunctionDef", "AsyncFunctionDef", "ClassDef", "For", "AsyncFor", "While", "If", "IfExp", "With", "AsyncWith",
