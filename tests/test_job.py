@@ -679,6 +679,7 @@ try:
     assert p.phase() == "confirm" and p.state()["relocks"][-1]["looks"] == 1, p.phase()  # recorded once, here
     p.prompt("yes")
     assert p.phase() == "build" and not p.state()["start_director"]
+    assert not denied(p.edit("main.py", prog(2)))  # the relock is over: edits are allowed again after the look and the yes
     print("re-registration compares against the relock snapshot; a failing one goes confirm, then build: ok")
 
     p = relocked()  # the code was right; the old ending was wrong

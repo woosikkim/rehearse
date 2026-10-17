@@ -85,7 +85,7 @@ The plugin enforces two locks. There are no edits before you confirm the ending,
 | `max_strikes` | `3` | How many relocks and send-backs a stage may take before it is stuck. |
 | `loop_breaker_rounds` | `2` | Failing runs in a row before edits lock again. |
 | `worker_model` | `sonnet` | The model the workers run on. |
-| `director_model` | `opus` | The model the director runs on. |
+| `director_model` | `opus` | The model the director runs on. Keep the default unless you accept a lighter judge; it is the correctness gate. |
 
 Change them in your Claude Code settings file, for example:
 
@@ -105,7 +105,7 @@ The Claude Code setting `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` forces every su
 - **The stage session is Python only.** In other languages the worker looks through `fetch`, your existing programs and your tests. For a stage with no code, such as a draft, it looks at the file with `fetch`.
 - **The stage session replays.** Each new step reruns the earlier ones in a fresh process, so a step that sends or changes data on a server would repeat. The worker is told to make such requests once with `fetch`, and the stage session warns when a step opens a network connection.
 - **Some things cannot be verified in one run.** This covers anything that needs time, credentials you have not given, or an irreversible action. The report lists these as not verified.
-- **A job costs more than a plain request.** Workers and the director are extra AIs; the director runs on Opus by default.
+- **A job costs more than a plain request.** Workers and the director are extra AIs. The director runs on the strong model (Opus) by default, because it is the correctness gate; a real two-stage job cost about $5 with the manager and the director on Opus and the workers on Sonnet. `director_model` is an optional setting if you accept a lighter judge; choosing a model per stage is left for a later version, once there is usage to go on.
 - **A late problem cannot undo a passed stage.** If a later stage finds a blocker that makes an earlier, passed stage wrong, the only way out is to stop. The report names the stage that found it.
 - **It never changes your files on its own.** If code changed while edits were locked, it names the files and asks for them to be put back.
 - **No report means not fixed.** A job can end without a report: when you press Esc, when Claude Code hits a login or usage error, or when Claude Code stops holding the agent back. Treat any job without a report as not fixed.
