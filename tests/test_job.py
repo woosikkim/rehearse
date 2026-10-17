@@ -1171,6 +1171,45 @@ try:
     out = p.spawn()  # nor a director while it still runs
     assert denied(out) and "worker still running" in text(out), out
     print("Stop with a running worker: report checks first; no director while a worker runs: ok")
+
+    NOTE = "<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n</task-notification>"
+    q = Proj({})  # a background agent's completion arrives as a prompt: it is not the user's answer
+    q.prompt(REQ2)
+    for make in ("goal", "job-confirm", "confirm", "stuck"):
+        if make == "job-confirm":
+            q.rehearse(*PLAN2)
+            q.rehearse(*JOB_END)
+        if make == "confirm":
+            q = two_stage()
+            q.rehearse(*S1_END)
+        if make == "stuck":
+            q = building()
+            for _ in range(3):
+                q.spawn()
+                q.verdict(REWORK)
+        before = q.state()
+        assert before["phase"] == make, (make, before["phase"])
+        for wrapped in (NOTE, "  " + NOTE, "<system-reminder>x</system-reminder>"):
+            assert q.prompt(wrapped) is None
+        s = q.state()
+        assert (s["phase"], s["prompts"], s["redo"], s.get("stop_here")) == (
+            before["phase"], before["prompts"], before["redo"], before.get("stop_here")), make
+    q = two_stage()
+    q.rehearse(*S1_END)
+    q.prompt("no")  # a typed no still goes back to look
+    assert q.phase() == "look" and q.state()["redo"] == "no"
+    print("task notifications are not user prompts: ok")
+
+    p = final_stage()  # the final stage is named as such, never "stage 3 of 2"
+    so = p.rehearse("job")[0]
+    assert "final stage (job ending), 2 of 2 stages passed" in so and "stage 3" not in so, so
+    assert "next: build final stage (job ending)" in so, so
+    ui = p.spawn("rehearse:worker")["hookSpecificOutput"]["updatedInput"]
+    assert ui["prompt"].startswith("[rehearse] final stage (job ending) build\n") and "stage 3" not in ui["prompt"]
+    assert "final stage (job ending) build worker" in ctx(p.returned("rehearse:worker"))
+    r = p.stop()
+    assert blocked(r, "final stage (job ending), phase build") and "stage 3" not in r["reason"], r
+    print("the final stage's wording in rehearse job, notes and Stop reasons: ok")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 

@@ -49,6 +49,18 @@ def final(s):
     return bool(s.get("stages")) and (s.get("stage") or 0) > len(s["stages"])
 
 
+def label(s):
+    """How messages name the current stage: the job ending runs as a final stage after the planned ones."""
+    return "final stage (job ending)" if final(s) else "stage %s" % s.get("stage")
+
+
+def where(s):
+    n = len(s.get("stages") or [])
+    if final(s):
+        return "final stage (job ending), %d of %d stages passed" % (passed(s), n)
+    return "stage %s of %d (%d passed)" % (s.get("stage"), n, passed(s))
+
+
 def running(s):
     """"director" or "worker" while a background spawn of this stage has not stopped, else None."""
     sp = s.get("spawn") or {}
@@ -57,7 +69,7 @@ def running(s):
 
 def next_step(s):
     """What to do next, from the job file alone (no plugin variables: bin/rehearse calls this in a sandboxed shell)."""
-    ph, n = s.get("phase"), s.get("stage")
+    ph = s.get("phase")
     if ph in ("judge", "look", "build") and running(s):
         return "wait for the %s's notification, then rehearse job" % running(s)
     if ph == "goal":
@@ -73,22 +85,21 @@ def next_step(s):
             return "start a look worker to re-register the ending; the user said: %s" % s["redo"]
         if s.get("reopen") and not s["reopen"]["looks"]:
             return "look again (a stage step into project code, or rehearse fetch), then rehearse ending"
-        return "look at stage %s (start rehearse:worker; a one-stage job: yourself), then rehearse ending" % n
+        return "look at %s (start rehearse:worker; a one-stage job: yourself), then rehearse ending" % label(s)
     if ph == "confirm":
-        return "have the stage %s ending confirmed: ask the user" % n
+        return "have the %s ending confirmed: ask the user" % label(s)
     if ph == "build":
         if s.get("start_director"):
             return "start rehearse:director" + (" again" if s.get("verdicts") else "")
-        return "build stage %s (start rehearse:worker), rehearse run until it passes, then start rehearse:director" % n
+        return "build %s (start rehearse:worker), rehearse run until it passes, then start rehearse:director" % label(s)
     return NEXT.get(ph, "see the instructions")
 
 
 def job_text(s):
     """What `rehearse job` prints, and what the hook answers when the user types it as a prompt."""
     stages = s.get("stages") or []
-    lines = ["job %s: phase %s, stage %s of %d (%d passed), strikes %d, failing runs %d" % (
-        s["run_id"], s["phase"], s.get("stage"), len(stages), passed(s), s.get("strikes", 0),
-        s.get("failing_runs", 0))]
+    lines = ["job %s: phase %s, %s, strikes %d, failing runs %d" % (
+        s["run_id"], s["phase"], where(s), s.get("strikes", 0), s.get("failing_runs", 0))]
     lines += ["  stage %d %s (%s)%s: %s" % (i, st.get("name"), st.get("kind"), ", passed" if st.get("passed") else "",
                                            st.get("line")) for i, st in enumerate(stages, 1)]
     sp = s.get("spawn") or {}

@@ -32,13 +32,13 @@ BASH_CAP_MS = 600000  # Claude Code's largest Bash timeout; rehearse ending/run 
 NEED_ENDING = "edits are locked: register and confirm an ending first"
 DIRECTOR = ("rehearse:director",)  # agent_type is always namespaced (probes P16, P18d)
 WORKER = ("rehearse:worker",)
+WRAPPED = re.compile(r"<(?:task-notification|system-reminder)\b")  # harness messages that arrive as prompts
 REPORT_LINES = ("fixed", "built, not verified against the real target", "not fixed")
 NOT_VERIFIED = re.compile(r"(?im)^[#*\s]*not verified\b")
 
 
 def status_line(s, nxt=None):
-    return "[rehearse] job %s, stage %s, phase %s · next: %s" % (s["run_id"], s.get("stage"), s["phase"],
-                                                                 nxt or S.next_step(s))
+    return "[rehearse] job %s, %s, phase %s · next: %s" % (s["run_id"], S.label(s), s["phase"], nxt or S.next_step(s))
 
 
 def context(event, text):
@@ -112,7 +112,7 @@ def advance(cur):
         if m == 1:
             cur["stages"][0]["passed"] = True
         cur["phase"] = "done.passed"
-        return "[rehearse] stage %d passed. The job is done: write report.md, then finish" % n
+        return "[rehearse] %s passed. The job is done: write report.md, then finish" % S.label(cur)
     archive(cur)
     start_stage(cur, n + 1)
     if n < m:
@@ -133,12 +133,12 @@ def strike(cur, msgs):
         return
     if attended():
         cur["phase"] = "stuck"
-        msgs.append("stage %d has %d strikes and is stuck: ask the user once: stop here, try again, or change "
-                    "the stage" % (cur["stage"], cur["strikes"]))
+        msgs.append("%s has %d strikes and is stuck: ask the user once: stop here, try again, or change "
+                    "the stage" % (S.label(cur), cur["strikes"]))
     else:
         cur["phase"] = "done.not_fixed"
-        msgs.append('stage %d has %d strikes. Write report.md starting with "not fixed": what is known and what '
-                    'to try next' % (cur["stage"], cur["strikes"]))
+        msgs.append('%s has %d strikes. Write report.md starting with "not fixed": what is known and what '
+                    'to try next' % (S.label(cur), cur["strikes"]))
 
 
 def reopen(cur, why, **kw):
@@ -151,7 +151,7 @@ def relock(cur, msgs):
     n = cur["failing_runs"]
     reopen(cur, "relock")
     cur["relocks"].append({"at": time.time()})
-    cur["notes"].append("stage %d: edits relocked after %d failing runs" % (cur["stage"], n))
+    cur["notes"].append("%s: edits relocked after %d failing runs" % (S.label(cur), n))
     msgs.append("%d failing runs in a row: edits are locked again. Stop and say what you learned; the next step is "
                 "a look (a stage step into project code, or rehearse fetch)" % n)
     strike(cur, msgs)
@@ -206,8 +206,8 @@ def stuck_answer(cur, a, low):
         return "[rehearse] try again: next: " + S.next_step(cur)
     if low.startswith("change"):
         reopen(cur, "change", strikes=0, pending_change=True)
-        return ("[rehearse] change: edits are locked for stage %d. %s Then look again (a stage step into project "
-                "code, or rehearse fetch) and register the ending again" % (cur["stage"], (
+        return ("[rehearse] change: edits are locked for %s. %s Then look again (a stage step into project "
+                "code, or rehearse fetch) and register the ending again" % (S.label(cur), (
                     "Register the job ending again with rehearse ending." if S.final(cur) else
                     "rehearse plan --stage %d may rewrite the stage." % cur["stage"])))
     if cur["phase"] == "stuck":
@@ -236,6 +236,8 @@ def answer(cur, text, add=True):
 
 def on_prompt(p, sid):
     prompt = str(p.get("prompt") or "").strip()
+    if WRAPPED.match(prompt):  # a background agent's completion, delivered as a user message: not the user
+        return None
     m = ACTIVATE.match(prompt)
     rest = m.group(1).strip() if m else None
     is_stop = rest is not None and rest.lower() == "stop"
@@ -291,7 +293,7 @@ def about(s):
     """The current stage from the job file, for a worker's or the director's prompt."""
     st, e = stage_def(s), s.get("ending")
     goal = "; ".join("%s: %s (%s)" % (k, g["text"], g["source"]) for k, g in (s.get("goal") or {}).items())
-    lines = ["- stage %s of %d: %s (%s); plan line: %s" % (s["stage"], len(s.get("stages") or []), st.get("name"),
+    lines = ["- %s: %s (%s); plan line: %s" % (S.where(s), st.get("name"),
                                                           st.get("kind"), st.get("line")),
              "- inputs: %s; declared outputs: %s" % (", ".join(st.get("inputs") or []) or "none",
                                                      ", ".join(st.get("outputs") or []) or "none"),
@@ -312,7 +314,7 @@ def spawn_worker(s, tin):
         cur["worker"] = {"half": half, "at": time.time(), "relocks": len(cur["relocks"]), "reopen": bool(cur["reopen"])}
         cur["spawn"] = {"kind": "worker", "at": time.time(), "background": False, "stopped": False}
     kind = stage_def(cur).get("kind") or "build"
-    text = "\n\n".join(["[rehearse] stage %d %s" % (cur["stage"], half), instruction("worker.md"),
+    text = "\n\n".join(["[rehearse] %s %s" % (S.label(cur), half), instruction("worker.md"),
                         instruction("%s-%s.md" % (kind, half)), "This stage (from the job file):\n" + about(cur),
                         "The manager adds:\n" + str(tin.get("prompt") or "")])
     return updated(tin, text, option("WORKER_MODEL", "sonnet"))
@@ -610,14 +612,14 @@ def agent_note(s, tin, resp, event):
             if sp and not sp.get("agent_id") and not sp["stopped"] and \
                     sp["kind"] == ("director" if kind in DIRECTOR else "worker"):
                 sp.update(agent_id=resp.get("agentId"), background=True)
-        who = "director" if kind in DIRECTOR else "stage %s worker" % s["stage"]
+        who = "director" if kind in DIRECTOR else "%s worker" % S.label(s)
         return context(event, "[rehearse] %s launched in the background: end your turn now; when its notification "
                               "arrives, run `rehearse job` and do its next step." % who)
     if kind in DIRECTOR:
         head = s.get("verdict_note") or "[rehearse] no verdict was recorded"
     else:
         w = s.get("worker") or {}
-        head = "[rehearse] stage %s %s worker: %s" % (s["stage"], w.get("half"), w.get("outcome") or "no stop recorded")
+        head = "[rehearse] %s %s worker: %s" % (S.label(s), w.get("half"), w.get("outcome") or "no stop recorded")
     e = s.get("ending")
     return context(event, "\n".join([
         head, "phase %s · next: %s" % (s["phase"], S.next_step(s)),
@@ -778,23 +780,23 @@ def on_subagent_stop(p, sid):
                "at": time.time()}
         cur["spawn_fingerprint"] = None
         cur["verdicts"].append(rec)
-        n = cur["stage"]
+        n = S.label(cur)
         if changed or cur["phase"] != "judge":
             rec["void"] = "project files changed while the director worked: %s" % (", ".join(changed) or "edited")
             if cur["phase"] == "judge":
                 cur.update(phase="build", start_director=True)
-            msg = "[rehearse] stage %d: the verdict is void: %s. Start rehearse:director again" % (n, rec["void"])
+            msg = "[rehearse] %s: the verdict is void: %s. Start rehearse:director again" % (n, rec["void"])
         elif verdict == "PASS":
             msg = advance(cur)
         elif verdict == "REWORK":
             cur.update(findings=v.get("findings"), phase="build", start_director=False)
             strike(cur, msgs)
-            msg = "[rehearse] stage %d: the director asks for rework: %s" % (
+            msg = "[rehearse] %s: the director asks for rework: %s" % (
                 n, json.dumps(v.get("findings"), ensure_ascii=False))
         else:
             rec["void"] = "no JSON verdict in the director's final message"
             cur.update(phase="build", start_director=True)
-            msg = "[rehearse] stage %d: the director gave no verdict. Start rehearse:director again" % n
+            msg = "[rehearse] %s: the director gave no verdict. Start rehearse:director again" % n
         cur["verdict_note"] = " ".join([msg] + msgs)
     return None
 
