@@ -285,7 +285,7 @@ try:
     p.bash("rehearse status", "REHEARSE-RESULT " + json.dumps(dict(good, run="other-run")))
     assert p.state()["phase"] == "look"
     out = p.bash("rehearse ending --cmd x | head -5", "first lines only")
-    assert "result line missing; rerun without a pipe" in text(out)
+    assert "no result recorded for this rehearse command" in text(out)  # nothing was recorded: the command never ran
     p.bash("rehearse ending", line + "\nREHEARSE-RESULT " + json.dumps({"run": rid, "kind": "status", "ok": True}))
     assert p.state()["phase"] == "confirm"  # every result line applies, in order; a later status line changes nothing
     p.bash("cd sub && rehearse ending", "REHEARSE-RESULT {}\n" + line)

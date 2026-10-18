@@ -22,12 +22,12 @@ Before the plan, take a few read-only looks at the riskiest touchpoints only: ab
 ## 3. The plan
 
 ```
-rehearse plan --goal purpose request|assumed '<text>' --goal deliverable ... --goal done ... --goal out_of_scope ... \
+rehearse plan --goal purpose request|answer|assumed '<text>' --goal deliverable ... --goal done ... --goal out_of_scope ... \
   --stage-def <name> fix|build '<plan line>' <inputs> <outputs> [--stage-def ...] \
   [--assume '<text>'] [--blocker '<text>'] [--from-request]
 ```
 
-- A `request` goal text must appear word for word in the request or the user's answers.
+- A `request` goal text must appear word for word in the request; an `answer` one in the user's answers. The source is what the report shows.
 - Each stage is `fix` (something exists and is wrong) or `build` (something new). Its plan line is the result to reach, not the steps. Inputs and outputs are comma-separated paths, or `-`. Declare every file a stage produces as an output: declared outputs are locked like code until their stage's ending is confirmed.
 - When you write the plan yourself, make the stages as coarse as checking allows: a stage boundary goes only where reality must be checked before the next step can rely on it, or before an irreversible step. Never one action per stage.
 - When the request already contains a plan, its steps fix the stages: use them as the stages and add `--from-request`. You may only propose merging steps into fewer stages; a merge takes effect only when the user says yes to it at job confirmation, and never in an unattended job.
@@ -78,7 +78,7 @@ Before the next stage's worker starts, you may rewrite the job ending with what 
 
 ## 8. Stuck
 
-When strikes run out, or a look worker is blocked, ask the user once (confirm.md): stop here, try again, or change the stage. "Change" lets `rehearse plan --stage <n>` rewrite the current stage, with exactly one `--stage-def` and no goal flags. Never fake a blocked step.
+When strikes run out, or a look worker is blocked, ask the user once (confirm.md): stop here, try again, or change the stage, each with what it does and costs. Then record the answer yourself: `rehearse stuck --stop-here`, `rehearse stuck --try-again`, or `rehearse stuck --change --confirmed` (change only after the user's explicit yes to redoing the stage). The plugin does not read the decision from the user's words; the stage stays stuck, and the director is refused, until the command runs. "Change" then lets `rehearse plan --stage <n>` rewrite the current stage, with exactly one `--stage-def` and no goal flags. Never fake a blocked step.
 
 ## 9. The final stage
 

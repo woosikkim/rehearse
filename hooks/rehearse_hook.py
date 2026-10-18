@@ -34,6 +34,7 @@ DIRECTOR = ("rehearse:director",)  # agent_type is always namespaced (probes P16
 WORKER = ("rehearse:worker",)
 WRAPPED = re.compile(r"<(?:task-notification|system-reminder)\b")  # harness messages that arrive as prompts
 REPORT_LINES = ("fixed", "built, not verified against the real target", "not fixed")
+PLUGIN_FILES = ("results.jsonl", "state.json", "commands.jsonl", "log.md")  # the run folder's own records
 NOT_VERIFIED = re.compile(r"(?im)^[#*\s]*not verified\b")
 
 
@@ -132,9 +133,9 @@ def strike(cur, msgs):
     if cur["strikes"] < int(float(option("MAX_STRIKES", "3"))):
         return
     if attended():
-        cur["phase"] = "stuck"
-        msgs.append("%s has %d strikes and is stuck: ask the user once: stop here, try again, or change "
-                    "the stage" % (S.label(cur), cur["strikes"]))
+        cur.update(phase="stuck", stuck_at=time.time())
+        msgs.append("%s has %d strikes and is stuck: ask the user once (stop here, try again, or change the stage), "
+                    "then record the answer with rehearse stuck" % (S.label(cur), cur["strikes"]))
     else:
         cur["phase"] = "done.not_fixed"
         msgs.append('%s has %d strikes. Write report.md starting with "not fixed": what is known and what '
@@ -197,22 +198,10 @@ def confirm_answer(cur, a, low):
     return None
 
 
-def stuck_answer(cur, a, low):
-    """The stuck question's answers, in stuck or (attended) in look; None when the answer is neither."""
-    if low.startswith("try again"):
-        cur["pending_change"] = False
-        if cur["phase"] == "stuck":
-            cur.update(phase="build", strikes=0, failing_runs=0)
-        return "[rehearse] try again: next: " + S.next_step(cur)
-    if low.startswith("change"):
-        reopen(cur, "change", strikes=0, pending_change=True)
-        return ("[rehearse] change: edits are locked for %s. %s Then look again (a stage step into project "
-                "code, or rehearse fetch) and register the ending again" % (S.label(cur), (
-                    "Register the job ending again with rehearse ending." if S.final(cur) else
-                    "rehearse plan --stage %d may rewrite the stage." % cur["stage"])))
-    if cur["phase"] == "stuck":
-        cur["notes"].append("stuck answer: " + a)
-    return None
+STUCK_NOTE = ("[rehearse] still stuck. The plugin does not read the decision from the user's words: read their answer, "
+              "then record it with rehearse stuck --stop-here | --try-again | --change --confirmed (change only after "
+              "their explicit yes to redoing the stage). A question from the user is not a decision: answer it, then "
+              "ask again")
 
 
 def answer(cur, text, add=True):
@@ -220,15 +209,12 @@ def answer(cur, text, add=True):
     a = text.strip()
     low = a.lower().rstrip(".!")
     ph = cur["phase"]
-    if low.startswith("stop here"):
-        cur.update(stop_here=True, pending_change=False)
-        return 'rehearse: the user chose to stop here; write report.md starting with "not fixed", then finish'
+    cur["user_answer_at"] = time.time()  # rehearse stuck needs a user answer recorded after the question arose
     if ph in ("job-confirm", "confirm"):
         return confirm_answer(cur, a, low)
-    if ph == "stuck" or (ph == "look" and attended()):
-        msg = stuck_answer(cur, a, low)
-        if msg or ph == "stuck":
-            return msg
+    if ph == "stuck":  # the decision comes from `rehearse stuck` (apply_stuck), never from matching these words
+        cur["notes"].append("stuck answer: " + a)
+        return STUCK_NOTE
     if add:
         cur["prompts"].append(a)
     return None
@@ -348,7 +334,12 @@ def on_pre(p, sid):
         kind = tin.get("subagent_type")
         if kind in DIRECTOR and S.running(s) == "worker":
             return deny(s, "worker still running in the background; wait for its notification, then rehearse job")
-        if kind in DIRECTOR and s["phase"] in ("build", "judge"):
+        if kind in DIRECTOR and s["phase"] not in ("build", "judge"):
+            return deny(s, "the director is started in build (or again in judge); the job is in %s%s" % (
+                s["phase"], ": settle it with the user and record the answer with rehearse stuck; after try again, "
+                            "an ending that already passes goes straight to the director" if s["phase"] == "stuck"
+                else ""))
+        if kind in DIRECTOR:
             return spawn_director(s, tin)
         if kind in WORKER:
             if s["phase"] not in ("look", "build"):
@@ -357,11 +348,17 @@ def on_pre(p, sid):
         return None
     locked = s["phase"] in S.LOCKED
     outs = declared(s) if locked else set()
+    # the plugin's own records in the run folder are written by the plugin only, in every phase, for any caller:
+    # results.jsonl is what the hook reads, commands.jsonl is what citations cite, state.json is what bin reads
+    # ponytail: edit tools and shell write targets only; a script opening the file for append is not seen
+    own = {os.path.realpath(os.path.join(s["run_folder"], n)) for n in PLUGIN_FILES}
     if tool in EDIT_TOOLS:
         path = tin.get("file_path") or tin.get("notebook_path")
         if not path:
             return None
         real = P.realpath(cwd, path)
+        if real in own:
+            return deny(s, "%s is the plugin's own record; it is written by the plugin only" % path)
         if real in outs:
             return deny(s, "%s; %s is a declared output in the plan" % (NEED_ENDING, path))
         if locked and F.kind(s["root"], real):
@@ -373,6 +370,10 @@ def on_pre(p, sid):
     if tool != "Bash":
         return None
     segs = P.parse(str(tin.get("command") or ""), cwd)
+    for seg in segs:
+        for t in seg["targets"]:
+            if t in own:
+                return deny(s, "this command writes %s, the plugin's own record; it is written by the plugin only" % t)
     if locked:
         for seg in segs:
             for t in seg["targets"]:
@@ -568,9 +569,49 @@ def apply_run(cur, res, msgs):
     return False
 
 
+def apply_stuck(cur, res, msgs):
+    """The user's answer to the stuck question, recorded by the manager with `rehearse stuck`."""
+    a = res.get("answer")
+    if a != "stop here" and cur["phase"] != "stuck" and not (cur["phase"] == "look" and attended()):
+        msgs.append("rehearse stuck is accepted in stuck, or in look after a blocked look worker; the job is in %s"
+                    % cur["phase"])
+        return True
+    # structural: the user must have spoken (a prompt or a question answer) since the question arose: the stage
+    # becoming stuck, or the last worker's stop (a blocked look), or the stage start
+    stuck = cur["phase"] == "stuck"
+    since = cur.get("stuck_at") or 0 if stuck else max((cur.get("worker") or {}).get("at") or 0, cur["started_at"])
+    if not cur.get("user_answer_at") or cur["user_answer_at"] < since:
+        msgs.append("no answer from the user is recorded since %s: ask them (a prompt, or AskUserQuestion), then "
+                    "record what they chose" % ("the stage became stuck" if stuck else "the last worker stopped"))
+        return True
+    cur["notes"].append("stuck decision: %s" % a)
+    if a == "stop here":
+        cur.update(stop_here=True, pending_change=False)
+        msgs.append('the user chose to stop here; write report.md starting with "not fixed", then finish')
+    elif a == "try again":
+        cur["pending_change"] = False
+        if cur["phase"] == "stuck":
+            # a run that passed after the last verdict, with no edit since: the director next, not a build worker
+            runs, verdicts = cur["runs"], cur["verdicts"]
+            judged = verdicts[-1]["at"] if verdicts else 0
+            cur.update(phase="build", strikes=0, failing_runs=0, start_director=bool(
+                runs and runs[-1]["passing"] and runs[-1]["at"] > judged and not cur["project_edits_since_run"]))
+        msgs.append("try again: next: " + S.next_step(cur))
+    elif a == "change":
+        reopen(cur, "change", strikes=0, pending_change=True)
+        msgs.append("change: edits are locked for %s. %s Then look again (a stage step into project code, or "
+                    "rehearse fetch) and register the ending again" % (S.label(cur), (
+                        "Register the job ending again with rehearse ending." if S.final(cur) else
+                        "rehearse plan --stage %d may rewrite the stage." % cur["stage"])))
+    else:
+        msgs.append("rehearse stuck: unknown answer %r" % a)
+        return True
+    return False
+
+
 def apply_result(cur, res, msgs):
     kind = res.get("kind")
-    if not res.get("ok") and kind in ("plan", "ending", "run"):
+    if not res.get("ok") and kind in ("plan", "ending", "run", "stuck"):
         return False
     if kind == "plan":
         return apply_plan(cur, res, msgs)
@@ -578,6 +619,8 @@ def apply_result(cur, res, msgs):
         return apply_ending(cur, res, msgs)
     if kind == "run":
         return apply_run(cur, res, msgs)
+    if kind == "stuck":
+        return apply_stuck(cur, res, msgs)
     if kind == "fetch" and res.get("ok") and res.get("fixture"):
         cur["fixtures"].append(res["fixture"])
         look_step(cur)
@@ -668,9 +711,9 @@ def on_post(p, sid):
         with S.locked(s) as cur:
             if cur["phase"] == "goal":
                 cur["prompts"] += vals
+                cur["user_answer_at"] = time.time()
                 return None
-            stop = [v for v in vals if v.lower().startswith("stop here")]
-            msg = answer(cur, (stop or vals)[0], add=False)
+            msg = answer(cur, vals[0], add=False)
         return context(event, msg) if msg else None
     if tool != "Bash":
         return None
@@ -678,13 +721,20 @@ def on_post(p, sid):
     out = L.output_text(p)
     segs = P.parse(cmd, cwd)
     with S.locked(s) as cur:
-        L.log_command(cur["run_folder"], cmd, out, cur["phase"])
+        # The CLI records every result in the run folder before printing it (results.jsonl); the hook reads that
+        # record, so a filter on the output (head, tail -c, cut, a redirect) loses nothing. A printed line with an
+        # id is only an echo (cat log.md); lines without one (an older CLI, a test) still count when the command
+        # names rehearse (`R=/path/bin/rehearse; $R ending` names it through a variable).
+        # ponytail: a record is taken by the next Bash hook of any agent; a manager command landing in the instant
+        # between a background director's CLI exit and the director's own hook would take the director's record
+        recorded, cur["results_read"] = L.new_results(cur["run_folder"], cur.get("results_read", 0))
         plain = any(seg["prog"] == "rehearse" or os.path.basename(seg["pp"] or "") == "rehearse" for seg in segs)
-        # `R=/path/bin/rehearse; $R ending` names the command through a variable; the result line still counts.
-        found = results(out) if plain or re.search(r"(?<![\w-])rehearse(?![\w-])", cmd) else []
+        named = plain or bool(re.search(r"(?<![\w-])rehearse(?![\w-])", cmd))
+        found = recorded + ([r for r in results(out) if not r.get("id")] if named else [])
+        L.log_command(cur["run_folder"], cmd, out, cur["phase"], [r.get("kind") for r in found])
         if plain or found:
             if not found:
-                msgs.append("result line missing; rerun without a pipe")
+                msgs.append("no result recorded for this rehearse command; run it again on its own, from the project")
             for res in (r for r in found if r.get("run") == cur["run_id"]):
                 res["agent_type"] = p.get("agent_type")  # --as-director counts only for the director's own call
                 refused = apply_result(cur, res, msgs) or refused

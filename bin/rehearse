@@ -2,21 +2,24 @@
 """rehearse: the plugin's commands. They read the job file, never write it; the last line they print is
 REHEARSE-RESULT <json>, which the plugin's hook records.
 
-  rehearse plan --goal <item> request|assumed '<text>' (x4) --stage-def <name> fix|build '<plan line>' <inputs> <outputs>
+  rehearse plan --goal <item> request|answer|assumed '<text>' (x4) --stage-def <name> fix|build '<plan line>' <inputs> <outputs>
                 [--stage-def ...] [--assume '<text>'] [--blocker '<text>'] [--from-request] [--stage <n>]
   rehearse ending [--job] --cmd '<cmd>' [--tests '<cmd>'] --expect '<requirement>' <check> <value> --cite <citation>
                   ... [--unchecked '<taste item>']
   rehearse run [--as-director] [--stage <n>]
   rehearse fetch <url> [curl args]
   rehearse job          (also: rehearse status)
+  rehearse stuck --stop-here | --try-again | --change --confirmed   (the user's answer to the stuck question)
 
-goal items: purpose, deliverable, done, out_of_scope. inputs/outputs: comma-separated paths, or - for none.
+goal items: purpose, deliverable, done, out_of_scope; a source of request or answer needs the text word for word
+in the request or in the user's answers. inputs/outputs: comma-separated paths, or - for none.
 checks: equals, contains, regex, exit_code, fixture_equals. citations: fixture:<name>, step:S<n>, request.
 """
 import argparse
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import urllib.parse
@@ -28,6 +31,7 @@ import log as L  # noqa: E402
 import state as S  # noqa: E402
 
 TIMEOUT = float(os.environ.get("REHEARSE_RUN_TIMEOUT", "270"))  # two runs (program, then tests) fit the Bash cap
+FOLDER = None  # the run folder once the job is found: every result is recorded there before it is printed
 
 
 def result(run, kind, **kw):
@@ -35,7 +39,13 @@ def result(run, kind, **kw):
     head = dict(run=run, kind=kind)
     if "ok" in kw:
         head["ok"] = kw.pop("ok")
-    print("REHEARSE-RESULT " + json.dumps(dict(head, **kw), ensure_ascii=False))
+    res = dict(head, **kw, id=secrets.token_hex(4))
+    if FOLDER:  # the hook reads this record: a pipe that cuts or truncates the printed line loses nothing
+        try:
+            L.record_result(FOLDER, res)
+        except OSError as x:
+            print("could not record the result in the run folder (%s): run this again on its own" % x)
+    print("REHEARSE-RESULT " + json.dumps(res, ensure_ascii=False))
 
 
 def clip(text, n=4000):
@@ -118,13 +128,15 @@ def cmd_plan(s, argv):
         a = ap.parse_args(argv)
     except SystemExit:
         return result(s["run_id"], "plan", ok=False, error="bad arguments; see the usage above")
-    request, goal, problems = sources(s)["request"], {}, []
+    texts = {"request": s.get("request") or "", "answer": "\n".join(s.get("prompts", []))}
+    goal, problems = {}, []
     for item, src, text in a.goal:
-        if item not in S.GOAL_ITEMS or src not in ("request", "assumed"):
-            problems.append("--goal %s %s: the item is one of %s, the source request or assumed"
+        if item not in S.GOAL_ITEMS or src not in ("request", "answer", "assumed"):
+            problems.append("--goal %s %s: the item is one of %s, the source request, answer or assumed"
                             % (item, src, ", ".join(S.GOAL_ITEMS)))
-        elif src == "request" and text not in request:
-            problems.append("goal %s: %r does not appear word for word in the request or the answers" % (item, text))
+        elif src != "assumed" and text not in texts[src]:
+            problems.append("goal %s: %r does not appear word for word in %s" % (
+                item, text, "the request" if src == "request" else "the user's answers"))
         else:
             goal[item] = {"text": text, "source": src}
     if a.stage is None:
@@ -197,14 +209,19 @@ def cmd_run(s, argv):
             print("usage: rehearse run --stage <n> --as-director")
             return result(s["run_id"], "run", ok=False, error="bad arguments")
         stages = s.get("stages") or []
+        current = not S.final(s) and n == s.get("stage")  # the live ending: the same as a plain director run
         why = ("--stage needs --as-director" if "--as-director" not in argv else
-               "--stage is accepted only in the final stage" if not S.final(s) else
+               None if current else
+               "--stage is accepted only in the final stage, or for the current stage" if not S.final(s) else
                "stage %d has no archived ending" % n if not (1 <= n <= len(stages) and stages[n - 1].get("ending"))
                else None)
         if why:
             print(why)
             return result(s["run_id"], "run", ok=False, error=why)
-        s = dict(s, ending=stages[n - 1]["ending"])
+        if current:
+            n = None
+        else:
+            s = dict(s, ending=stages[n - 1]["ending"])
     if not s.get("ending"):
         print("no ending registered yet; run rehearse ending first")
         return result(s["run_id"], "run", ok=False, error="no ending")
@@ -245,15 +262,43 @@ def cmd_job(s, argv):
     return result(s["run_id"], "job", ok=True, phase=s["phase"], stage=s.get("stage"), stages_passed=S.passed(s))
 
 
+def cmd_stuck(s, argv):
+    """The manager records the user's answer to the stuck question; the plugin never reads it from their words."""
+    ap = argparse.ArgumentParser(prog="rehearse stuck")
+    g = ap.add_mutually_exclusive_group(required=True)
+    for flag in ("--stop-here", "--try-again", "--change"):
+        g.add_argument(flag, action="store_true")
+    ap.add_argument("--confirmed", action="store_true")
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        return result(s["run_id"], "stuck", ok=False, error="one of --stop-here, --try-again, --change --confirmed")
+    answer = "stop here" if a.stop_here else "try again" if a.try_again else "change"
+    why = None
+    if answer != "stop here" and s["phase"] not in ("stuck", "look"):
+        why = "rehearse stuck is accepted in stuck, or in look after a blocked look worker; the job is in %s" % s["phase"]
+    elif answer == "change" and not a.confirmed:
+        why = ("change redoes %s from the look: a look worker, the ending registered and confirmed again, then the "
+               "build and the director; strikes reset. Put that to the user as one yes-or-no question, and run this "
+               "again with --confirmed only after an explicit yes" % S.label(s))
+    if why:
+        print(why)
+        return result(s["run_id"], "stuck", ok=False, error=why)
+    print("recorded: " + answer)
+    return result(s["run_id"], "stuck", ok=True, answer=answer)
+
+
 def cmd_stage(s, argv):
     sys.path.insert(0, os.path.join(PLUGIN, "stage"))
     import client
+    client.FOLDER = FOLDER
     client.main(s, argv)
 
 
 def main():
+    global FOLDER
     cmds = {"plan": cmd_plan, "ending": cmd_ending, "run": cmd_run, "fetch": cmd_fetch, "job": cmd_job,
-            "status": cmd_job, "stage": cmd_stage}
+            "status": cmd_job, "stuck": cmd_stuck, "stage": cmd_stage}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return result(None, "usage", ok=False)
@@ -262,6 +307,7 @@ def main():
     if not s:
         print("no active rehearse job in this directory or above it")
         return result(None, kind, ok=False, error="no run")
+    FOLDER = s["run_folder"]
     cmds[kind](s, sys.argv[2:])
 
 

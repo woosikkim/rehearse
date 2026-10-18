@@ -6,17 +6,28 @@ output says how many were replayed, which ones came out differently, and when a 
 """
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
 
 SERVER = os.path.join(os.path.dirname(os.path.realpath(__file__)), "server.py")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(SERVER)), "hooks"))
+import log as L  # noqa: E402
+
 NOT_RUNNING = "stage not running; rehearse stage start"
 TIMEOUT = float(os.environ.get("REHEARSE_RUN_TIMEOUT", "600"))
+FOLDER = None  # set by bin/rehearse: the run folder, where every result is recorded before it is printed
 
 
 def result(run, kind, **kw):
-    print("REHEARSE-RESULT " + json.dumps(dict(run=run, kind=kind, **kw), ensure_ascii=False))
+    res = dict(run=run, kind=kind, **kw, id=secrets.token_hex(4))
+    if FOLDER:
+        try:
+            L.record_result(FOLDER, res)
+        except OSError as x:
+            print("could not record the result in the run folder (%s): run this again on its own" % x)
+    print("REHEARSE-RESULT " + json.dumps(res, ensure_ascii=False))
 
 
 def stage_file(s):

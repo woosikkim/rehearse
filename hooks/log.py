@@ -54,11 +54,39 @@ def records(folder):
     return out
 
 
-def log_command(folder, cmd, output, phase):
+def record_result(folder, res):
+    """bin/rehearse and the stage client write every result here before printing it, so the hook reads the
+    command's own record and a filter on its output (head, tail -c, cut, a redirect) cannot lose a result."""
+    with open(os.path.join(folder, "results.jsonl"), "a", encoding="utf-8") as f:
+        f.write(json.dumps(res, ensure_ascii=False) + "\n")
+
+
+def new_results(folder, offset):
+    """(the results recorded after byte offset, the offset to read from next time); whole lines only."""
+    try:
+        with open(os.path.join(folder, "results.jsonl"), "rb") as f:
+            f.seek(offset)
+            data = f.read()
+    except OSError:
+        return [], offset
+    data = data[:data.rfind(b"\n") + 1]
+    out = []
+    for ln in data.decode("utf-8", "replace").splitlines():
+        try:
+            r = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(r, dict):
+            out.append(r)
+    return out, offset + len(data)
+
+
+def log_command(folder, cmd, output, phase, kinds=None):
     """Append one Bash command and the head of its output; return its step id (S1, S2, ...)."""
     step = "S%d" % (1 + sum(1 for r in records(folder) if "step" in r))
-    # the plugin's own result kind, read before the trim can cut the last line (bin/rehearse excludes ending/run steps)
-    kinds = re.findall(r'^REHEARSE-RESULT .*?"kind": "([\w-]+)"', output, re.M)
+    # the plugin's own result kinds (bin/rehearse excludes ending/run steps as sources): from the hook's records,
+    # else read from the output before the trim can cut the last line
+    kinds = [k for k in kinds or [] if k] or re.findall(r'^REHEARSE-RESULT .*?"kind": "([\w-]+)"', output, re.M)
     cmd, out = redact(cmd, command=True), trim(redact(output))
     record(folder, {"step": step, "cmd": cmd, "phase": phase, "out": out, "result": kinds[-1] if kinds else None})
     with open(os.path.join(folder, "log.md"), "a", encoding="utf-8") as f:

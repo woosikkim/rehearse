@@ -176,7 +176,7 @@ The two edit counters mean different things. `project_edits_since_run` counts ed
 
 **Output hashes.** At each director's spawn the hook hashes the declared outputs of every stage passed so far plus the current stage's, read directly so the ignored-folder and hidden-folder exclusions (`hooks/fingerprint.py:53-58`) do not hide them, and stores the hashes under their own key, `fp["outputs"]`. At the verdict it hashes them again and compares; a difference voids the verdict, exactly as a code change does (`:519-528`). They are kept out of `fp["files"]` on purpose: `F.code_change` drops non-code paths (`hooks/fingerprint.py:126-129`), and a `.py` output in an ignored folder is absent from every fresh fingerprint (`:85`, `:116`), so it would read as changed at every compare. No other snapshot carries output hashes, and **registration does not compare outputs**. While a stage looks, the locks refuse edit-tool writes and parsed shell writes to declared outputs; other writes are listed in section 9 (stated gaps). Outputs added by `rehearse plan --stage` are hashed at the next director spawn like the others. `hooks/fingerprint.py` and `hooks/findings.py` stay unchanged.
 
-**Run folder.** One per job: `.rehearsal/<run_id>/` with `log.md`, `commands.jsonl`, `fixtures/`, `state.json`, `report.md`. Steps are numbered across the whole job (S1, S2, …) and tagged with their stage, so citations stay unique and a build worker can find what the look worker saw.
+**Run folder.** One per job: `.rehearsal/<run_id>/` with `log.md`, `commands.jsonl`, `results.jsonl` (every `rehearse` command's result, written by the command itself before it prints the result line; the hook reads results from here, so an output filter cannot lose one; 3.0.1), `fixtures/`, `state.json`, `report.md`. Steps are numbered across the whole job (S1, S2, …) and tagged with their stage, so citations stay unique and a build worker can find what the look worker saw.
 
 ## 9. The run flow
 
@@ -269,7 +269,7 @@ A one-stage job still starts with goal capture and `rehearse plan` (one stage). 
 - **Stop here:** the existing stop-here exit (`:84-85`, `:586-590`): the manager writes the report and the job ends. `pending_change` is cleared.
 - **Try again:** phase `build`, strikes and the failing-run count reset, same ending, `pending_change` cleared.
 - **Change the stage:** phase `look` for the same stage, strikes reset, a new `fp_phase_entry` taken, and `pending_change` set. While it is set, `rehearse plan --stage <n>` may rewrite the current stage's line, `<n>` being the current stage (plain `rehearse plan` stays refused). The ending is registered again under the reopening rules above. Any exit from this `look` clears `pending_change`: an ending registered, a passing run, or a strike. In the final stage, "change" means re-registering the job ending, and `plan --stage` is refused.
-- The hook reads the answer from the question tool's result, or from the next prompt, as for confirmations (`:81-87`, `:412-428`): "stop here", "try again" and "change" are matched at the start of the answer; anything else is recorded and the phase stays `stuck`.
+- The decision is recorded by the manager with `rehearse stuck --stop-here | --try-again | --change --confirmed` after it has read the user's answer (3.0.1; until then the hook matched "stop here", "try again" and "change" at the start of the answer, and a paraphrased question or a question for an answer left a stage stuck through four rounds). Every prompt or question-tool answer in `stuck` is recorded as a note and answered with a reminder to run the command; the phase stays `stuck`. `--change` is refused without `--confirmed`, which the manager adds only after a second, explicit yes. `--stop-here` is accepted in any live phase; the other two in `stuck`, or in `look` after a blocked look worker (attended). "Try again" from `stuck` goes straight to the director when a run passed after the last verdict with no edit since. The director is refused outside `build` and `judge`, so a director started while stuck can no longer go unrecorded.
 
 | Situation | What happens |
 |---|---|
@@ -428,6 +428,14 @@ Removed: `spawn_review`, `on_review`, `REVIEW_ROUNDS`, `known_host`, `runs_pytho
 rehearse does not need any other plugin. It works next to oh-my-claudecode (OMC). From OMC's design it takes four ideas, built with its own hook and instruction files: the writer and the judge in separate contexts, risk first, one job file as shared memory, and checking before claiming done. It does not take OMC's stop-hook persistence loops, its state-tool layer, or its large skill set.
 
 ## 17. Changes
+
+Revision 6.3 (3.0.1, from the first four-stage dogfood job, 2026-10-17):
+
+1. Results come from the command's own record (`results.jsonl`), not from the tool output: a build worker's passing `rehearse run` piped through `tail -c`, `cut` or a redirect had been lost, and its stop counted as a strike. A printed result line carrying an id is treated as an echo; a `rehearse` command with no record gets "run it again on its own".
+2. The director is refused outside `build` and `judge`: started while `stuck`, it had run unintercepted and its PASS was never recorded.
+3. The stuck decision is a command, `rehearse stuck`, with the three options spelled out with their cost in confirm.md and a second yes before `change`; the hook no longer matches the user's words. Structural: the command is refused unless a user prompt or question answer was recorded after the stage became stuck (or, in `look`, after the last worker stopped). Tests: a paraphrased question, a question as the answer, the words "change" and "stop here" alone, `--change` without `--confirmed`, the command with no user answer since the stuck.
+4. The run folder's own records (`results.jsonl`, `state.json`, `commands.jsonl`, `log.md`) are refused to the edit tools and to shell write targets in every phase, for any caller; a script opening one for append is a stated gap.
+5. `rehearse run --stage <n> --as-director` for the current stage runs the live ending (a one-stage director used it and was refused); goal items get a third source, `answer`, checked word for word against the user's answers, so the report's label matches where the text came from.
 
 Revision 6.1 (after the revision 6 reviews):
 

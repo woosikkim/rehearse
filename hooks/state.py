@@ -21,7 +21,8 @@ NO_LOOK = ("no look step since edits were locked again: take one (a stage step i
            "fetch; file://<path> for a draft or CSV), then register")
 GOAL_ITEMS = ("purpose", "deliverable", "done", "out_of_scope")
 NEXT = {"judge": "wait for the director's verdict",
-        "stuck": "ask the user once: stop here, try again, or change the stage",
+        "stuck": "ask the user once (stop here, try again, or change the stage), then record the answer: rehearse stuck "
+                 "--stop-here | --try-again | --change --confirmed",
         "done.passed": "write report.md, then finish",
         "done.not_fixed": 'write report.md starting with "not fixed"',
         "done.cancelled": "the job is cancelled"}
@@ -245,7 +246,7 @@ def new_run(session_id, root, request, fp, attended=True):
              attended=attended,  # the mode at activation, for next_step (bin/rehearse sees no plugin settings)
              run_folder=folder, request=request, prompts=[], goal=None, assumptions=[], blockers=[], stages=[],
              stages_from=None, job_ending=None, job_confirmation=None, confirm_return=None, not_verified=[],
-             fixtures=[], notes=[], created_at=time.time(), updated_at=time.time())
+             fixtures=[], notes=[], results_read=0, created_at=time.time(), updated_at=time.time())
     _save(s)
     return s
 

@@ -73,7 +73,7 @@ flowchart LR
 
 **When work goes in circles.** Two failing runs in a row lock edits again, and the stage goes back to looking. One new look reopens it. Ten code edits with no run at all bring a reminder, not a lock. Each relock and each send-back is a *strike*; after three, the stage is stuck.
 
-**When a stage is stuck.** The manager asks you once: **stop here**, **try again**, or **change the stage**. It also asks this when a worker hits something it cannot get past, such as a login it was not given. A blocked step is never faked.
+**When a stage is stuck.** The manager asks you once: **stop here**, **try again**, or **change the stage**, and says what each one does and costs. It records your answer with a command of its own, never by reading your words, and a change is confirmed with you a second time, since it redoes the stage from the look. It also asks this when a worker hits something it cannot get past, such as a login it was not given. A blocked step is never faked.
 
 **Steps that cannot be undone.** Publishing, uploading, sending or deleting never runs without your explicit OK. The manager simulates it, or leaves it for you.
 
@@ -187,8 +187,8 @@ All of them run [`hooks/rehearse_hook.py`](hooks/rehearse_hook.py), which uses t
 | Hook | What it does |
 |---|---|
 | `UserPromptSubmit` | Starts a job on `/rehearse` or a prompt that starts with the word `rehearse`, and injects the manager instructions. `rehearse stop` cancels the job. While a job waits for the user, the next prompt is the answer. |
-| `PreToolUse` | While the current stage is looking or waiting for confirmation, refuses Write, Edit, MultiEdit and NotebookEdit on project code and declared outputs, and shell commands that write them. Refuses running a file created during the stage. On a `rehearse:worker` or `rehearse:director` spawn, writes its prompt from the job file, sets its model and keeps it in the foreground; refuses a worker outside look and build. |
-| `PostToolUse` | Logs every command and its output to `log.md` and `commands.jsonl`. Reads the result line of each `rehearse` command into the job file. Counts failing runs and look steps, locks edits again after two failing runs, and reminds after ten code edits with no run. Records the answers to the goal, confirmation and stuck questions. Adds a note with the next step when a worker or the director returns. |
+| `PreToolUse` | While the current stage is looking or waiting for confirmation, refuses Write, Edit, MultiEdit and NotebookEdit on project code and declared outputs, and shell commands that write them. Refuses running a file created during the stage. Refuses every write to the run folder's own records (`results.jsonl`, `state.json`, `commands.jsonl`, `log.md`) in every phase. On a `rehearse:worker` or `rehearse:director` spawn, writes its prompt from the job file, sets its model and keeps it in the foreground; refuses a worker outside look and build, and the director outside build and judge. |
+| `PostToolUse` | Logs every command and its output to `log.md` and `commands.jsonl`. Reads each `rehearse` command's result from the record the command itself writes in the run folder (`results.jsonl`), so a filter on its output loses nothing. Counts failing runs and look steps, locks edits again after two failing runs, and reminds after ten code edits with no run. Records the answers to the goal and confirmation questions; the stuck answer is recorded by `rehearse stuck`. Adds a note with the next step when a worker or the director returns. |
 | `PostToolUseFailure` | Handles failed shell commands and agent calls the same way. |
 | `SubagentStop` | Records the director's verdict and moves the job to the next stage on a pass. A verdict is void if code or a declared output changed while the director worked. Records how a worker's turn ended, and counts a strike when a build worker stops with neither a passing run nor a relock, or a look worker returns no ending twice in a row. |
 | `Stop` | Refuses to finish until the next step is done, except while waiting for the user: write the plan, register an ending, start a worker or the director, or write `report.md` with an allowed first line and a not-verified section. |
@@ -198,11 +198,12 @@ All of them run [`hooks/rehearse_hook.py`](hooks/rehearse_hook.py), which uses t
 These are on the agent's path while the plugin is enabled ([`bin/rehearse`](bin/rehearse)):
 
 ```
-rehearse plan --goal <item> request|assumed '<text>' ... --stage-def <name> fix|build '<plan line>' <inputs> <outputs> ...
+rehearse plan --goal <item> request|answer|assumed '<text>' ... --stage-def <name> fix|build '<plan line>' <inputs> <outputs> ...
 rehearse ending [--job] --cmd '<cmd>' [--tests '<cmd>'] --expect '<requirement>' <check> <value> --cite <source> ... [--unchecked '<item>']
 rehearse run [--as-director] [--stage <n>]
 rehearse fetch <url> [curl args]
 rehearse job          (also: rehearse status)
+rehearse stuck --stop-here | --try-again | --change --confirmed
 rehearse stage start [--python <path>] | step '<code>' | stop
 ```
 
