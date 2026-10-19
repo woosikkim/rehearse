@@ -5,11 +5,12 @@ REHEARSE-RESULT <json>, which the plugin's hook records.
   rehearse plan --goal <item> request|answer|assumed '<text>' (x4) --stage-def <name> fix|build '<plan line>' <inputs> <outputs>
                 [--stage-def ...] [--assume '<text>'] [--blocker '<text>'] [--from-request] [--stage <n>]
   rehearse ending [--job] --cmd '<cmd>' [--tests '<cmd>'] --expect '<requirement>' <check> <value> --cite <citation>
-                  ... [--unchecked '<taste item>']
+                  ... [--unchecked '<taste item>'] [--call '<requirement>' '<the judgment call, as a question>']
   rehearse run [--as-director] [--stage <n>]
   rehearse fetch <url> [curl args]
   rehearse job          (also: rehearse status)
-  rehearse stuck --stop-here | --try-again | --change --confirmed   (the user's answer to the stuck question)
+  rehearse stuck --stop-here | --try-again | --correct --says '<the user's words>' | --change --confirmed
+                  (the user's answer to the stuck question; stop here ends the whole rehearse job)
 
 goal items: purpose, deliverable, done, out_of_scope; a source of request or answer needs the text word for word
 in the request or in the user's answers. inputs/outputs: comma-separated paths, or - for none.
@@ -172,6 +173,7 @@ def cmd_ending(s, argv):
     ap.add_argument("--expect", nargs=3, action="append", default=[], metavar=("REQUIREMENT", "CHECK", "VALUE"))
     ap.add_argument("--cite", action="append", default=[])
     ap.add_argument("--unchecked", action="append", default=[])
+    ap.add_argument("--call", nargs=2, action="append", default=[], metavar=("REQUIREMENT", "QUESTION"))
     # stage and stages_passed come right after kind: the multi-stage eval greps this line (brief section 13)
     res = lambda **kw: result(s["run_id"], "ending", stage=s.get("stage"), stages_passed=S.passed(s), **kw)  # noqa
     try:
@@ -179,7 +181,8 @@ def cmd_ending(s, argv):
     except SystemExit:
         return res(ok=False, error="bad arguments; see the usage above")
     why = S.ending_refused(s, a.job)
-    if not why and not (a.job and not S.final(s)) and s.get("reopen") and not s["reopen"]["looks"]:
+    ro = s.get("reopen")
+    if not why and not (a.job and not S.final(s)) and ro and not ro["looks"] and ro.get("why") != "correct":
         why = S.NO_LOOK  # refused before the command runs: an ending with side effects must not run first
     if why:
         print(why)
@@ -189,10 +192,15 @@ def cmd_ending(s, argv):
         return res(ok=False, error="every --expect needs its own --cite")
     exps = [{"requirement": r, "check": c, "value": v, "cite": cite} for (r, c, v), cite in zip(a.expect, a.cite)]
     problems = E.validate(exps, sources(s))
+    # a judgment call (is X a tool? does Y count?) names the expectation it decides; the manager puts it to the
+    # user as its own question at confirmation, never as one line among the checks
+    problems += ["--call %r: no --expect has that requirement" % r for r, _ in a.call
+                 if r not in {x["requirement"] for x in exps}]
     if problems:
         print("ending refused:\n" + "\n".join("  " + p for p in problems))
         return res(ok=False, error="; ".join(problems))
-    s = dict(s, ending={"cmd": a.cmd, "tests": a.tests, "expectations": exps, "unchecked": a.unchecked})
+    s = dict(s, ending={"cmd": a.cmd, "tests": a.tests, "expectations": exps, "unchecked": a.unchecked,
+                        "calls": [{"requirement": r, "question": q, "answer": None} for r, q in a.call]})
     before = run_ending(s)
     base = None
     if not before["all_pass"]:
@@ -267,17 +275,27 @@ def cmd_stuck(s, argv):
     """The manager records the user's answer to the stuck question; the plugin never reads it from their words."""
     ap = argparse.ArgumentParser(prog="rehearse stuck")
     g = ap.add_mutually_exclusive_group(required=True)
-    for flag in ("--stop-here", "--try-again", "--change"):
+    for flag in ("--stop-here", "--try-again", "--correct", "--change"):
         g.add_argument(flag, action="store_true")
     ap.add_argument("--confirmed", action="store_true")
+    ap.add_argument("--says", help="the user's words, with --correct: which checks are wrong and what is right")
     try:
         a = ap.parse_args(argv)
     except SystemExit:
-        return result(s["run_id"], "stuck", ok=False, error="one of --stop-here, --try-again, --change --confirmed")
-    answer = "stop here" if a.stop_here else "try again" if a.try_again else "change"
+        return result(s["run_id"], "stuck", ok=False,
+                      error="one of --stop-here, --try-again, --correct --says '<the user's words>', --change --confirmed")
+    answer = "stop here" if a.stop_here else "try again" if a.try_again else "correct" if a.correct else "change"
     why = None
     if answer != "stop here" and s["phase"] not in ("stuck", "look"):
         why = "rehearse stuck is accepted in stuck, or in look after a blocked look worker; the job is in %s" % s["phase"]
+    elif answer == "correct" and not (a.says or "").strip():
+        why = ("correct keeps the work and changes only the failing checks: give the user's words with --says "
+               "'<which checks are wrong and what is right>'; they are recorded with every corrected check")
+    elif answer == "correct" and not S.said(s, a.says, S.question_since(s)):
+        why = ("--says must be the user's words, word for word, from an answer recorded since the stage became "
+               "stuck; not a paraphrase")
+    elif answer == "correct" and not S.failing(s):
+        why = "correct has nothing to apply: no failing check is recorded for %s" % S.label(s)
     elif answer == "change" and not a.confirmed:
         why = ("change redoes %s from the look: a look worker, the ending registered and confirmed again, then the "
                "build and the director; strikes reset. Put that to the user as one yes-or-no question, and run this "
@@ -285,8 +303,9 @@ def cmd_stuck(s, argv):
     if why:
         print(why)
         return result(s["run_id"], "stuck", ok=False, error=why)
-    print("recorded: " + answer)
-    return result(s["run_id"], "stuck", ok=True, answer=answer)
+    print("recorded: " + answer + (" (the whole rehearse job ends now; any remaining stage runs without rehearse)"
+                                   if answer == "stop here" else ""))
+    return result(s["run_id"], "stuck", ok=True, answer=answer, says=a.says)
 
 
 def cmd_stage(s, argv):

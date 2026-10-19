@@ -73,7 +73,7 @@ flowchart LR
 
 **When work goes in circles.** Two failing runs in a row lock edits again, and the stage goes back to looking. One new look reopens it. Ten code edits with no run at all bring a reminder, not a lock. Each relock and each send-back is a *strike*; after three, the stage is stuck.
 
-**When a stage is stuck.** The manager asks you once: **stop here**, **try again**, or **change the stage**, and says what each one does and costs. It records your answer with a command of its own, never by reading your words, and a change is confirmed with you a second time, since it redoes the stage from the look. It also asks this when a worker hits something it cannot get past, such as a login it was not given. A blocked step is never faked.
+**When a stage is stuck.** The manager names the checks that fail and asks you once: **these checks are wrong** (the work stays; only the checks change to match your answer, then the director judges), **redo this stage**, **try again**, or **stop here**, which ends the whole rehearse job, not just the stage. It says what each one does and costs, and which applies. It records your answer with a command of its own, never by reading your words, and a change is confirmed with you a second time, since it redoes the stage from the look. It also asks this when a worker hits something it cannot get past, such as a login it was not given. A blocked step is never faked.
 
 **Steps that cannot be undone.** Publishing, uploading, sending or deleting never runs without your explicit OK. The manager simulates it, or leaves it for you.
 
@@ -199,11 +199,11 @@ These are on the agent's path while the plugin is enabled ([`bin/rehearse`](bin/
 
 ```
 rehearse plan --goal <item> request|answer|assumed '<text>' ... --stage-def <name> fix|build '<plan line>' <inputs> <outputs> ...
-rehearse ending [--job] --cmd '<cmd>' [--tests '<cmd>'] --expect '<requirement>' <check> <value> --cite <source> ... [--unchecked '<item>']
+rehearse ending [--job] --cmd '<cmd>' [--tests '<cmd>'] --expect '<requirement>' <check> <value> --cite <source> ... [--unchecked '<item>'] [--call '<requirement>' '<question>']
 rehearse run [--as-director] [--stage <n>]
 rehearse fetch <url> [curl args]
 rehearse job          (also: rehearse status)
-rehearse stuck --stop-here | --try-again | --change --confirmed
+rehearse stuck --correct --says '<words>' | --change --confirmed | --try-again | --stop-here
 rehearse stage start [--python <path>] | step '<code>' | stop
 ```
 

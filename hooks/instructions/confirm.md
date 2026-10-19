@@ -19,6 +19,8 @@ Only the manager asks the user. Ask with AskUserQuestion when it is available; o
 
 Options: `yes`, `no, the expected value is wrong`, `stop here and write the report`.
 
+**Judgment calls first.** When the ending rests on a borderline call (is X a tool? does Y count?), the look worker registered it with `--call`, and the plugin's note lists each one. Put each to the user as its own question, **word for word as registered**, before the confirmation, never as one line among dozens of checks. The plugin records the answer against the check it decides, and **refuses the confirmation while any call has no recorded answer**, naming the call to ask. With the question tool, a question that does not contain the registered wording is not matched and is refused. Without the question tool, ask the calls one per message in the registered order: the next message answers the first open call. If an answer changes a check, do not ask the confirmation: run `rehearse ending` again with the corrected value (cite `request`: the user's words are now part of it); the answers carry over. Only when every call is settled, ask the confirmation.
+
 ## The job (two or more stages)
 
 One question with: the goal items (each marked from the request, from the user's answers, or assumed), the assumptions, the blockers, the stages with their plan lines (and whether they came from the request, with any merge you propose), the worker and director models, and the job ending's command and expectations.
@@ -27,13 +29,14 @@ Options: `yes`, `no, change the plan`, `stop here and write the report`.
 
 ## The stuck question
 
-Say what blocked the stage in plain words, then offer exactly these three options, each with what it does and what it costs:
+Say what blocked the stage in plain words: name the checks that fail (the plugin's note lists them) and what the director found. Then offer exactly these four options, each with what it does and what it costs, and say which one applies to what blocked the stage:
 
-- `stop here`: the job ends now; you write `report.md` starting with `not fixed` and what is known. Nothing more runs.
-- `try again`: strikes reset and the stage goes on from where it is: a build worker, or the director straight away when the ending already passes. Costs one more worker-and-director round.
-- `change the stage`: the stage is redone from the look: a look worker, the ending registered and confirmed again, the build, the director. Costs a whole stage again. Needs a second, explicit yes.
+- `these checks are wrong`: the failing checks encode a judgment the user disagrees with. The work stays; only the ending changes to match their answer, then the director judges. Costs one director run. This is the option when the work is done and the checks are the disagreement.
+- `redo this stage`: the stage is looked at again and rebuilt: a look worker, the ending registered and confirmed again, the build, the director. Costs a whole stage again. Needs a second, explicit yes.
+- `try again`: same checks, one more build round, strikes reset: a build worker, or the director straight away when the ending already passes. Costs one worker-and-director round.
+- `stop here`: **ends the whole rehearse job now**, not just this stage: `report.md` says `not fixed`, and every remaining stage runs without rehearse. Nothing more is checked.
 
-Do not paraphrase the options into "continue?" or "how do you want to go on?". A question from the user is not a decision: answer it, then ask again. The plugin never reads the decision from the user's words; only `rehearse stuck` records it, and the stage stays stuck until it runs.
+Never frame this as "how do you want to accept" or "continue?": one option ends the job, and the user must see that. A question from the user is not a decision: answer it, then ask again. The plugin never reads the decision from the user's words; only `rehearse stuck` records it, and the stage stays stuck until it runs.
 
 ## After the answer
 
@@ -41,5 +44,6 @@ Do not paraphrase the options into "continue?" or "how do you want to go on?". A
 - Any other answer to a stage ending (`no`, a correction): the plugin moves the stage back to look and records the user's words. Start a look worker for the same stage and pass it the user's words; on a one-stage job, look again yourself, register the corrected ending, and ask again.
 - Change the plan: run `rehearse plan` again (once a stage has passed, `rehearse plan --stage <n>` with exactly one `--stage-def` and no goal flags), or `rehearse ending --job` for the job ending, and ask again.
 - `stop here` (at any question): run `rehearse stuck --stop-here`, write `report.md` starting with `not fixed`, saying what is known so far, and finish.
+- `these checks are wrong`: run `rehearse stuck --correct --says '<the user's words>'`. The words must be theirs, word for word, from an answer since the stage became stuck; a paraphrase is refused. Then register the ending again yourself (`rehearse ending`, no look step needed): the same command and tests, and only the checks that were failing may change, citing `request` for a value from their words; any other check added, removed or changed is refused. Then ask the confirmation. If it already passes, the director judges next; the report lists every corrected check with the user's words.
 - `try again`: run `rehearse stuck --try-again` and follow the next step it prints: a build worker, or the director when the ending already passes; a look worker if the stage was blocked while looking.
-- `change the stage`: ask once more, yes or no: "Redo stage <n> from the look? Its ending gets registered and confirmed again, then it is built and judged again." Only after a yes: `rehearse stuck --change --confirmed`, then rewrite the stage with `rehearse plan --stage <n>`, exactly one `--stage-def` and no goal flags (in the final stage, register the job ending again instead), then a look worker.
+- `redo this stage`: ask once more, yes or no: "Redo stage <n> from the look? Its ending gets registered and confirmed again, then it is built and judged again." Only after a yes: `rehearse stuck --change --confirmed`, then rewrite the stage with `rehearse plan --stage <n>`, exactly one `--stage-def` and no goal flags (in the final stage, register the job ending again instead), then a look worker.

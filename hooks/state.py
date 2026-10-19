@@ -22,8 +22,9 @@ NO_LOOK = ("no look step since edits were locked again: take one (a stage step i
            "fetch; file://<path> for a draft or CSV), then register")
 GOAL_ITEMS = ("purpose", "deliverable", "done", "out_of_scope")
 NEXT = {"judge": "wait for the director's verdict",
-        "stuck": "ask the user once (stop here, try again, or change the stage), then record the answer: rehearse stuck "
-                 "--stop-here | --try-again | --change --confirmed",
+        "stuck": "ask the user once (these checks are wrong / redo this stage / try again / stop here, which ends the "
+                 "whole rehearse job), then record the answer: rehearse stuck --correct --says '<words>' | --change "
+                 "--confirmed | --try-again | --stop-here",
         "done.passed": "write report.md, then finish",
         "done.not_fixed": 'write report.md starting with "not fixed"',
         "done.cancelled": "the job is cancelled"}
@@ -36,7 +37,8 @@ def fresh_stage(fp, at=None):
             "config_edits": [], "started_at": at or time.time(), "runs": [], "failing_runs": 0, "fewest_failing": None,
             "direct_pending": False, "project_edits_since_run": 0, "code_edits_since_run": 0, "relocks": [],
             "strikes": 0, "pending_change": False, "reopen": None, "redo": None, "no_ending": 0, "worker": None,
-            "spawn": None, "workers": 0, "start_director": False, "strike_log": [], "stuck_log": []}
+            "spawn": None, "workers": 0, "start_director": False, "strike_log": [], "stuck_log": [],
+            "corrections": []}
 
 
 STAGE_KEYS = tuple(fresh_stage(None))
@@ -97,6 +99,9 @@ def next_step(s):
     if ph == "look":
         if s.get("redo") is not None:
             return "start a look worker to re-register the ending; the user said: %s" % s["redo"]
+        if (s.get("reopen") or {}).get("why") == "correct":
+            return ("register the ending again with the checks corrected to the user's words (rehearse ending; no "
+                    "look step needed), then have it confirmed")
         if s.get("reopen") and not s["reopen"]["looks"]:
             return "look again (a stage step into project code, or rehearse fetch), then rehearse ending"
         return "look at %s (start rehearse:worker; a one-stage job: yourself), then rehearse ending" % label(s)
@@ -109,11 +114,42 @@ def next_step(s):
     return NEXT.get(ph, "see the instructions")
 
 
+def failing(s):
+    """The requirements the last run of the ending failed."""
+    after = (s.get("ending") or {}).get("after") or {}
+    return [r for r in after.get("results") or [] if not r.get("passed")]
+
+
+def failing_checks(s):
+    """The checks the last run failed, in one line, so a stuck question can name them."""
+    bad = failing(s)
+    if not bad:
+        return "failing checks: none recorded"
+    return "failing checks: " + "; ".join("%s (%s %s)" % (r.get("requirement"), r.get("check"), r.get("value")) for r in bad)
+
+
+def question_since(s):
+    """The stamp after which the user must have answered for a stuck decision: the stage becoming stuck, or
+    the last worker's stop (a blocked look), or the stage start."""
+    if s.get("phase") == "stuck":
+        return s.get("stuck_at") or 0
+    return max((s.get("worker") or {}).get("at") or 0, s.get("started_at") or 0)
+
+
+def said(s, text, since=0):
+    """True if the user said `text` word for word in an answer recorded at or after `since` (the same rule a goal
+    item's "answer" source gets): the record holds the user's words, never the manager's paraphrase."""
+    text = (text or "").strip()
+    return bool(text) and any(text in w.get("text", "") for w in s.get("user_words") or [] if w.get("at", 0) >= since)
+
+
 def job_text(s):
     """What `rehearse job` prints, and what the hook answers when the user types it as a prompt."""
     stages = s.get("stages") or []
     lines = ["job %s: phase %s, %s, strikes %d, failing runs %d" % (
         s["run_id"], s["phase"], where(s), s.get("strikes", 0), s.get("failing_runs", 0))]
+    if s["phase"] == "stuck":
+        lines.append(failing_checks(s))
     lines += ["  stage %d %s (%s)%s: %s" % (i, st.get("name"), st.get("kind"), ", passed" if st.get("passed") else "",
                                            st.get("line")) for i, st in enumerate(stages, 1)]
     sp = s.get("spawn") or {}
@@ -190,12 +226,16 @@ def process_lines(s):
     relocks = sum(len(st.get("relocks") or []) for _, st in rows)
     refusals = old if s.get("refusals") is None else counts(collections.Counter(r.get("kind") for r in s["refusals"]))
     free = sum(1 for n in s.get("notes") or [] if str(n).startswith("stuck answer: "))
+    fixes = ["  - %s, %s: %s -> %s (the user: %s)" % (c.get("stage"), c.get("requirement"), c.get("before") or "none",
+                                                      c.get("after") or "dropped", one_line(c.get("user") or ""))
+             for _, st in rows for c in st.get("corrections") or []]
     return ["## Process (computed by the plugin from the job file; it changes nothing by itself)",
             commands,
             "- strikes: " + strikes,
             "- REWORK reasons (%d):%s" % (len(reworks), "\n" + "\n".join(reworks) if reworks else " none"),
             "- refusals: " + refusals,
             "- stuck: %s; free-text answers while stuck: %d" % (stuck, free),
+            "- corrected checks (%d):%s" % (len(fixes), "\n" + "\n".join(fixes) if fixes else " none"),
             "- relocks: %d" % relocks]
 
 
@@ -360,7 +400,8 @@ def new_run(session_id, root, request, fp, attended=True):
              attended=attended,  # the mode at activation, for next_step (bin/rehearse sees no plugin settings)
              run_folder=folder, request=request, prompts=[], goal=None, assumptions=[], blockers=[], stages=[],
              stages_from=None, job_ending=None, job_confirmation=None, confirm_return=None, not_verified=[],
-             fixtures=[], notes=[], results_read=0, refusals=[], created_at=time.time(), updated_at=time.time())
+             fixtures=[], notes=[], results_read=0, refusals=[], user_words=[], created_at=time.time(),
+             updated_at=time.time())
     _save(s)
     return s
 

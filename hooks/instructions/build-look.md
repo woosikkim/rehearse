@@ -32,6 +32,7 @@ rehearse ending --cmd '<command>' [--tests '<tests command>'] \
 - Checks: `equals`, `contains`, `regex`, `exit_code`, `fixture_equals <fixture name>`.
 - Every expected value cites where it came from: `fixture:<name>` (a saved fixture), `step:S<n>` (a logged step) or `request` (the user's words). The value must appear word for word in what you cite.
 - Add `--tests '<command>'` when you know which tests should cover it.
+- A check that rests on a borderline judgment (is X a tool? does Y count? is this the right cut-off?) gets `--call '<requirement>' '<the call, as one question>'`: the manager puts it to the user as its own question before building, never as one line among dozens of checks. Register the call for every such check; a judgment hidden in a check is what gets a stage stuck later.
 - The ending must fail now. A build fails because the program or the output does not exist yet.
 - Cover every requirement in the stage's plan line and the goal, with values from the sample you did by hand. What only taste can judge (tone, style) goes in `--unchecked`.
 

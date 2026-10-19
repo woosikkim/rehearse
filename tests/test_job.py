@@ -149,6 +149,12 @@ class Proj:
         return self.ev("PostToolUse", env, tool_name="AskUserQuestion", tool_input={"questions": []},
                        tool_response={"questions": [], "answers": {"Q?": answer}, "annotations": {}})
 
+    def ask_calls(self, answers, env=None):
+        """AskUserQuestion with the questions as asked: judgment calls word for word, or anything else."""
+        return self.ev("PostToolUse", env, tool_name="AskUserQuestion",
+                       tool_input={"questions": [{"question": q} for q in answers]},
+                       tool_response={"questions": [], "answers": answers, "annotations": {}})
+
     def stop(self, env=None):
         return self.ev("Stop", env, stop_hook_active=False)
 
@@ -1059,6 +1065,155 @@ try:
         del os.environ["CLAUDE_PLUGIN_DATA"]
     assert second["run_id"] > first["run_id"] and newest == second["run_id"], (first["run_id"], second["run_id"])
     print("no decision reads a raw OS time: worker outcome, a created file's age, big-file signature, job order: ok")
+
+    # ================= 3.2.0: judgment calls are asked up front, as their own question =================
+    p = one_stage()
+    so, out = p.rehearse(*END3, "--call", "a: 1", "is a a tool?")
+    s = p.state()
+    assert s["phase"] == "confirm" and s["ending"]["calls"] == [{"requirement": "a: 1", "question": "is a a tool?",
+                                                                 "answer": None}], s["ending"].get("calls")
+    assert "judgment call" in ctx(out) and "is a a tool?" in ctx(out), out
+    so, _ = p.rehearse(*END3, "--call", "zzz", "q")
+    assert "no --expect has that requirement" in so and p.phase() == "confirm"
+    out = p.ask_calls({"is a a tool?": "yes, a is a tool"})  # the call, asked word for word: not the confirmation
+    s = p.state()
+    assert s["phase"] == "confirm" and s["ending"]["calls"][0]["answer"] == "yes, a is a tool", s["ending"]["calls"]
+    assert "judgment call answered" in ctx(out) and "yes, a is a tool" in s["prompts"], out
+    p.ask("yes")
+    assert p.phase() == "build"
+    p = one_stage()  # the answer changes a check: the ending is registered again with the user's words, then confirmed
+    p.rehearse(*END3, "--call", "a: 1", "is a a tool?")
+    p.ask_calls({"is a a tool?": "no: a is not a tool, so it should print a: skipped"})
+    assert p.phase() == "confirm" and not p.state()["confirmation"]
+    so, _ = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "a", "contains", "a: skipped", "--cite",
+                       "request", "--expect", "b: 2", "contains", "b: 2", "--cite", "request")
+    assert p.phase() == "confirm" and p.state()["ending"]["expectations"][0]["value"] == "a: skipped", so
+    p.prompt("yes")  # the answers carried over to the re-registered ending: the confirmation is accepted
+    assert p.phase() == "build"
+    q = one_stage(UN)  # unattended: nobody is asked, so the call is recorded as not verified
+    q.rehearse(*END3, "--call", "a: 1", "is a a tool?", env=UN)
+    assert q.phase() == "build" and any("judgment call not put to a person: is a a tool?" in x
+                                        for x in q.state()["not_verified"]), q.state()["not_verified"]
+    print("judgment calls: tied to the check they decide, asked apart from the confirmation, recorded: ok")
+
+    # ================= 3.2.0: stuck split: "these checks are wrong" keeps the work =================
+    def stuck_run():
+        """Stuck after a recorded run: main.py prints a: 1 only, so b and c fail; then three REWORKs."""
+        p = building()
+        p.edit("main.py", prog(1))
+        p.rehearse("run")
+        for _ in range(3):
+            p.spawn()
+            p.verdict(REWORK)
+        assert p.phase() == "stuck" and [r["requirement"] for r in S.failing(p.state())] == ["b: 2", "c: 3"]
+        return p
+    p = stuck_run()
+    p.prompt("b and c are wrong: only a: 1 is required")
+    so, _ = p.rehearse("stuck", "--correct")
+    assert "--says" in so and p.phase() == "stuck"
+    _, out = p.rehearse("stuck", "--correct", "--says", "only a: 1 is required")
+    s = p.state()
+    assert s["phase"] == "look" and s["reopen"]["why"] == "correct" and s["strikes"] == 0 and not s["pending_change"], out
+    assert denied(p.pre("Edit", file_path=p.j("main.py")))  # the work stays, and stays locked
+    p.rehearse("plan", "--stage", "1", "--stage-def", "only", "fix", "x", "-", "-")
+    assert p.state()["stages"][0]["line"] == "print the three lines"  # correct does not rewrite the stage
+    so, out = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "a: 1", "contains", "a: 1", "--cite", "request")
+    s = p.state()
+    assert s["phase"] == "confirm" and "no look step" not in so and s["start_director"], (so, out)
+    assert [(c["requirement"], c["before"], c["after"], c["user"]) for c in s["corrections"]] == [
+        ("b: 2", "contains b: 2", None, "only a: 1 is required"), ("c: 3", "contains c: 3", None, "only a: 1 is required")]
+    p.ask("yes")
+    assert p.phase() == "build" and not denied(p.spawn())
+    p.verdict(PASS)
+    assert p.phase() == "done.passed"
+    so, _ = p.rehearse("job")
+    assert "corrected checks (2):" in so and "b: 2: contains b: 2 -> dropped (the user: only a: 1 is required)" in so, so
+    p = stuck()  # "redo this stage" still needs a look step; correct is the only way round it
+    decide(p, "--change", "--confirmed")
+    so, _ = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "a: 1", "contains", "a: 1", "--cite", "request")
+    assert "no look step" in so and p.phase() == "look"
+    p = final_stage()  # in the final stage, correct re-registers the job ending
+    p.edit("drafts/summary.md", "summary: not yet\n")
+    p.rehearse("run")  # the job ending fails on "draft"
+    for _ in range(3):
+        p.spawn()
+        p.verdict(REWORK)
+    p.prompt("the draft is fine as it is")
+    p.rehearse("stuck", "--correct", "--says", "the draft is fine as it is")
+    assert p.phase() == "look" and p.state()["reopen"]["why"] == "correct" and p.state()["reopen"]["failing"] == ["draft"]
+    print("stuck: these checks are wrong keeps the work, records each corrected check with the user's words: ok")
+
+    # ================= 3.2.0 guards: correct is anchored to the user's words and the failing checks =================
+    p = building()  # (1) --says must be the user's words from an answer since the stuck: not before, not a paraphrase
+    p.prompt("only a: 1 is required")  # said before the stage got stuck: does not count
+    p.edit("main.py", prog(1))
+    p.rehearse("run")
+    for _ in range(3):
+        p.spawn()
+        p.verdict(REWORK)
+    p.prompt("b and c are wrong")
+    so, _ = p.rehearse("stuck", "--correct", "--says", "only a: 1 is required")
+    assert "word for word" in so and p.phase() == "stuck", so
+    out = p.result("stuck", ok=True, answer="correct", says="the user wants only a")  # a paraphrase, past the command
+    assert blocked(out, "word for word") and p.phase() == "stuck", out
+    p.prompt("only a: 1 is required")
+    p.rehearse("stuck", "--correct", "--says", "only a: 1 is required")
+    assert p.phase() == "look" and p.state()["reopen"]["why"] == "correct"
+    p = stuck()  # no failing run recorded: correct has nothing to apply
+    p.prompt("b is wrong")
+    so, _ = p.rehearse("stuck", "--correct", "--says", "b is wrong")
+    assert "nothing to apply" in so and p.phase() == "stuck"
+    out = p.result("stuck", ok=True, answer="correct", says="b is wrong")
+    assert blocked(out, "nothing to apply") and p.phase() == "stuck"
+    print("correct: --says must be the user's words since the stuck; nothing to apply without a failing run: ok")
+
+    p = stuck_run()  # (2) only the failing checks (b, c) may change: not a, not a new check, not the command
+    p.prompt("only a: 1 is required")
+    p.rehearse("stuck", "--correct", "--says", "only a: 1 is required")
+    E = ["--cite", "request"]
+    _, out = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "a: 1", "contains", "b: 2", *E)  # a changed
+    assert blocked(out, "correct may change only the checks that were failing (b: 2, c: 3)") and "a: 1" in out["reason"], out
+    assert p.phase() == "look" and p.state()["reopen"]["why"] == "correct", p.phase()
+    _, out = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "a: 1", "contains", "a: 1", *E,
+                        "--expect", "d", "contains", "a: 1", *E)
+    assert blocked(out, "refused: d") and p.phase() == "look"
+    _, out = p.rehearse("ending", "--cmd", "python3 main.py; true", "--expect", "a: 1", "contains", "a: 1", *E)
+    assert blocked(out, "the command or the tests changed") and p.phase() == "look"
+    _, out = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "a: 1", "contains", "a: 1", *E)
+    assert p.phase() == "confirm" and len(p.state()["corrections"]) == 2, out
+    print("correct: only the failing checks may change, same command and tests: ok")
+
+    p = one_stage()  # (3) the confirmation is refused while a judgment call has no recorded answer
+    p.rehearse(*END3, "--call", "a: 1", "is a a tool?")
+    out = p.ask("yes")  # the question tool asked something else
+    assert p.phase() == "confirm" and not p.state()["confirmation"] and "is a a tool?" in ctx(out), out
+    out = p.ask_calls({"Would you call a a tool?": "yes"})  # a paraphrase: not matched, refused
+    assert p.phase() == "confirm" and p.state()["ending"]["calls"][0]["answer"] is None and "word for word" in ctx(out)
+    out = p.prompt("yes it is")  # no question tool: the next message answers the first open call
+    assert p.phase() == "confirm" and p.state()["ending"]["calls"][0]["answer"] == "yes it is" and "not asked yet" in ctx(out)
+    p.prompt("yes")
+    assert p.phase() == "build"
+    print("the confirmation waits for every judgment call's recorded answer, and names the call to ask: ok")
+
+    # ================= 3.2.0: stop here is said to end the whole job =================
+    p = building()
+    p.write("main.py", prog(1))
+    p.rehearse("run")  # a: 1 passes; b and c fail
+    for _ in range(3):
+        p.spawn()
+        p.verdict(REWORK)
+    note = p.state().get("verdict_note") or ""
+    assert "ends the whole rehearse job" in note and "these checks are wrong" in note, note
+    assert "failing checks: b: 2 (contains b: 2); c: 3 (contains c: 3)" in note, note
+    so, _ = p.rehearse("job")
+    assert "failing checks: b: 2" in so and "ends the whole rehearse job" in S.NEXT["stuck"]
+    p.prompt("ok, stop")
+    so, _ = p.rehearse("stuck", "--stop-here")
+    assert "the whole rehearse job ends now" in so and p.state()["stop_here"]
+    md = open(os.path.join(ROOT, "hooks", "instructions", "confirm.md")).read()
+    assert "`stop here`: **ends the whole rehearse job now**" in md and "`these checks are wrong`" in md
+    assert "`redo this stage`" in md and "Never frame this as" in md
+    print("stop here is named as ending the whole job, in the note, the next step, the command and confirm.md: ok")
 
     p = stuck()  # after change: plan --stage for the current stage
     decide(p, "--change", "--confirmed")

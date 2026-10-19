@@ -1,6 +1,6 @@
 {
   "name": "rehearse",
-  "version": "3.1.1",
+  "version": "3.2.0",
   "description": "Splits a job into stages and has each one done by hand against the real target before any code: a worker looks and registers the stage's ending, you confirm it in plain words, a worker builds until it passes, and an independent director checks every stage and the whole job. Turn it on by starting a prompt with 'rehearse'.",
   "license": "MIT",
   "keywords": [

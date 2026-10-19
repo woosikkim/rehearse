@@ -149,8 +149,10 @@ def strike(cur, msgs, cause):
         cur.update(phase="stuck", stuck_at=S.now(cur))
         if cur.get("stuck_log") is not None:
             cur["stuck_log"].append({"at": S.now(cur), "answer": None})
-        msgs.append("%s has %d strikes and is stuck: ask the user once (stop here, try again, or change the stage), "
-                    "then record the answer with rehearse stuck" % (S.label(cur), cur["strikes"]))
+        msgs.append("%s has %d strikes and is stuck: ask the user once (confirm.md): these checks are wrong "
+                    "(correct them; the work stays), redo this stage, try again, or stop here, which ends the whole "
+                    "rehearse job; say which applies and its cost; then record the answer with rehearse stuck. %s"
+                    % (S.label(cur), cur["strikes"], S.failing_checks(cur)))
     else:
         cur["phase"] = "done.not_fixed"
         msgs.append('%s has %d strikes. Write report.md starting with "not fixed": what is known and what '
@@ -195,8 +197,27 @@ def confirm_job(cur):
     return "[rehearse] the user confirmed the job. Next: stage %d's look" % cur["stage"]
 
 
+def unanswered_calls(cur):
+    e = cur.get("job_ending") if cur["phase"] == "job-confirm" else cur.get("ending")
+    return [c for c in (e or {}).get("calls") or [] if c.get("answer") is None]
+
+
+def call_note(cur):
+    """What the manager must do next while a judgment call is open."""
+    left = unanswered_calls(cur)
+    if left:
+        return "ask the next judgment call word for word, as its own question: %r" % left[0]["question"]
+    return "every call is answered: if an answer changes a check, register the ending again (cite request); " \
+           "otherwise ask the confirmation"
+
+
 def confirm_answer(cur, a, low):
     ph = cur["phase"]
+    left = unanswered_calls(cur) if attended() else []
+    if left:  # a prompt while a call is open answers the first open call (a headless manager asks them in order)
+        left[0]["answer"] = a
+        return "[rehearse] recorded as the answer to the judgment call %r; the confirmation is not asked yet. %s" % (
+            left[0]["question"], call_note(cur))
     yes = low in AFFIRMATIVE
     cur["job_confirmation" if ph == "job-confirm" else "confirmation"] = {
         "by": "user", "answer": a, "affirmative": yes, "at": S.now(cur)}
@@ -213,6 +234,12 @@ def confirm_answer(cur, a, low):
     return None
 
 
+def user_said(cur, text):
+    """Every answer the user gives, with its stamp: what `--says` and a goal's `answer` source must match."""
+    cur["user_answer_at"] = S.now(cur)
+    cur.setdefault("user_words", []).append({"text": text, "at": cur["user_answer_at"]})
+
+
 STUCK_NOTE = ("[rehearse] still stuck. The plugin does not read the decision from the user's words: read their answer, "
               "then record it with rehearse stuck --stop-here | --try-again | --change --confirmed (change only after "
               "their explicit yes to redoing the stage). A question from the user is not a decision: answer it, then "
@@ -224,7 +251,7 @@ def answer(cur, text, add=True):
     a = text.strip()
     low = a.lower().rstrip(".!")
     ph = cur["phase"]
-    cur["user_answer_at"] = S.now(cur)  # rehearse stuck needs a user answer recorded after the question arose
+    user_said(cur, a)  # rehearse stuck needs a user answer recorded after the question arose, word for word
     if ph in ("job-confirm", "confirm"):
         return confirm_answer(cur, a, low)
     if ph == "stuck":  # the decision comes from `rehearse stuck` (apply_stuck), never from matching these words
@@ -516,7 +543,7 @@ def apply_ending(cur, res, msgs):
         msgs.append(why)
         return True
     ro = cur.get("reopen")
-    if not job and ro and not ro["looks"]:
+    if not job and ro and not ro["looks"] and ro.get("why") != "correct":
         msgs.append(S.NO_LOOK)
         return True
     if not job:
@@ -536,11 +563,33 @@ def apply_ending(cur, res, msgs):
         return set_job_ending(cur, e, msgs)
     if ro and ro["why"] == "relock" and cur["relocks"]:
         cur["relocks"][-1]["looks"] = ro["looks"]
+    if ro and ro["why"] == "correct":  # only the failing checks may differ; every corrected one is recorded
+        old = {x["requirement"]: x for x in (cur.get("ending") or {}).get("expectations") or []}
+        new = {x["requirement"]: x for x in e["expectations"]}
+        shown = lambda x: "%s %s" % (x["check"], x["value"]) if x else None  # noqa: E731
+        changed = [r for r in sorted(set(old) | set(new)) if shown(old.get(r)) != shown(new.get(r))]
+        outside = [r for r in changed if r not in (ro.get("failing") or [])]
+        if e["cmd"] != ro.get("cmd") or (e.get("tests") or None) != (ro.get("tests") or None) or outside:
+            msgs.append("correct may change only the checks that were failing (%s), not the command or the tests; "
+                        "refused: %s" % (", ".join(ro.get("failing") or []) or "none",
+                                         ", ".join(outside) or "the command or the tests changed"))
+            return True
+        diff = [{"stage": S.label(cur), "requirement": r, "before": shown(old.get(r)), "after": shown(new.get(r)),
+                 "user": ro.get("says"), "at": S.now(cur)} for r in changed]
+        cur.setdefault("corrections", []).extend(diff)
+        msgs.append("corrected checks recorded: %d" % len(diff) if diff else "note: the corrected ending changes no check")
+    if cur["phase"] == "confirm":  # registered again after a judgment call changed a check: the answers carry over
+        answered = {c["question"]: c["answer"] for c in (cur.get("ending") or {}).get("calls") or [] if c.get("answer")}
+        for c in e.get("calls") or []:
+            c["answer"] = answered.get(c["question"])
     cur.update(ending=e, fewest_failing=nfail((res.get("before") or {}).get("results")), failing_runs=0,
                pending_change=False, reopen=None, no_ending=0, start_director=already, redo=None)
     if S.final(cur):
         cur["job_ending"] = e
+    calls = e.get("calls") or []
     if not attended():
+        cur["not_verified"] += ["judgment call not put to a person: %s (decides: %s)" % (c["question"], c["requirement"])
+                                for c in calls]
         cur.update(confirmation=unattended_mark(), phase="build")
         msgs.append("ending registered and accepted (unattended run, not confirmed by a person); edits are open"
                     + ("; it already passes: start rehearse:director" if already else ""))
@@ -549,7 +598,10 @@ def apply_ending(cur, res, msgs):
     msgs.append("ending registered." + (" It already passes: the code was right and the old ending was wrong; show "
                                         "the user the look steps since edits were locked, and after the yes start "
                                         "rehearse:director." if already else "")
-                + " Ask the user to confirm it in one plain sentence, with the command and the expected values beneath")
+                + " Ask the user to confirm it in one plain sentence, with the command and the expected values beneath"
+                + (". It rests on %d judgment call(s): ask each as its own question, word for word, before the "
+                   "confirmation: %s" % (len(calls), "; ".join("%s (decides %s)" % (c["question"], c["requirement"])
+                                                                for c in calls)) if calls else ""))
     if len(cur["stages"]) == 1:
         msgs.append("one-stage job: the same question lists the goal items and assumptions: %s; assumptions: %s" % (
             "; ".join("%s: %s" % (k, g["text"]) for k, g in (cur.get("goal") or {}).items()),
@@ -602,11 +654,21 @@ def apply_stuck(cur, res, msgs):
     # structural: the user must have spoken (a prompt or a question answer) since the question arose: the stage
     # becoming stuck, or the last worker's stop (a blocked look), or the stage start
     stuck = cur["phase"] == "stuck"
-    since = cur.get("stuck_at") or 0 if stuck else max((cur.get("worker") or {}).get("at") or 0, cur["started_at"])
+    since = S.question_since(cur)
     if not cur.get("user_answer_at") or cur["user_answer_at"] < since:
         msgs.append("no answer from the user is recorded since %s: ask them (a prompt, or AskUserQuestion), then "
                     "record what they chose" % ("the stage became stuck" if stuck else "the last worker stopped"))
         return True
+    if a == "correct":  # the one path that relaxes an ending: anchored to the user's words and the failing checks
+        bad = S.failing(cur)
+        if not bad:
+            msgs.append("correct has nothing to apply: no failing check is recorded for %s (no run of the ending "
+                        "failed); the stuck question's other options apply" % S.label(cur))
+            return True
+        if not S.said(cur, res.get("says"), since):
+            msgs.append("--says must be the user's words, word for word, from an answer recorded since the stage "
+                        "became stuck (as a goal item's answer source); not a paraphrase")
+            return True
     cur["notes"].append("stuck decision: %s" % a)
     log = cur.get("stuck_log")
     if log is None:
@@ -627,6 +689,15 @@ def apply_stuck(cur, res, msgs):
             cur.update(phase="build", strikes=0, failing_runs=0, start_director=bool(
                 runs and runs[-1]["passing"] and runs[-1]["at"] > judged and not cur["project_edits_since_run"]))
         msgs.append("try again: next: " + S.next_step(cur))
+    elif a == "correct":  # the work stays; only the failing checks may change, then the director judges
+        old = cur.get("ending") or {}
+        reopen(cur, "correct", strikes=0, pending_change=False)
+        cur["reopen"].update(says=res.get("says"), failing=[r.get("requirement") for r in S.failing(cur)],
+                             cmd=old.get("cmd"), tests=old.get("tests"))
+        msgs.append("correct: edits stay locked for %s; the work stays. Register the ending again with the checks "
+                    "corrected to the user's words (rehearse ending%s; no look step is needed; cite request for a "
+                    "value from their words), then have it confirmed; if it already passes, the director judges "
+                    "next" % (S.label(cur), " for the job ending" if S.final(cur) else ""))
     elif a == "change":
         reopen(cur, "change", strikes=0, pending_change=True)
         msgs.append("change: edits are locked for %s. %s Then look again (a stage step into project code, or "
@@ -749,15 +820,34 @@ def on_post(p, sid):
     if tool == "AskUserQuestion":
         resp = p.get("tool_response") if isinstance(p.get("tool_response"), dict) else {}
         answers = resp.get("answers") if isinstance(resp.get("answers"), dict) else {}
-        vals = [str(a).strip() for a in answers.values() if str(a).strip()]
-        if not vals:
+        answers = {str(q): str(a).strip() for q, a in answers.items() if str(a).strip()}
+        if not answers:
             return None
         with S.locked(s) as cur:
             if cur["phase"] == "goal":
-                cur["prompts"] += vals
-                cur["user_answer_at"] = S.now(cur)
+                cur["prompts"] += list(answers.values())
+                for a in answers.values():
+                    user_said(cur, a)
                 return None
-            msg = answer(cur, vals[0], add=False)
+            # a judgment call asked word for word is answered here, never taken as the confirmation
+            e = cur.get("job_ending") if cur["phase"] == "job-confirm" else cur.get("ending")
+            calls = (e or {}).get("calls") or [] if cur["phase"] in ("confirm", "job-confirm") else []
+            rest = []
+            for q, a in answers.items():
+                hit = [c for c in calls if c["question"] and c["question"] in q]
+                for c in hit:
+                    c["answer"] = a
+                    cur["prompts"].append(a)
+                    user_said(cur, a)
+                if not hit:
+                    rest.append(a)
+            if not rest:
+                return context(event, "[rehearse] judgment call answered: %s. %s" % (
+                    "; ".join("%s: %s" % (c["question"], c["answer"]) for c in calls if c.get("answer")), call_note(cur)))
+            if unanswered_calls(cur):  # the question tool asked something else while a call is open: not matched
+                return context(event, "[rehearse] the confirmation is refused while a judgment call has no answer; the "
+                                      "question did not match one word for word. " + call_note(cur))
+            msg = answer(cur, rest[0], add=False)
         return context(event, msg) if msg else None
     if tool != "Bash":
         return None
