@@ -117,6 +117,12 @@ class Proj:
         cmd = shlex.join(["rehearse", *args]) + (" 2>&1 | filter" if filt else "")
         return r.stdout, self.bash(cmd, filt(r.stdout) if filt else r.stdout, who, env)
 
+    def cli(self, *args):
+        """Run the command for real with NO hook call afterwards: the record is written, nothing has read it."""
+        r = subprocess.run([sys.executable, BIN, *args], cwd=self.root, capture_output=True, text=True, env=ENV)
+        assert r.returncode == 0, r.stderr
+        return r.stdout
+
     def result(self, kind, who=None, **kw):
         """A REHEARSE-RESULT line the hook reads, for commands whose real run needs more than a test can give."""
         line = "REHEARSE-RESULT " + json.dumps(dict(run=self.state()["run_id"], kind=kind, **kw))
@@ -719,8 +725,9 @@ try:
     p = relocked()
     p.spawn("rehearse:worker")
     p.result("fetch", ok=True, fixture="f")
-    p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "a", "contains", "a: 1", "--cite", "request")
-    assert "re-registered, fails" in ctx(p.returned("rehearse:worker"))
+    so, _ = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "a", "contains", "a: 1", "--cite", "request")
+    out = p.returned("rehearse:worker")
+    assert "re-registered, fails" in ctx(out), (out, so[-300:], p.state()["worker"], p.phase())
     p = relocked()
     p.spawn("rehearse:worker")
     p.result("fetch", ok=True, fixture="f")
@@ -821,8 +828,9 @@ try:
     p = building()  # the false strike: a build worker's passing run, filtered, then its stop
     p.spawn("rehearse:worker")
     p.edit("main.py", prog(3), WORKER)
-    p.rehearse("run", who=WORKER, filt=cut)
-    assert "passed" in ctx(p.returned("rehearse:worker")) and p.state()["strikes"] == 0
+    so, _ = p.rehearse("run", who=WORKER, filt=cut)
+    out = p.returned("rehearse:worker")
+    assert "passed" in ctx(out) and p.state()["strikes"] == 0, (out, so[-300:], p.state()["worker"], p.state()["runs"])
     print("a build worker's filtered passing run is no strike: ok")
 
     # ================= 3.0.1: the run folder's own records are written by the plugin only =================
@@ -865,6 +873,126 @@ try:
     assert "the user's answers" in so and q.state()["stages"] == [], so
     print("goal sources: request, answer, assumed, each checked against its own text: ok")
 
+    # ================= P4b: the Process section, computed by the plugin from the job file =================
+    p = relocked()  # strike 1: a relock; then an edit refused while locked
+    assert denied(p.pre("Edit", file_path=p.j("main.py")))
+    p.result("fetch", ok=True, fixture="f")
+    p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "a", "contains", "a: 1", "--cite", "request")
+    p.prompt("yes")
+    assert p.phase() == "build"
+    p.spawn("rehearse:worker")
+    p.returned("rehearse:worker")  # strike 2: a build worker with neither a pass nor a relock
+    p.spawn()
+    p.verdict(REWORK)  # strike 3: REWORK with the finding "only the sample": stuck
+    assert p.phase() == "stuck"
+    p.prompt("what now?")
+    decide(p, "--try-again")
+    so, _ = p.rehearse("job")
+    for want in ("## Process", "strikes: 3 (relock 1, build worker stopped without a pass 1, REWORK 1)",
+                 "REWORK reasons (1):\n  - stage 1: only the sample", "refusals: edits are locked 1",
+                 "stuck: 1 (try again); free-text answers while stuck: 2", "relocks: 1",
+                 # 7 invocations: plan, ending, run, run, ending, job for real, plus the faked fetch line above,
+                 # which no command wrote: the one without a record
+                 "rehearse commands: 7; results recorded: 6; without a record: 1\n"):
+        assert want in so, (want, so)
+    assert "(since 3.1.0" not in so  # every step of this job was counted exactly
+    p.bash("grep 'rehearse ending' log.md | head", "")  # quoted text is not an invocation
+    assert "rehearse commands: 8; results recorded: 7; without a record: 1" in p.rehearse("job")[0]  # + the job call
+    decide(p, "--stop-here")
+    p.report("not fixed: stuck\n\n## Not verified\nnone\n")
+    rpath = os.path.join(p.state()["run_folder"], "report.md")
+    assert p.stop() is None and p.phase() == "done.not_fixed"
+    rep = open(rpath).read()
+    assert rep.count("## Process") == 1 and "strikes: 3 (relock 1," in rep and rep.startswith("not fixed"), rep
+    assert p.stop() is None and open(rpath).read().count("## Process") == 1  # appended once
+    p = building()  # a passed job gets it too
+    fail(p, 0)
+    p.spawn()
+    p.verdict(PASS)
+    p.report("fixed\n\n## Not verified\nnone\n")
+    assert p.stop() is None and "strikes: 0 (none)" in open(os.path.join(p.state()["run_folder"], "report.md")).read()
+    print("the Process section: strikes by cause, REWORK reasons, refusals, stuck answers, relocks; appended once: ok")
+
+    def downgrade(p):
+        """Make the job file 3.0.1-shaped: no strike_log, stuck_log or refusals; the steps and records as 3.0.1 wrote them."""
+        s = p.state()
+        for k in ("strike_log", "stuck_log", "refusals"):
+            s.pop(k, None)
+        json.dump(s, open(s["path"], "w"))
+        f = s["run_folder"]
+        recs = [json.loads(ln) for ln in open(os.path.join(f, "commands.jsonl")) if ln.strip()]
+        with open(os.path.join(f, "commands.jsonl"), "w") as fh:
+            for r in recs:
+                r.pop("rehearse", None)
+                fh.write(json.dumps(r) + "\n")
+        res = [json.loads(ln) for ln in open(os.path.join(f, "results.jsonl")) if ln.strip()]
+        with open(os.path.join(f, "results.jsonl"), "w") as fh:
+            for r in res:
+                r.pop("at", None)
+                fh.write(json.dumps(r) + "\n")
+
+    p = two_stage()  # a 3.0.1-shaped job file goes through a stage PASS under 3.1.0 (archive with defaults)
+    p.rehearse(*S1_END)
+    p.prompt("yes")
+    p.edit("collect.py", COLLECT)
+    p.run_collect()
+    p.spawn()
+    p.verdict(REWORK)  # a strike nobody can log: stays unknown
+    assert p.state()["strikes"] == 1
+    downgrade(p)
+    assert denied(p.pre("Edit", file_path=p.j("drafts/x.md")) or {}) is False  # a refusal log that is missing stays missing
+    p.spawn()
+    p.verdict(PASS)
+    s = p.state()
+    assert s["phase"] == "look" and s["stage"] == 2 and s["stages"][0]["passed"], s["phase"]
+    assert s["stages"][0]["strike_log"] is None and s["stages"][0]["stuck_log"] is None and s["strike_log"] == []
+    p.rehearse("job")
+    so, _ = p.rehearse("job")  # unknown is never printed as zero; the first job call is the one exact command so far
+    for want in ("strikes: 0 (none); not recorded for stage 1 (job predates 3.1.0)",
+                 "stuck: 0 (none); not recorded for stage 1 (job predates 3.1.0)",
+                 "refusals: not recorded (job predates 3.1.0)",
+                 "rehearse commands: 1; results recorded: 1; without a record: 0 (since 3.1.0; earlier: 3 commands by "
+                 "text, 3 results recorded by 3.0.1,"):
+        assert want in so, (want, so)
+    assert "REWORK reasons (1):\n  - stage 1: only the sample" in so and "relocks: 0" in so
+    print("a 3.0.1 job file: PASS archives with defaults; missing logs print as not recorded, never zero: ok")
+
+    # ================= 3.1.0: self-healing: every unread record applies before a decision =================
+    p = building()  # a build worker's passing run whose PostToolUse hook call never came: no false strike
+    p.spawn("rehearse:worker")
+    p.edit("main.py", prog(3), WORKER)
+    p.cli("run")
+    assert p.state()["runs"] == []
+    out = p.returned("rehearse:worker")
+    assert "passed" in ctx(out) and p.state()["strikes"] == 0 and p.state()["runs"][-1]["passing"], out
+    p = building()  # the director's own run, its hook call missed: applied at its stop as a director run
+    p.write("main.py", prog(3))
+    p.spawn()
+    p.cli("run", "--as-director")
+    p.verdict(PASS)
+    s = p.state()
+    assert s["phase"] == "done.passed" and s["director_runs"][-1]["all_pass"], s["director_runs"]
+    assert s["director_runs"][-1]["agent_type"] == "rehearse:director"
+    p = building()  # the manager's passing run, missed: Stop reads it, so "fixed" is verified
+    p.write("main.py", prog(3))
+    p.spawn()
+    p.verdict(PASS)
+    p.cli("run")
+    p.report("fixed\n\n## Not verified\nnone\n")
+    assert p.stop() is None and p.state()["closed"], p.stop()
+    p = building()  # a spawn decision: the missed passing run is read before the director is prepared
+    p.write("main.py", prog(3))
+    p.cli("run")
+    p.spawn()
+    assert p.state()["runs"][-1]["passing"] and p.phase() == "judge"
+    p = stuck()  # rehearse stuck after a missed passing check: try again goes to the director
+    p.write("main.py", prog(3))
+    p.cli("run")
+    p.prompt("try again")
+    p.rehearse("stuck", "--try-again")
+    assert p.phase() == "build" and p.state()["start_director"]
+    print("self-healing: a missed hook call never costs a strike, a verdict, a verified report or a next step: ok")
+
     p = stuck()  # after change: plan --stage for the current stage
     decide(p, "--change", "--confirmed")
     so, _ = p.rehearse(*PLAN1)
@@ -890,8 +1018,10 @@ try:
     p.returned("rehearse:worker")  # no ending: the manager asks the stuck question at once
     _, out = p.rehearse("stuck", "--change", "--confirmed")  # structural: the user has not spoken since the stop
     assert blocked(out, "no answer from the user") and not p.state()["pending_change"], out
-    decide(p, "--change", "--confirmed")
-    assert p.state()["pending_change"] and p.phase() == "look"
+    so, out = decide(p, "--change", "--confirmed")
+    s = p.state()
+    assert s["pending_change"] and s["phase"] == "look", (out, so[-300:], s["worker"], s.get("user_answer_at"),
+                                                           s["started_at"], s.get("clock"), s["notes"])
     so, _ = p.rehearse("plan", "--stage", "1", "--stage-def", "only", "fix", "smaller", "-", "-")
     assert p.state()["stages"][0]["line"] == "smaller", so
     print("an attended look blocker answered change: plan --stage accepted: ok")
@@ -1333,6 +1463,12 @@ try:
     r = p.stop()
     assert blocked(r, "final stage (job ending), phase build") and "stage 3" not in r["reason"], r
     print("the final stage's wording in rehearse job, notes and Stop reasons: ok")
+except BaseException:
+    # a failed check: show any hook error the hook swallowed (it fails open and logs here), then the traceback
+    log = os.path.join(DATA, "hook-errors.log")
+    if os.path.exists(log):
+        print("hook-errors.log:\n" + open(log).read()[-3000:])
+    raise
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 

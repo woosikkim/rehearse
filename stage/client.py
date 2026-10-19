@@ -10,6 +10,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import time
 
 SERVER = os.path.join(os.path.dirname(os.path.realpath(__file__)), "server.py")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(SERVER)), "hooks"))
@@ -21,7 +22,7 @@ FOLDER = None  # set by bin/rehearse: the run folder, where every result is reco
 
 
 def result(run, kind, **kw):
-    res = dict(run=run, kind=kind, **kw, id=secrets.token_hex(4))
+    res = dict(run=run, kind=kind, **kw, id=secrets.token_hex(4), at=time.time())
     if FOLDER:
         try:
             L.record_result(FOLDER, res)

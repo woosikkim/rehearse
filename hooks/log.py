@@ -81,14 +81,16 @@ def new_results(folder, offset):
     return out, offset + len(data)
 
 
-def log_command(folder, cmd, output, phase, kinds=None):
+def log_command(folder, cmd, output, phase, kinds=None, invocations=0):
     """Append one Bash command and the head of its output; return its step id (S1, S2, ...)."""
     step = "S%d" % (1 + sum(1 for r in records(folder) if "step" in r))
     # the plugin's own result kinds (bin/rehearse excludes ending/run steps as sources): from the hook's records,
     # else read from the output before the trim can cut the last line
     kinds = [k for k in kinds or [] if k] or re.findall(r'^REHEARSE-RESULT .*?"kind": "([\w-]+)"', output, re.M)
     cmd, out = redact(cmd, command=True), trim(redact(output))
-    record(folder, {"step": step, "cmd": cmd, "phase": phase, "out": out, "result": kinds[-1] if kinds else None})
+    # "rehearse": how many rehearse commands this step ran (each should have written a result); since 3.1.0
+    record(folder, {"step": step, "cmd": cmd, "phase": phase, "out": out, "result": kinds[-1] if kinds else None,
+                    "rehearse": invocations})
     with open(os.path.join(folder, "log.md"), "a", encoding="utf-8") as f:
         f.write("\n".join(["%s [%s] $ %s" % (step, phase, cmd)] + ([out] if out else [])) + "\n\n")
     return step

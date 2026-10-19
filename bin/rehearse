@@ -22,6 +22,7 @@ import re
 import secrets
 import subprocess
 import sys
+import time
 import urllib.parse
 
 PLUGIN = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -39,7 +40,7 @@ def result(run, kind, **kw):
     head = dict(run=run, kind=kind)
     if "ok" in kw:
         head["ok"] = kw.pop("ok")
-    res = dict(head, **kw, id=secrets.token_hex(4))
+    res = dict(head, **kw, id=secrets.token_hex(4), at=time.time())
     if FOLDER:  # the hook reads this record: a pipe that cuts or truncates the printed line loses nothing
         try:
             L.record_result(FOLDER, res)

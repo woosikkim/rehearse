@@ -46,12 +46,22 @@ def context(event, text):
     return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}
 
 
-def deny(s, why):
+def refused(s, why, kind=None):
+    """Count every refusal by kind for the Process section (the kind: the message's head, or as given).
+    A job file from before 3.1.0 has no log: it stays missing ("not recorded"), never a count that began late."""
+    with S.locked(s) as cur:
+        if cur.get("refusals") is not None:
+            cur["refusals"].append({"kind": kind or re.split(r"[;:.\n]", why)[0].strip()[:60], "at": S.now(cur)})
+
+
+def deny(s, why, kind=None):
+    refused(s, why, kind)
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                    "permissionDecisionReason": "rehearse: %s.\n%s" % (why, status_line(s))}}
 
 
-def block(s, why):
+def block(s, why, kind=None):
+    refused(s, why, kind)
     return {"decision": "block", "reason": "rehearse: %s.\n%s" % (why, status_line(s))}
 
 
@@ -99,11 +109,12 @@ def declared(s):
 
 
 def start_stage(cur, n):
-    cur.update(S.fresh_stage(F.fingerprint(cur["root"])), stage=n)
+    cur.update(S.fresh_stage(F.fingerprint(cur["root"]), S.now(cur)), stage=n)
 
 
 def archive(cur):
-    cur["stages"][cur["stage"] - 1].update({k: cur[k] for k in S.STAGE_KEYS}, passed=True, reruns=[])
+    # .get: a job file from an earlier release may lack a newer stage field (strike_log, stuck_log since 3.1.0)
+    cur["stages"][cur["stage"] - 1].update({k: cur.get(k) for k in S.STAGE_KEYS}, passed=True, reruns=[])
 
 
 def advance(cur):
@@ -127,13 +138,17 @@ def advance(cur):
             "Run it with rehearse run, add glue if needed, then start rehearse:director" % n)
 
 
-def strike(cur, msgs):
+def strike(cur, msgs, cause):
     cur["strikes"] += 1
     cur["pending_change"] = False
+    if cur.get("strike_log") is not None:  # a stage begun before 3.1.0 has no log: it stays "not recorded"
+        cur["strike_log"].append({"cause": cause, "at": S.now(cur)})
     if cur["strikes"] < int(float(option("MAX_STRIKES", "3"))):
         return
     if attended():
-        cur.update(phase="stuck", stuck_at=time.time())
+        cur.update(phase="stuck", stuck_at=S.now(cur))
+        if cur.get("stuck_log") is not None:
+            cur["stuck_log"].append({"at": S.now(cur), "answer": None})
         msgs.append("%s has %d strikes and is stuck: ask the user once (stop here, try again, or change the stage), "
                     "then record the answer with rehearse stuck" % (S.label(cur), cur["strikes"]))
     else:
@@ -145,17 +160,17 @@ def strike(cur, msgs):
 def reopen(cur, why, **kw):
     """Edits locked again for the same stage (a relock or the user's "change"): a look step comes first."""
     cur.update(kw, phase="look", fp_phase_entry=F.fingerprint(cur["root"]), failing_runs=0, code_edits_since_run=0,
-               direct_pending=False, reopen={"at": time.time(), "looks": 0, "why": why})
+               direct_pending=False, reopen={"at": S.now(cur), "looks": 0, "why": why})
 
 
 def relock(cur, msgs):
     n = cur["failing_runs"]
     reopen(cur, "relock")
-    cur["relocks"].append({"at": time.time()})
+    cur["relocks"].append({"at": S.now(cur)})
     cur["notes"].append("%s: edits relocked after %d failing runs" % (S.label(cur), n))
     msgs.append("%d failing runs in a row: edits are locked again. Stop and say what you learned; the next step is "
                 "a look (a stage step into project code, or rehearse fetch)" % n)
-    strike(cur, msgs)
+    strike(cur, msgs, "relock")
 
 
 def failing_run(cur, msgs):
@@ -184,7 +199,7 @@ def confirm_answer(cur, a, low):
     ph = cur["phase"]
     yes = low in AFFIRMATIVE
     cur["job_confirmation" if ph == "job-confirm" else "confirmation"] = {
-        "by": "user", "answer": a, "affirmative": yes, "at": time.time()}
+        "by": "user", "answer": a, "affirmative": yes, "at": S.now(cur)}
     if yes and ph == "job-confirm":
         return confirm_job(cur)
     if yes:
@@ -209,7 +224,7 @@ def answer(cur, text, add=True):
     a = text.strip()
     low = a.lower().rstrip(".!")
     ph = cur["phase"]
-    cur["user_answer_at"] = time.time()  # rehearse stuck needs a user answer recorded after the question arose
+    cur["user_answer_at"] = S.now(cur)  # rehearse stuck needs a user answer recorded after the question arose
     if ph in ("job-confirm", "confirm"):
         return confirm_answer(cur, a, low)
     if ph == "stuck":  # the decision comes from `rehearse stuck` (apply_stuck), never from matching these words
@@ -297,8 +312,8 @@ def spawn_worker(s, tin):
     half = s["phase"]
     with S.locked(s) as cur:
         cur["workers"] += 1
-        cur["worker"] = {"half": half, "at": time.time(), "relocks": len(cur["relocks"]), "reopen": bool(cur["reopen"])}
-        cur["spawn"] = {"kind": "worker", "at": time.time(), "background": False, "stopped": False}
+        cur["worker"] = {"half": half, "at": S.now(cur), "relocks": len(cur["relocks"]), "reopen": bool(cur["reopen"])}
+        cur["spawn"] = {"kind": "worker", "at": S.now(cur), "background": False, "stopped": False}
     kind = stage_def(cur).get("kind") or "build"
     text = "\n\n".join(["[rehearse] %s %s" % (S.label(cur), half), instruction("worker.md"),
                         instruction("%s-%s.md" % (kind, half)), "This stage (from the job file):\n" + about(cur),
@@ -311,9 +326,9 @@ def spawn_director(s, tin):
     with S.locked(s) as cur:
         fpath = FD.write(cur)
         cur["spawn_fingerprint"] = dict(F.fingerprint(cur["root"]), outputs={o: F._sig(o) for o in declared(cur)})
-        cur["spawn_at"] = time.time()
+        cur["spawn_at"] = S.now(cur)
         cur.update(verdict_note=None, phase="judge", start_director=False,
-                   spawn={"kind": "director", "at": time.time(), "background": False, "stopped": False})
+                   spawn={"kind": "director", "at": S.now(cur), "background": False, "stopped": False})
     extra = "- ending record: %s (the \"ending\" key)\n- findings: %s\n%s" % (S.mirror_path(cur), fpath, about(cur))
     if S.final(cur):
         extra += "\nEvery stage ending; rerun each with `rehearse run --stage <n> --as-director` (a live source: " \
@@ -331,6 +346,9 @@ def on_pre(p, sid):
     tin = p.get("tool_input") if isinstance(p.get("tool_input"), dict) else {}
     cwd = p.get("cwd") or s["root"]
     if tool == "Agent":
+        with S.locked(s) as cur:
+            drain(cur, p.get("agent_type"))  # a spawn decision rests on every result so far
+        s = S.current(sid)
         kind = tin.get("subagent_type")
         if kind in DIRECTOR and S.running(s) == "worker":
             return deny(s, "worker still running in the background; wait for its notification, then rehearse job")
@@ -358,7 +376,7 @@ def on_pre(p, sid):
             return None
         real = P.realpath(cwd, path)
         if real in own:
-            return deny(s, "%s is the plugin's own record; it is written by the plugin only" % path)
+            return deny(s, "%s is the plugin's own record; it is written by the plugin only" % path, "plugin record")
         if real in outs:
             return deny(s, "%s; %s is a declared output in the plan" % (NEED_ENDING, path))
         if locked and F.kind(s["root"], real):
@@ -373,7 +391,8 @@ def on_pre(p, sid):
     for seg in segs:
         for t in seg["targets"]:
             if t in own:
-                return deny(s, "this command writes %s, the plugin's own record; it is written by the plugin only" % t)
+                return deny(s, "this command writes %s, the plugin's own record; it is written by the plugin only" % t,
+                            "plugin record")
     if locked:
         for seg in segs:
             for t in seg["targets"]:
@@ -387,7 +406,8 @@ def on_pre(p, sid):
             pp = seg["pp"]
             if pp and os.path.isabs(pp) and pp not in made and (pp in created or new_code_file(s, pp)):
                 return deny(s, "%s was created during this stage; it may not run while edits are locked. Run "
-                               "programs that existed when the stage started, or look through the stage" % pp)
+                               "programs that existed when the stage started, or look through the stage" % pp,
+                            "a created file may not run while edits are locked")
             made.update(seg["outputs"])
     targets = [t for seg in segs for t in seg["targets"]]
     outputs = [o for seg in segs for o in seg["outputs"]]
@@ -507,7 +527,7 @@ def apply_ending(cur, res, msgs):
                     "the work (a build fails because the program does not exist yet)")
         return True
     e = dict(res["ending"], before=res.get("before"), after=None, baseline=res.get("baseline"),
-             tests_effective=(res.get("baseline") or {}).get("cmd"), registered_at=time.time())
+             tests_effective=(res.get("baseline") or {}).get("cmd"), registered_at=S.now(cur))
     cur["not_verified"] += [u for u in e.get("unchecked") or [] if u not in cur["not_verified"]]
     if job:
         return set_job_ending(cur, e, msgs)
@@ -536,7 +556,7 @@ def apply_ending(cur, res, msgs):
 
 def apply_run(cur, res, msgs):
     director = res.get("as_director") and res.get("agent_type") in DIRECTOR
-    rec = dict({k: res.get(k) for k in ("rc", "results", "all_pass")}, agent_type=res.get("agent_type"), at=time.time())
+    rec = dict({k: res.get(k) for k in ("rc", "results", "all_pass")}, agent_type=res.get("agent_type"), at=S.now(cur))
     n = res.get("stage_rerun")
     if n:
         if not (director and S.final(cur) and 1 <= n <= len(cur["stages"])):
@@ -553,7 +573,7 @@ def apply_run(cur, res, msgs):
     passing, failing, edits = bool(res.get("all_pass")), nfail(res.get("results")), cur["project_edits_since_run"]
     if cur["relocks"] and "next_run" not in cur["relocks"][-1]:
         cur["relocks"][-1]["next_run"] = {"passed": passing, "edits": edits}
-    cur["runs"].append({"passing": passing, "failing": failing, "at": time.time()})
+    cur["runs"].append({"passing": passing, "failing": failing, "at": S.now(cur)})
     cur.update(project_edits_since_run=0, code_edits_since_run=0, direct_pending=False)
     if cur["phase"] == "look" and cur["reopen"] and passing:
         cur.update(phase="build", start_director=True, reopen=None, pending_change=False)
@@ -585,6 +605,13 @@ def apply_stuck(cur, res, msgs):
                     "record what they chose" % ("the stage became stuck" if stuck else "the last worker stopped"))
         return True
     cur["notes"].append("stuck decision: %s" % a)
+    log = cur.get("stuck_log")
+    if log is None:
+        pass  # a stage begun before 3.1.0: not recorded
+    elif stuck and log and log[-1].get("answer") is None:
+        log[-1]["answer"] = a
+    else:
+        log.append({"at": S.now(cur), "answer": a, "where": cur["phase"]})
     if a == "stop here":
         cur.update(stop_here=True, pending_change=False)
         msgs.append('the user chose to stop here; write report.md starting with "not fixed", then finish')
@@ -627,6 +654,20 @@ def apply_result(cur, res, msgs):
     if kind == "stage-step" and res.get("project_files"):
         look_step(cur)
     return False
+
+
+def drain(cur, agent_type, msgs=None):
+    """Self-healing: apply every record the CLI wrote that no hook call has read yet (a PostToolUse that was
+    missed, timed out or failed open), before any decision rests on it. Records carry no agent: the caller
+    names the agent whose records they can be (its own stop, or none)."""
+    recorded, cur["results_read"] = L.new_results(cur["run_folder"], cur.get("results_read", 0))
+    out = [] if msgs is None else msgs
+    for res in (r for r in recorded if r.get("run") == cur["run_id"]):
+        res["agent_type"] = agent_type
+        apply_result(cur, res, out)
+    if msgs is None and out:
+        cur["notes"].append("applied at a later hook call: " + " ".join(out))
+    return recorded
 
 
 def results(text):
@@ -696,7 +737,7 @@ def on_post(p, sid):
         with S.locked(s) as cur:
             L.log_edit(cur["run_folder"], tool, path, cur["phase"])
             if k == "data":
-                cur["config_edits"].append({"path": path, "phase": cur["phase"], "at": time.time()})
+                cur["config_edits"].append({"path": path, "phase": cur["phase"], "at": S.now(cur)})
             if k and not judge:
                 project_edit(cur, msgs)
             if code:
@@ -711,7 +752,7 @@ def on_post(p, sid):
         with S.locked(s) as cur:
             if cur["phase"] == "goal":
                 cur["prompts"] += vals
-                cur["user_answer_at"] = time.time()
+                cur["user_answer_at"] = S.now(cur)
                 return None
             msg = answer(cur, vals[0], add=False)
         return context(event, msg) if msg else None
@@ -731,7 +772,7 @@ def on_post(p, sid):
         plain = any(seg["prog"] == "rehearse" or os.path.basename(seg["pp"] or "") == "rehearse" for seg in segs)
         named = plain or bool(re.search(r"(?<![\w-])rehearse(?![\w-])", cmd))
         found = recorded + ([r for r in results(out) if not r.get("id")] if named else [])
-        L.log_command(cur["run_folder"], cmd, out, cur["phase"], [r.get("kind") for r in found])
+        L.log_command(cur["run_folder"], cmd, out, cur["phase"], [r.get("kind") for r in found], P.invocations(cmd))
         if plain or found:
             if not found:
                 msgs.append("no result recorded for this rehearse command; run it again on its own, from the project")
@@ -777,6 +818,7 @@ def worker_stop(s):
         w, msgs = cur.get("worker"), []
         if not w or w.get("outcome"):
             return None
+        drain(cur, "rehearse:worker", msgs)  # its own run may have been recorded without its hook call
         runs = [r for r in cur["runs"] if r["at"] >= w["at"]]
         registered = (cur.get("ending") or {}).get("registered_at", 0) >= w["at"]
         if w["half"] == "build":
@@ -786,7 +828,7 @@ def worker_stop(s):
                 out = "passed"
             else:
                 out = "neither"
-                strike(cur, msgs)
+                strike(cur, msgs, "build worker stopped without a pass")
         elif registered:
             out = "re-registered, %s" % ("already passes" if cur["start_director"] else "fails") if w["reopen"] \
                 else "ending registered"
@@ -797,7 +839,7 @@ def worker_stop(s):
             cur["no_ending"] += 1
             if cur["no_ending"] >= 2:
                 cur["no_ending"] = 0
-                strike(cur, msgs)
+                strike(cur, msgs, "two look workers without an ending")
         w["outcome"] = out + ("; " + " ".join(msgs) if msgs else "")
     return None
 
@@ -821,13 +863,14 @@ def on_subagent_stop(p, sid):
     verdict = str(v.get("verdict") or "").upper()
     with S.locked(s) as cur:
         spawn, msgs = cur["spawn_fingerprint"], []
+        drain(cur, p.get("agent_type"), msgs)  # the director's own runs, if their hook calls were missed
         changed = F.code_change(spawn, F.fingerprint(cur["root"]))
         changed += [os.path.relpath(o, cur["root"]) for o, sig in (spawn.get("outputs") or {}).items()
                     if F._sig(o) != sig]
         changed += [e["path"] for e in cur["config_edits"] if e["at"] >= cur.get("spawn_at", 0)]
         rec = {"agent_type": p.get("agent_type"), "agent_id": p.get("agent_id"), "verdict": verdict,
                "findings": v.get("findings"), "extra_inputs": v.get("extra_inputs"), "tests": v.get("tests"),
-               "at": time.time()}
+               "at": S.now(cur)}
         cur["spawn_fingerprint"] = None
         cur["verdicts"].append(rec)
         n = S.label(cur)
@@ -840,7 +883,7 @@ def on_subagent_stop(p, sid):
             msg = advance(cur)
         elif verdict == "REWORK":
             cur.update(findings=v.get("findings"), phase="build", start_director=False)
-            strike(cur, msgs)
+            strike(cur, msgs, "REWORK")
             msg = "[rehearse] %s: the director asks for rework: %s" % (
                 n, json.dumps(v.get("findings"), ensure_ascii=False))
         else:
@@ -874,13 +917,16 @@ def on_stop(p, sid):
     s = S.newest(sid)
     if not S.v3(s) or s["phase"] == "done.cancelled" or s.get("closed"):
         return None
+    with S.locked(s) as cur:
+        if drain(cur, None):  # the manager's own results, if a hook call was missed: verified() reads them
+            s = cur
     ph = s["phase"]
     first, nv = report(s)
     # An honest give-up ends the job where nobody can answer: unattended, or after the user chose "stop here".
     if (first or "").startswith("not fixed") and nv and (not attended() or s.get("stop_here")):
-        if ph != "done.not_fixed":
-            with S.locked(s) as cur:
-                cur["phase"] = "done.not_fixed"
+        with S.locked(s) as cur:
+            cur["phase"] = "done.not_fixed"
+            S.finish_report(cur)
         return None
     nxt = None
     if ph == "done.not_fixed" or s.get("stop_here"):
@@ -909,13 +955,15 @@ def on_stop(p, sid):
             with S.locked(s) as cur:
                 FD.write(cur)
     if nxt:
+        refused(s, nxt, "stop blocked: " + re.split(r"[;:.\n]", nxt)[0].strip()[:40])
         return {"decision": "block", "reason": status_line(s, nxt)}
-    if s.get("stop_here") and ph != "done.not_fixed":
-        with S.locked(s) as cur:
+    with S.locked(s) as cur:
+        if cur.get("stop_here") and ph != "done.not_fixed":
             cur["phase"] = "done.not_fixed"
-    if ph == "done.passed":  # the job is over; later work in this session is not governed by it
-        with S.locked(s) as cur:
+        if ph == "done.passed":  # the job is over; later work in this session is not governed by it
             cur["closed"] = True
+        if cur["phase"] in ("done.passed", "done.not_fixed") and first is not None:
+            S.finish_report(cur)
     return None
 
 

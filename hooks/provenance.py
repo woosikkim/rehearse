@@ -28,6 +28,17 @@ def realpath(cur, path):
     return os.path.realpath(os.path.join(cur, os.path.expanduser(str(path))))
 
 
+REHEARSE_CALL = re.compile(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:plan|ending|run|fetch|job|status|stuck|stage)\b")
+
+
+def invocations(cmd):
+    """How many rehearse commands the text runs, each expected to write a result (quoted text and heredoc
+    bodies blanked, so `grep 'rehearse ending' log.md` and a script fed on stdin do not count)."""
+    bare = HEREDOC.sub(lambda m: " " * len(m.group(0)), cmd)
+    bare = QUOTED.sub(lambda q: q.group(0)[0] + "_" * (len(q.group(0)) - 2) + q.group(0)[-1], bare)
+    return len(REHEARSE_CALL.findall(bare))
+
+
 def segments(cmd):
     """Blank quoted text without changing its length, cut on separators found in the blanked text, return raw slices."""
     bare = QUOTED.sub(lambda q: q.group(0)[0] + "_" * (len(q.group(0)) - 2) + q.group(0)[-1], cmd)

@@ -5,6 +5,7 @@ decision reads. Each save also writes a copy to <root>/.rehearsal/<run_id>/state
 bin/rehearse (no plugin variables; possibly a sandboxed shell that cannot see the data folder) and the director
 read. An edited or deleted copy changes no decision; a missing copy is written again on the next hook call.
 """
+import collections
 import contextlib
 import datetime
 import fcntl
@@ -28,17 +29,29 @@ NEXT = {"judge": "wait for the director's verdict",
         "done.cancelled": "the job is cancelled"}
 
 
-def fresh_stage(fp):
+def fresh_stage(fp, at=None):
     """The current-stage fields, reset at every stage start (brief section 8); archived into stages[n] on PASS."""
     return {"ending": None, "confirmation": None, "created": [], "produced": [], "fp_activation": fp,
             "fp_phase_entry": fp, "director_runs": [], "findings": None, "verdicts": [], "spawn_fingerprint": None,
-            "config_edits": [], "started_at": time.time(), "runs": [], "failing_runs": 0, "fewest_failing": None,
+            "config_edits": [], "started_at": at or time.time(), "runs": [], "failing_runs": 0, "fewest_failing": None,
             "direct_pending": False, "project_edits_since_run": 0, "code_edits_since_run": 0, "relocks": [],
             "strikes": 0, "pending_change": False, "reopen": None, "redo": None, "no_ending": 0, "worker": None,
-            "spawn": None, "workers": 0, "start_director": False}
+            "spawn": None, "workers": 0, "start_director": False, "strike_log": [], "stuck_log": []}
 
 
 STAGE_KEYS = tuple(fresh_stage(None))
+
+
+def now(cur):
+    """A stamp for ordering inside the job file: never earlier than the last one, even when the wall clock steps
+    back between two hook processes (a WSL2 resync). A step back is noted once, for the Process section."""
+    t = time.time()
+    last = cur.get("clock") or 0
+    if t < last - 0.05:
+        cur.setdefault("notes", []).append("clock stepped back %.3f s between hook calls" % (last - t))
+    t = max(t, last + 1e-6)
+    cur["clock"] = t
+    return t
 
 
 def passed(s):
@@ -110,7 +123,94 @@ def job_text(s):
         last = s.get("verdict_note") if sp["kind"] == "director" else (s.get("worker") or {}).get("outcome")
         lines.append("last: %s" % (last or "no result recorded"))
     lines += ["next: " + next_step(s), "not verified: " + ("; ".join(s.get("not_verified") or []) or "none recorded")]
-    return "\n".join(lines)
+    return "\n".join(lines + [""] + process_lines(s))
+
+
+def one_line(x, n=120):
+    text = x if isinstance(x, str) else json.dumps(x, ensure_ascii=False)
+    return (text.strip().splitlines() or [""])[0][:n]
+
+
+def process_lines(s):
+    """The Process section (owner's proposal P4b): counts from the job file and the run folder's records, computed
+    by the plugin, never written by a model. It changes nothing by itself; a rule change stays a human proposal."""
+    folder = s["run_folder"]
+
+    def lines(name):  # the stage server loads this module by path, so hooks/log.py is read here directly
+        try:
+            with open(os.path.join(folder, name), encoding="utf-8") as f:
+                return [ln for ln in f if ln.strip()]
+        except OSError:
+            return []
+    def parsed(name):
+        out = []
+        for ln in lines(name):
+            try:
+                out.append(json.loads(ln))
+            except ValueError:
+                continue
+        return out
+    steps = [r for r in parsed("commands.jsonl") if "step" in r]
+    records = parsed("results.jsonl")
+    # Commands that should have written a result against results recorded. Since 3.1.0 the hook counts each
+    # step's rehearse invocations exactly ("rehearse") and every record carries "at"; steps and records from
+    # earlier releases are counted by text and shown apart, since results were then read from the output.
+    exact = [r for r in steps if "rehearse" in r]
+    ran = sum(int(r.get("rehearse") or 0) for r in exact)
+    rec = sum(1 for r in records if "at" in r)
+    by_text = sum(len(re.findall(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:plan|ending|run|fetch|job|status|stuck|"
+                                 r"stage)\b", r.get("cmd") or "")) for r in steps if "rehearse" not in r)
+    commands = "- rehearse commands: %d; results recorded: %d; without a record: %d" % (ran, rec, max(ran - rec, 0))
+    if rec > ran:  # a script (python3 - <<EOF ...) that calls rehearse in a loop is not countable from its text
+        commands += "; results from commands inside scripts, not counted: %d" % (rec - ran)
+    if len(exact) < len(steps):
+        commands += (" (since 3.1.0; earlier: %d commands by text, %d results recorded by 3.0.1, results read from "
+                     "the output before the record file not counted)" % (by_text, len(records) - rec))
+    # every stage so far: the archived ones carry their own fields, the current one is the top level
+    rows = [("stage %d" % i, st) for i, st in enumerate(s.get("stages") or [], 1) if "verdicts" in st]  # archived
+    rows.append((label(s), s))
+    old = "not recorded (job predates 3.1.0)"
+    counts = lambda c: ", ".join("%s %d" % kv for kv in c.most_common()) if c else "none"  # noqa: E731
+
+    def logged(key, text):
+        """A missing log is unknown, never zero: a stage begun before 3.1.0 says so beside the stages that have it."""
+        have = [(lab, st) for lab, st in rows if st.get(key) is not None]
+        missing = [lab for lab, st in rows if st.get(key) is None]
+        if not have:
+            return old
+        return text(have) + ("; not recorded for %s (job predates 3.1.0)" % ", ".join(missing) if missing else "")
+    strikes = logged("strike_log", lambda have: "%d (%s)" % (
+        sum(len(st["strike_log"]) for _, st in have),
+        counts(collections.Counter(e.get("cause") for _, st in have for e in st["strike_log"]))))
+    stuck = logged("stuck_log", lambda have: "%d (%s)" % (
+        sum(len(st["stuck_log"]) for _, st in have),
+        ", ".join(e.get("answer") or "unanswered" for _, st in have for e in st["stuck_log"]) or "none"))
+    reworks = ["  - %s: %s" % (lab, one_line((v.get("findings") or ["no reason given"])[0]))
+               for lab, st in rows for v in st.get("verdicts") or [] if v.get("verdict") == "REWORK" and not v.get("void")]
+    relocks = sum(len(st.get("relocks") or []) for _, st in rows)
+    refusals = old if s.get("refusals") is None else counts(collections.Counter(r.get("kind") for r in s["refusals"]))
+    free = sum(1 for n in s.get("notes") or [] if str(n).startswith("stuck answer: "))
+    return ["## Process (computed by the plugin from the job file; it changes nothing by itself)",
+            commands,
+            "- strikes: " + strikes,
+            "- REWORK reasons (%d):%s" % (len(reworks), "\n" + "\n".join(reworks) if reworks else " none"),
+            "- refusals: " + refusals,
+            "- stuck: %s; free-text answers while stuck: %d" % (stuck, free),
+            "- relocks: %d" % relocks]
+
+
+def finish_report(s):
+    """Append the Process section to report.md once, when the job ends."""
+    path = os.path.join(s["run_folder"], "report.md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return
+    if "## Process" in text:
+        return
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(("\n" if text.endswith("\n") else "\n\n") + "\n".join(process_lines(s)) + "\n")
 
 
 def plan_refused(s, n=None):
@@ -246,7 +346,7 @@ def new_run(session_id, root, request, fp, attended=True):
              attended=attended,  # the mode at activation, for next_step (bin/rehearse sees no plugin settings)
              run_folder=folder, request=request, prompts=[], goal=None, assumptions=[], blockers=[], stages=[],
              stages_from=None, job_ending=None, job_confirmation=None, confirm_return=None, not_verified=[],
-             fixtures=[], notes=[], results_read=0, created_at=time.time(), updated_at=time.time())
+             fixtures=[], notes=[], results_read=0, refusals=[], created_at=time.time(), updated_at=time.time())
     _save(s)
     return s
 
