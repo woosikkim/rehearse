@@ -333,10 +333,24 @@ def find_for_cwd(cwd):
         d = parent
 
 
+STAMP = "%Y%m%dT%H%M%S%fZ"
+
+
+def _stamp():
+    return datetime.datetime.now(datetime.timezone.utc).strftime(STAMP)
+
+
 def new_run(session_id, root, request, fp, attended=True):
     """A new job in goal. The key stays run_id: stage/client.py and the hook's result matching read it."""
-    now = datetime.datetime.now(datetime.timezone.utc)
-    run_id = now.strftime("%Y%m%dT%H%M%S%fZ") + "-" + secrets.token_hex(3)
+    ts = _stamp()
+    try:  # newest() and find_for_cwd() sort by this prefix: it must sort after every earlier job of the session,
+        names = sorted(n for n in os.listdir(session_dir(session_id)) if n.endswith(".json"))  # whatever the clock did
+    except OSError:
+        names = []
+    if names and ts <= names[-1].split("-")[0]:
+        last = datetime.datetime.strptime(names[-1].split("-")[0], STAMP).replace(tzinfo=datetime.timezone.utc)
+        ts = (last + datetime.timedelta(microseconds=1)).strftime(STAMP)
+    run_id = ts + "-" + secrets.token_hex(3)
     root = os.path.realpath(root)
     folder = os.path.join(root, ".rehearsal", run_id)
     os.makedirs(os.path.join(folder, "fixtures"), exist_ok=True)

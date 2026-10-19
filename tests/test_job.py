@@ -993,6 +993,73 @@ try:
     assert p.phase() == "build" and p.state()["start_director"]
     print("self-healing: a missed hook call never costs a strike, a verdict, a verified report or a next step: ok")
 
+    # ================= 3.1.1: no decision compares a raw OS time (the wall clock steps back on WSL2) =================
+    def clock_back(p, seconds=5.0):
+        """As if the wall clock had been ahead by `seconds` at the last stamp and then stepped back: the job file's
+        stamps sit in the future of every later hook process."""
+        s = p.state()
+        s["clock"] = s.get("clock", 0) + seconds
+        if s.get("worker"):
+            s["worker"]["at"] += seconds
+        json.dump(s, open(s["path"], "w"))
+    p = building()  # a worker's run and stop after the clock stepped back since its spawn: still "passed"
+    p.spawn("rehearse:worker")
+    clock_back(p)
+    p.edit("main.py", prog(3), WORKER)
+    p.rehearse("run", who=WORKER)
+    s = p.state()
+    assert s["runs"][-1]["at"] >= s["worker"]["at"] and any("clock stepped back" in n for n in s["notes"]), s["notes"]
+    assert "passed" in ctx(p.returned("rehearse:worker")) and p.state()["strikes"] == 0
+    p = one_stage()  # a file written during the stage with a modification time from before the stage: still new
+    p.write("tool.py", "print('x')\n")
+    old = p.state()["started_at"] - 10
+    os.utime(p.j("tool.py"), (old, old))
+    assert denied(p.pre("Bash", command="python3 tool.py")), "a created file's age is not read from its mtime"
+    big = p.j("big.py")  # a big file's signature is its content, not its modification time
+    with open(big, "wb") as f:
+        f.write(b"#" * (F.BIG + 100))
+    sig1 = F._sig(big)
+    st = os.stat(big)
+    with open(big, "r+b") as f:
+        f.seek(F.BIG + 50)
+        f.write(b"!")
+    os.utime(big, (st.st_atime, st.st_mtime))  # same size, same mtime, different bytes
+    assert F._sig(big) != sig1 and F._sig(big).startswith("big:")
+    q = two_stage()  # a same-size edit in the middle of a 3 MB declared output, mtime as the write sets it: void
+    q.rehearse(*S1_END)
+    q.prompt("yes")
+    q.edit("collect.py", COLLECT)
+    q.run_collect()
+    with open(q.j("out", "items.md"), "wb") as f:
+        f.write(b"x" * (3 * 1024 * 1024))
+    q.spawn()
+    with open(q.j("out", "items.md"), "r+b") as f:
+        f.seek(1024 * 1024 + 7)
+        f.write(b"y")
+    q.verdict(PASS)
+    assert q.phase() == "build" and "out/items.md" in q.state()["verdicts"][-1].get("void", ""), q.state()["verdicts"][-1]
+    import datetime
+    import state as S  # a later job of the same session sorts after an earlier one even if the clock stepped back
+
+    class Earlier:  # the wall clock reads years earlier when the second job is created
+        timezone, timedelta = datetime.timezone, datetime.timedelta
+
+        class datetime(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2020, 1, 1, tzinfo=tz)
+    first = p.state()
+    os.environ["CLAUDE_PLUGIN_DATA"] = DATA
+    try:
+        S.datetime = Earlier
+        second = S.new_run(p.sid, p.root, "rehearse again", F.fingerprint(p.root))
+        newest = S.newest(p.sid)["run_id"]
+    finally:
+        S.datetime = datetime
+        del os.environ["CLAUDE_PLUGIN_DATA"]
+    assert second["run_id"] > first["run_id"] and newest == second["run_id"], (first["run_id"], second["run_id"])
+    print("no decision reads a raw OS time: worker outcome, a created file's age, big-file signature, job order: ok")
+
     p = stuck()  # after change: plan --stage for the current stage
     decide(p, "--change", "--confirmed")
     so, _ = p.rehearse(*PLAN1)

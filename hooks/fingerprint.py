@@ -70,11 +70,19 @@ def kind(root, path):
 
 
 def _sig(path):
+    """A signature compared for equality only, never for order: the sha1 of the whole file; for a big file, its
+    size, its modification time at full resolution (any write changes it, even after a clock step back; 3.1.0
+    truncated it to seconds) and the sha1 of its first and last 64 KB, together. Any difference means changed."""
     try:
-        if os.path.getsize(path) > BIG:
-            return "big:%d:%d" % (os.path.getsize(path), int(os.path.getmtime(path)))
+        st = os.stat(path)
         with open(path, "rb") as f:
-            return hashlib.sha1(f.read()).hexdigest()
+            if st.st_size <= BIG:
+                return hashlib.sha1(f.read()).hexdigest()
+            h = hashlib.sha1(b"%d:%d:" % (st.st_size, st.st_mtime_ns))
+            h.update(f.read(65536))
+            f.seek(-65536, os.SEEK_END)
+            h.update(f.read(65536))
+            return "big:" + h.hexdigest()
     except OSError:
         return "missing"
 

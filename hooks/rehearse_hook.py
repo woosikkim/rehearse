@@ -272,7 +272,10 @@ def on_prompt(p, sid):
 # ---------- PreToolUse ----------
 
 def new_code_file(s, path):
-    """A project code file present now and absent at the stage start, that no program produced."""
+    """A project code file present now and absent at the stage start, that no program produced. Decided from the
+    stage-start snapshot and git alone: the snapshot lists every untracked or changed code file (in git) or every
+    code file (outside git), so absence means new; a file's modification time is never read (the OS stamps it
+    with a wall clock that can step back)."""
     if not F.is_code(path) or path in s["produced"] or F.kind(s["root"], path) != "code":
         return False
     rel = os.path.relpath(path, s["root"])
@@ -282,7 +285,7 @@ def new_code_file(s, path):
         tracked = F._git(s["root"], "ls-files", "--error-unmatch", "--", rel)
         if tracked and tracked.returncode == 0:
             return False
-    return os.path.isfile(path) and os.path.getmtime(path) >= s["started_at"] - 1
+    return os.path.isfile(path)
 
 
 def updated(tin, text, model):
