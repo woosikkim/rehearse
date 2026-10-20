@@ -72,8 +72,27 @@ def option(name, default):
             or os.environ.get("EVAL_REHEARSE_" + name) or default)
 
 
-def attended():
-    return option("CONFIRM_ENDING", "true").lower() not in ("false", "0", "no")
+MODE_WORDS = re.compile(r"^(?:(auto|max)\b\s*){1,2}(?=\S)", re.I)  # right after "rehearse", one of each, a task after
+
+
+def activation_mode(prompt, m):
+    """(mode, headless, task, refusal) for an activation: mode words right after `rehearse`; the colon form reads
+    none (the escape for a task that begins with one); the setting and the variables give the default; the old
+    confirm_ending=false and its spellings map to auto plus headless; `max` is reserved and starts no job."""
+    rest = m.group(1).strip()
+    words, task = set(), rest
+    if ":" not in prompt[:m.start(1)]:
+        mm = MODE_WORDS.match(rest)
+        if mm:
+            words = {w.lower() for w in re.findall(r"\b(auto|max)\b", rest[:mm.end()], re.I)}
+            task = rest[mm.end():].strip()
+    if "max" in words:
+        return None, None, task, ("max is reserved and not in this release: use `rehearse auto <task>` or "
+                                  "`rehearse <task>`; for a task that begins with that word, `rehearse: <task>`")
+    legacy = option("CONFIRM_ENDING", "true").lower() in ("false", "0", "no")
+    mode = "auto" if "auto" in words or option("MODE", "ask").lower() == "auto" or legacy else "ask"
+    headless = legacy or option("HEADLESS", "").lower() in ("1", "true", "yes")
+    return mode, headless, task, None
 
 
 def instruction(name):
@@ -84,8 +103,9 @@ def instruction(name):
         return "[rehearse] instructions pending: %s" % name
 
 
-def unattended_mark():
-    return {"by": "unattended", "answer": None, "affirmative": True, "at": time.time()}
+def auto_mark():
+    """A confirmation nobody gave: auto accepted it as registered (the report says "not confirmed by a person")."""
+    return {"by": "auto", "answer": None, "affirmative": True, "at": time.time()}
 
 
 def nfail(results):
@@ -145,7 +165,7 @@ def strike(cur, msgs, cause):
         cur["strike_log"].append({"cause": cause, "at": S.now(cur)})
     if cur["strikes"] < int(float(option("MAX_STRIKES", "3"))):
         return
-    if attended():
+    if not S.headless(cur):
         cur.update(phase="stuck", stuck_at=S.now(cur))
         if cur.get("stuck_log") is not None:
             cur["stuck_log"].append({"at": S.now(cur), "answer": None})
@@ -213,7 +233,7 @@ def call_note(cur):
 
 def confirm_answer(cur, a, low):
     ph = cur["phase"]
-    left = unanswered_calls(cur) if attended() else []
+    left = unanswered_calls(cur) if not S.headless(cur) else []
     if left:  # a prompt while a call is open answers the first open call (a headless manager asks them in order)
         left[0]["answer"] = a
         return "[rehearse] recorded as the answer to the judgment call %r; the confirmation is not asked yet. %s" % (
@@ -288,11 +308,13 @@ def on_prompt(p, sid):
     if rest is None:
         return None
     root = p.get("cwd") or os.getcwd()
-    s = S.new_run(sid, root, prompt, F.fingerprint(root), attended())
-    mode = ("attended: the user answers confirmations" if s["attended"] else "unattended: confirmations are off; "
-            "nothing is asked, unasked goal items are recorded as assumed, endings are accepted at registration")
+    mode, headless, task, refusal = activation_mode(prompt, m)
+    if refusal:
+        return {"systemMessage": "rehearse: " + refusal}
+    s = S.new_run(sid, root, prompt, F.fingerprint(root), mode, headless, task)
+    said = S.mode_text(s)
     text = instruction("manager.md") + "\n[rehearse] job %s activated\n%s\ncommand: rehearse (if not on PATH: %s)" % (
-        s["run_id"], mode, BIN)
+        s["run_id"], said, BIN)
     return dict(context("UserPromptSubmit", text), systemMessage="rehearse is on — type `rehearse stop` to stop")
 
 
@@ -521,12 +543,12 @@ def set_job_ending(cur, e, msgs):
     if from_look and same:
         msgs.append("the job ending is unchanged; no confirmation needed. Next: stage %d's look" % cur["stage"])
         return False
-    if not attended():
-        cur["job_confirmation"] = unattended_mark()
+    if S.headless(cur):  # nobody can answer; an interactive auto job confirms the job up front like ask
+        cur["job_confirmation"] = auto_mark()
         if not from_look:
             start_stage(cur, 1)
             cur["phase"] = "look"
-        msgs.append("job ending registered and accepted (unattended run, not confirmed by a person)")
+        msgs.append("job ending registered and accepted (headless run, not confirmed by a person)")
         return False
     if from_look:
         cur["confirm_return"] = cur["stage"]
@@ -587,11 +609,11 @@ def apply_ending(cur, res, msgs):
     if S.final(cur):
         cur["job_ending"] = e
     calls = e.get("calls") or []
-    if not attended():
+    if S.auto(cur):  # auto: a stage ending found mid-run is accepted as registered, and recorded as such
         cur["not_verified"] += ["judgment call not put to a person: %s (decides: %s)" % (c["question"], c["requirement"])
                                 for c in calls]
-        cur.update(confirmation=unattended_mark(), phase="build")
-        msgs.append("ending registered and accepted (unattended run, not confirmed by a person); edits are open"
+        cur.update(confirmation=auto_mark(), phase="build")
+        msgs.append("ending registered and accepted (auto: not confirmed by a person); edits are open"
                     + ("; it already passes: start rehearse:director" if already else ""))
         return False
     cur["phase"] = "confirm"
@@ -647,7 +669,7 @@ def apply_run(cur, res, msgs):
 def apply_stuck(cur, res, msgs):
     """The user's answer to the stuck question, recorded by the manager with `rehearse stuck`."""
     a = res.get("answer")
-    if a != "stop here" and cur["phase"] != "stuck" and not (cur["phase"] == "look" and attended()):
+    if a != "stop here" and cur["phase"] != "stuck" and not (cur["phase"] == "look" and not S.headless(cur)):
         msgs.append("rehearse stuck is accepted in stuck, or in look after a blocked look worker; the job is in %s"
                     % cur["phase"])
         return True
@@ -1015,8 +1037,8 @@ def on_stop(p, sid):
             s = cur
     ph = s["phase"]
     first, nv = report(s)
-    # An honest give-up ends the job where nobody can answer: unattended, or after the user chose "stop here".
-    if (first or "").startswith("not fixed") and nv and (not attended() or s.get("stop_here")):
+    # An honest give-up ends the job where nobody can answer: headless, or after the user chose "stop here".
+    if (first or "").startswith("not fixed") and nv and (S.headless(s) or s.get("stop_here")):
         with S.locked(s) as cur:
             cur["phase"] = "done.not_fixed"
             S.finish_report(cur)
@@ -1036,7 +1058,7 @@ def on_stop(p, sid):
         nxt = 'add a "not verified" section to report.md ("none" if nothing is unverified)'
     if nxt is None and not ph.startswith("done") and not s.get("stop_here"):
         if ph in S.WAIT:
-            nxt = None if attended() else S.next_step(s)  # unattended: nobody will answer
+            nxt = None if not S.headless(s) else S.next_step(s)  # headless: nobody will answer
         elif S.running(s):
             # ponytail: an interrupted background agent never stops, so Stop stays allowed in this phase (fail open)
             return {"systemMessage": "rehearse: %s running in the background; the next step comes with its "

@@ -67,7 +67,7 @@ class Proj:
 
     def start(self, env=None):
         """Activate and record a one-stage plan: the job is in look."""
-        self.ev("UserPromptSubmit", prompt="rehearse fix the report; it should print total: 12")
+        self.ev("UserPromptSubmit", env, prompt="rehearse fix the report; it should print total: 12")  # the mode is fixed here
         self.rehearse(*PLAN, env=env)
         assert self.state()["phase"] == "look", self.state()["phase"]
 
@@ -142,7 +142,13 @@ def in_work(**kw):
 
 
 def rejected_three_times(env=None):
-    p = in_work()
+    if env:  # headless from activation: the ending is accepted at registration, so the job is in build at once
+        p = Proj({"main.py": BUGGY})
+        p.start(env)
+        p.rehearse(*ENDING, env=env)
+        assert p.state()["phase"] == "build", p.state()["phase"]
+    else:
+        p = in_work()
     for n in range(3):
         p.spawn()
         p.verdict(REWORK, env=env)
@@ -241,13 +247,16 @@ try:
         p.report("built, not verified against the real target: no credentials here")
         assert blocked(p.stop(), "next: spawn rehearse:director"), phase
 
-    for make in (in_work, lambda: Proj({"main.py": BUGGY})):  # an honest give-up ends the job only unattended
-        p = make()
-        if p.state() is None:
-            p.start()
+    p = in_work()  # an honest give-up ends the job only when nobody can answer (headless, fixed at activation)
+    p.report("not fixed: the sandbox hides the tool, nothing was changed")
+    assert blocked(p.stop(), "next:")  # ask: the user has "stop here"; the agent does not
+    assert blocked(p.stop(EVAL_REHEARSE_CONFIRM_ENDING="0"), "next:")  # a variable set later changes nothing
+    for make in (lambda: rejected_three_times({"EVAL_REHEARSE_CONFIRM_ENDING": "0"}), None):
+        p = Proj({"main.py": BUGGY})
+        p.start({"EVAL_REHEARSE_CONFIRM_ENDING": "0"})
         p.report("not fixed: the sandbox hides the tool, nothing was changed")
-        assert blocked(p.stop(), "next:")  # attended: the user has "stop here"; the agent does not
-        assert p.stop(EVAL_REHEARSE_CONFIRM_ENDING="0") is None and p.state()["phase"] == "done.not_fixed"
+        assert p.stop() is None and p.state()["phase"] == "done.not_fixed"
+        break
 
     p = in_work()  # the loop breaker rounds setting is read where it is used
     p.edit("main.py", "print('total: 11')\n")
@@ -331,7 +340,7 @@ try:
     p.start(UN)
     _, out = p.rehearse(*ENDING, env=UN)
     s = p.state()
-    assert s["phase"] == "build" and s["confirmation"]["by"] == "unattended" and s["confirmation"]["affirmative"], s
+    assert s["phase"] == "build" and s["confirmation"]["by"] == "auto" and s["confirmation"]["affirmative"], s
     assert "not confirmed by a person" in json.dumps(out), out
     assert blocked(p.stop(**UN), "next: spawn rehearse:director")
     print("unattended: ok")

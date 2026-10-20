@@ -38,7 +38,10 @@ Start a prompt with the word `rehearse` and say what you want:
 ```
 rehearse the March total in the monthly report is wrong
 rehearse a script that saves every product name and price from https://example.com/shop to products.csv
+rehearse auto the same, asking me everything up front and nothing after
 ```
+
+A mode word is read only right after `rehearse`. For a task that begins with such a word, write `rehearse: <task>`. (`max` is reserved for a later release.)
 
 You'll see `rehearse is on — type rehearse stop to stop`. You can end the job at any time by typing `rehearse stop`, or by choosing **stop here and write the report** when you are asked a question.
 
@@ -83,7 +86,7 @@ The plugin enforces two locks. There are no edits before you confirm the ending,
 
 | Setting | Default | What it does |
 |---|---|---|
-| `confirm_ending` | `true` | Ask you about the goal, the plan and each ending. Turn it off for unattended jobs: nothing is asked, missing goal items are assumed, each ending is accepted when written down and marked "not confirmed by a person", and the report states each ending in plain words. A stuck stage then ends the job with a `not fixed` report. |
+| `mode` | `ask` | `ask`: you confirm the goal, the plan and each ending. `auto`: everything is asked up front (the goal, the plan, the stages, the job ending, foreseeable judgment calls), then nothing is asked; later endings are accepted as registered, marked "not confirmed by a person", and the report lists what was chosen on your behalf. `rehearse auto <task>` picks it for one job. For scripts and evals, where nobody can answer, set `REHEARSE_HEADLESS=1`: missing goal items are assumed and any wait ends the job as `not fixed`. The old `confirm_ending: false` still works and means auto plus headless. |
 | `max_strikes` | `3` | How many relocks and send-backs a stage may take before it is stuck. |
 | `loop_breaker_rounds` | `2` | Failing runs in a row before edits lock again. |
 | `worker_model` | `sonnet` | The model the workers run on. |
@@ -93,7 +96,7 @@ Change them in your Claude Code settings file, for example:
 
 ```json
 "pluginConfigs": {
-  "rehearse@rehearse": { "options": { "confirm_ending": false } }
+  "rehearse@rehearse": { "options": { "mode": "auto" } }
 }
 ```
 
@@ -152,7 +155,7 @@ Version 2 handled one program at a time, with one AI doing everything. Version 3
 
 Several version 2 mechanisms only stood in for a missing manager, so they are gone:
 
-- **The director's review of the ending in unattended runs.** Unattended endings are now accepted when written down, marked as not confirmed by a person, and stated in plain words in the report.
+- **The director's review of the ending in auto and headless runs.** Such endings are now accepted when written down, marked as not confirmed by a person, and stated in plain words in the report.
 - **The guess at whether the agent looked.** The loop breaker now counts failing runs and logged look steps, the same way for every kind of ending.
 - **The `fix` and `build` mode words.** The manager decides each stage's kind.
 - **Voiding a pass, and the hook's own refusal of director edits.** The director simply has no editing tools.

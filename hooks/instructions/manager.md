@@ -13,7 +13,7 @@ A job has four goal items: `purpose`, `deliverable`, `done` (what counts as done
 - If the request already says all four, ask nothing.
 - Otherwise ask for the missing ones in one AskUserQuestion call, at most four questions. Without the tool, write the questions and stop; the user's next message is the answer.
 - Whatever you do not ask becomes an assumption: record it with the source `assumed`, never silently.
-- **Unattended** (the line after the job id says so): ask nothing. Record every missing goal item as `assumed`, ask no confirmation (endings are accepted at registration), and still write every assumption into the plan and the report.
+- **Mode** (the line after the job id says it): `ask`: the user confirms the goal, the plan and each ending. `auto`: ask the goal items and confirm the plan, the stages and the job ending up front, then ask nothing; stage endings and judgment calls found later are accepted as registered, marked "not confirmed by a person" and listed in the report as chosen on the user's behalf. `auto, headless`: nobody can answer; record every missing goal item as `assumed`, ask nothing, and anything that would wait for the user ends the job as `not fixed`.
 
 ## 2. The riskiest touchpoints
 
@@ -30,7 +30,7 @@ rehearse plan --goal purpose request|answer|assumed '<text>' --goal deliverable 
 - A `request` goal text must appear word for word in the request; an `answer` one in the user's answers. The source is what the report shows.
 - Each stage is `fix` (something exists and is wrong) or `build` (something new). Its plan line is the result to reach, not the steps. Inputs and outputs are comma-separated paths, or `-`. Declare every file a stage produces as an output: declared outputs are locked like code until their stage's ending is confirmed.
 - When you write the plan yourself, make the stages as coarse as checking allows: a stage boundary goes only where reality must be checked before the next step can rely on it, or before an irreversible step. Never one action per stage.
-- When the request already contains a plan, its steps fix the stages: use them as the stages and add `--from-request`. You may only propose merging steps into fewer stages; a merge takes effect only when the user says yes to it at job confirmation, and never in an unattended job.
+- When the request already contains a plan, its steps fix the stages: use them as the stages and add `--from-request`. You may only propose merging steps into fewer stages; a merge takes effect only when the user says yes to it at job confirmation, and never in an auto job.
 - A tool or library the request names is a candidate: put it in the plan line for the worker to try by hand first.
 
 ## 4. The job ending (two or more stages)
@@ -58,13 +58,13 @@ Start agents one at a time with the Agent tool. The plugin writes their prompt f
 **A spawn launched in the background.** If the note on the Agent result says the worker or director was launched in the background, end your turn with one short line to the user ("stage 2 worker is running; I continue when it finishes") and do nothing else for that stage. Do not poll `rehearse job` in a loop, and do not start a second worker or director. When its task notification arrives, run `rehearse job` and follow its next step (a worker's note is also in the job file). If the spawn's result came back at once with its answer (headless), go on as below.
 
 1. **Look.** Start `rehearse:worker`. It looks at the real target and registers the stage ending.
-2. **Confirm.** Ask the user to confirm the ending (confirm.md); unattended, it was accepted at registration.
+2. **Confirm.** Ask the user to confirm the ending (confirm.md); in auto, it was accepted at registration.
 3. **Build.** Start a fresh `rehearse:worker`. It builds until `rehearse run` passes.
 4. **Judge.** Start `rehearse:director`. PASS: the next stage starts. REWORK: a strike; start a build worker, which gets the findings. A void verdict: start the director again.
 
 The note on each worker's result says what happened. Act on it:
 
-- `ending registered`: confirm with the user (attended) or go on (unattended), then a build worker.
+- `ending registered`: confirm with the user (ask) or go on (auto), then a build worker.
 - `re-registered, fails`: confirm, then a build worker.
 - `re-registered, already passes`: confirm, then the director; never a build worker.
 - `no ending`: a look worker again (a second `no ending` in a row is a strike). With a blocker and the user present, ask the stuck question (section 8) instead.
@@ -92,6 +92,6 @@ Write `report.md` in the run folder. Its first line is exactly one of:
 - `built, not verified against the real target`
 - `not fixed`
 
-then why, in plain words. Then: one row per stage (plan line, ending, before, after, verdict), each ending stated in the plain sentence confirm.md asks for ("When I run the report for March, it should show 162.50; right now it shows 80.00"), the value right after the verb and the before value in the same sentence, unattended too, since nobody was asked with each chain link and its "Revealed by"; the end-to-end result; what was reused and what was written; what was simulated or stopped before (the upload); the stage whose look found a blocker, and what it did to earlier stages; a **What was collected** section when a stage collected data (what really came back, against what was asked); and a **Not verified** section, `none` if empty. Mark every ending accepted without the user as "not confirmed by a person". List every corrected check (a check changed after the user said it was wrong) with the user's words; the job file's `corrections` holds them. Do not write a Process section: the plugin appends one, computed from the job file, when the job ends.
+then why, in plain words. Then: one row per stage (plan line, ending, before, after, verdict), each ending stated in the plain sentence confirm.md asks for ("When I run the report for March, it should show 162.50; right now it shows 80.00"), the value right after the verb and the before value in the same sentence, in auto too, since nobody was asked with each chain link and its "Revealed by"; the end-to-end result; what was reused and what was written; what was simulated or stopped before (the upload); the stage whose look found a blocker, and what it did to earlier stages; a **What was collected** section when a stage collected data (what really came back, against what was asked); and a **Not verified** section, `none` if empty. Mark every ending accepted without the user as "not confirmed by a person". List every corrected check (a check changed after the user said it was wrong) with the user's words; the job file's `corrections` holds them. Do not write a Process section: the plugin appends one, computed from the job file, when the job ends.
 
 Leave `.rehearsal/` in place. It is the evidence; the user decides when to delete it.

@@ -1,6 +1,6 @@
 {
   "name": "rehearse",
-  "version": "3.2.0",
+  "version": "4.0.0",
   "description": "Splits a job into stages and has each one done by hand against the real target before any code: a worker looks and registers the stage's ending, you confirm it in plain words, a worker builds until it passes, and an independent director checks every stage and the whole job. Turn it on by starting a prompt with 'rehearse'.",
   "license": "MIT",
   "keywords": [
@@ -15,16 +15,16 @@
   },
   "repository": "https://github.com/woosikkim/rehearse",
   "userConfig": {
-    "confirm_ending": {
-      "type": "boolean",
-      "title": "Confirm the ending",
-      "description": "Ask you to confirm the goal, the plan and each ending before any edit. Turn off for unattended runs; endings are then marked not confirmed by a person.",
-      "default": true
+    "mode": {
+      "type": "string",
+      "title": "Default mode",
+      "description": "ask (default): you confirm the goal, the plan and each ending. auto: the goal, the plan and the job ending are confirmed up front, then nothing is asked; later endings and judgment calls are accepted as registered and listed as chosen on your behalf. A mode word right after `rehearse` overrides this for one job.",
+      "default": "ask"
     },
     "max_strikes": {
       "type": "number",
       "title": "Strikes per stage",
-      "description": "How many relocks and director reworks a stage may take before it is stuck (unattended: the job ends with a not fixed report).",
+      "description": "How many relocks and director reworks a stage may take before it is stuck (headless: the job ends with a not fixed report).",
       "default": 3
     },
     "loop_breaker_rounds": {

@@ -17,7 +17,7 @@ import time
 
 ENDED = ("done.cancelled", "done.not_fixed")
 LOCKED = ("goal", "job-confirm", "look", "confirm", "stuck")  # edits of project files and declared outputs refused
-WAIT = ("goal", "job-confirm", "confirm", "stuck")  # where an attended manager may stop: it waits for the user
+WAIT = ("goal", "job-confirm", "confirm", "stuck")  # where a manager may stop when someone can answer: it waits
 NO_LOOK = ("no look step since edits were locked again: take one (a stage step into project code, or rehearse "
            "fetch; file://<path> for a draft or CSV), then register")
 GOAL_ITEMS = ("purpose", "deliverable", "done", "out_of_scope")
@@ -90,7 +90,7 @@ def next_step(s):
         return "wait for the %s's notification, then rehearse job" % running(s)
     if ph == "goal":
         if not s.get("stages"):
-            if s.get("attended") is False:  # nobody to ask
+            if headless(s):  # nobody to ask
                 return "record the four goal items (assumed where the request is silent), then rehearse plan"
             return "ask the goal questions the request leaves open, then rehearse plan"
         return "register the job ending with rehearse ending --job"
@@ -380,7 +380,31 @@ def _stamp():
     return datetime.datetime.now(datetime.timezone.utc).strftime(STAMP)
 
 
-def new_run(session_id, root, request, fp, attended=True):
+def mode(s):
+    """"ask" or "auto"; a 3.x job file (an `attended` flag) reads as ask or auto plus headless."""
+    return s.get("mode") or ("auto" if s.get("attended") is False else "ask")
+
+
+def auto(s):
+    return mode(s) == "auto"
+
+
+def headless(s):
+    """Nobody can answer (evals, scripts): goal items are assumed, confirmations accepted, a wait ends as not fixed."""
+    return bool(s.get("headless")) or s.get("attended") is False
+
+
+def mode_text(s):
+    if headless(s):
+        return ("auto, headless: nobody can answer; record unasked goal items as assumed, endings are accepted at "
+                "registration, and anything that would wait for the user ends the job as not fixed")
+    if auto(s):
+        return ("auto: ask the goal items and confirm the plan, the stages and the job ending up front; after that "
+                "ask nothing: stage endings and judgment calls are accepted as registered and recorded")
+    return "ask: the user confirms the goal, the plan and each ending"
+
+
+def new_run(session_id, root, request, fp, mode="ask", headless=False, task=None):
     """A new job in goal. The key stays run_id: stage/client.py and the hook's result matching read it."""
     ts = _stamp()
     try:  # newest() and find_for_cwd() sort by this prefix: it must sort after every earlier job of the session,
@@ -397,7 +421,7 @@ def new_run(session_id, root, request, fp, attended=True):
     os.makedirs(session_dir(session_id), exist_ok=True)
     s = dict(fresh_stage(fp), run_id=run_id, session_id=session_id,
              path=os.path.join(session_dir(session_id), run_id + ".json"), phase="goal", stage=1, root=root,
-             attended=attended,  # the mode at activation, for next_step (bin/rehearse sees no plugin settings)
+             mode=mode, headless=headless, task=task,  # decided at activation; later checks read the job file
              run_folder=folder, request=request, prompts=[], goal=None, assumptions=[], blockers=[], stages=[],
              stages_from=None, job_ending=None, job_confirmation=None, confirm_return=None, not_verified=[],
              fixtures=[], notes=[], results_read=0, refusals=[], user_words=[], created_at=time.time(),

@@ -718,7 +718,7 @@ try:
     so, out = p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "quiet", "exit_code", "0", "--cite", "request",
                          env=UN)
     s = p.state()
-    assert s["phase"] == "build" and s["start_director"] and s["confirmation"]["by"] == "unattended", s["phase"]
+    assert s["phase"] == "build" and s["start_director"] and s["confirmation"]["by"] == "auto", s["phase"]
     print("an already-passing re-registered ending: confirm with a note, then build, start the director: ok")
 
     p = relocked()
@@ -1195,6 +1195,56 @@ try:
     assert p.phase() == "build"
     print("the confirmation waits for every judgment call's recorded answer, and names the call to ask: ok")
 
+    # ================= 4.0.0 step 1: modes and the fold of unattended into auto =================
+    for prompt, mode, task in (("rehearse automate the export", "ask", "automate the export"),
+                               ("rehearse auto automate the export", "auto", "automate the export"),
+                               ("rehearse Auto fix it", "auto", "fix it"),
+                               ("/rehearse auto the task", "auto", "the task"),
+                               ("rehearse: auto out the cache", "ask", "auto out the cache"),  # the colon form escapes
+                               ("rehearse maximum coverage", "ask", "maximum coverage")):
+        q = Proj({})
+        out = q.prompt(prompt)
+        s = q.state()
+        assert s and s["mode"] == mode and s["task"] == task and not s["headless"] and s["request"] == prompt, (prompt, s and s["mode"], s and s["task"])
+        assert ("auto:" if mode == "auto" else "ask:") in ctx(out), (prompt, ctx(out)[-300:])
+    q = Proj({})
+    out = q.prompt("rehearse max out the cache")  # max is reserved: no job, a one-line refusal
+    assert q.state() is None and "max is reserved" in out["systemMessage"], out
+    q = Proj({})
+    q.prompt("rehearse fix it", {"CLAUDE_PLUGIN_OPTION_MODE": "auto"})  # the setting picks the default
+    assert q.state()["mode"] == "auto" and not q.state()["headless"]
+    q = Proj({})
+    q.prompt("rehearse fix it", {"REHEARSE_HEADLESS": "1"})
+    assert q.state()["mode"] == "ask" and q.state()["headless"]
+    q = Proj({})
+    q.prompt("rehearse fix it", UN)  # the old confirm_ending=false: auto plus headless
+    assert q.state()["mode"] == "auto" and q.state()["headless"]
+    old = Proj({})  # a 3.x job file with the old flag reads as auto plus headless
+    old.prompt(REQ3)
+    s = old.state()
+    s.pop("mode"); s.pop("headless"); s["attended"] = False
+    json.dump(s, open(s["path"], "w"))
+    assert S.headless(old.state()) and S.auto(old.state()) and "assumed" in S.next_step(old.state())
+    print("modes: the word right after rehearse, the colon escape, max reserved, the setting, headless, legacy: ok")
+
+    p = Proj({"README.txt": "x\n"})  # interactive auto: asks up front, accepts later
+    out = p.prompt("rehearse auto " + REQ2[len("rehearse "):])
+    assert p.state()["mode"] == "auto" and "ask the goal questions" in S.next_step(p.state())
+    assert p.stop() is None  # waiting for the user in goal is allowed: someone can answer
+    p.rehearse(*PLAN2)
+    p.rehearse(*JOB_END)
+    assert p.phase() == "job-confirm", p.phase()  # the job is confirmed up front
+    p.prompt("yes")
+    assert p.phase() == "look" and p.state()["job_confirmation"]["by"] == "user"
+    _, out = p.rehearse(*S1_END, "--call", "items", "does a draft item count?")
+    s = p.state()
+    assert s["phase"] == "build" and s["confirmation"]["by"] == "auto" and "not confirmed by a person" in ctx(out), out
+    assert any("judgment call not put to a person: does a draft item count?" in x for x in s["not_verified"])
+    q = Proj({"README.txt": "x\n"})  # headless auto: nothing is asked, a wait is blocked with the next step
+    q.prompt(REQ2, UN)
+    assert "assumed" in S.next_step(q.state()) and blocked(q.stop(UN), "goal")
+    print("auto: the goal, the plan and the job ending up front; stage endings and calls accepted and recorded: ok")
+
     # ================= 3.2.0: stop here is said to end the whole job =================
     p = building()
     p.write("main.py", prog(1))
@@ -1333,30 +1383,30 @@ try:
 
     for env in (None, UN):
         q = Proj({})
-        q.prompt(REQ2)
+        q.prompt(REQ2, env)  # the mode is fixed at activation
         assert (q.stop(env) is None) == (env is None)  # goal
         q.rehearse(*PLAN2)
         q.rehearse(*JOB_END, env=env)
         if env is None:
             assert q.phase() == "job-confirm" and q.stop() is None
-            assert blocked(q.stop(UN), "have the job confirmed")
+            assert q.stop(UN) is None  # a variable set after activation changes nothing
             q.prompt("yes")
         else:
-            assert q.phase() == "look" and q.state()["job_confirmation"]["by"] == "unattended"
+            assert q.phase() == "look" and q.state()["job_confirmation"]["by"] == "auto"
         q.rehearse(*S1_END, env=env)
         if env is None:
             assert q.phase() == "confirm" and q.stop() is None
-            assert blocked(q.stop(UN), "have the stage 1 ending confirmed")
+            assert q.stop(UN) is None  # the mode is fixed at activation
         else:
-            assert q.phase() == "build" and q.state()["confirmation"]["by"] == "unattended"
+            assert q.phase() == "build" and q.state()["confirmation"]["by"] == "auto"
     p = stuck()
     assert p.stop() is None
     q = Proj({})
-    q.prompt(REQ2)
-    q.rehearse(*PLAN2)
+    q.prompt(REQ2, UN)  # headless from activation
+    q.rehearse(*PLAN2, env=UN)
     with_un = q.stop(UN)
     assert blocked(with_un, "register the job ending"), with_un
-    print("Stop: attended may wait in goal, job-confirm, confirm, stuck; unattended is blocked: ok")
+    print("Stop: ask may wait in goal, job-confirm, confirm, stuck; headless is blocked: ok")
 
     # ================= review fixes =================
     p = relocked()  # the already-passing path, then a REWORK: a fresh build worker, not the director again
@@ -1482,10 +1532,10 @@ try:
 
     q = Proj({})  # unattended: the activation says so, and goal asks no questions
     out = q.prompt(REQ2, UN)
-    assert "unattended: confirmations are off" in ctx(out), out
+    assert "auto, headless: nobody can answer" in ctx(out), out
     r = q.stop(UN)
     assert blocked(r, "then rehearse plan") and "ask the goal questions" not in r["reason"], r
-    assert "attended: the user answers confirmations" in ctx(Proj({}).prompt(REQ2))
+    assert "ask: the user confirms the goal" in ctx(Proj({}).prompt(REQ2))
     print("the activation states the mode; unattended goal records items instead of asking: ok")
 
     q = Proj({"main.py": prog(0)})  # `$R plan ... && $R job` in one call: both result lines apply, in order

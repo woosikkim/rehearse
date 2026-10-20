@@ -134,7 +134,7 @@ try:
                  "irreversible step. Never one action per stage.",
                  "When the request already contains a plan, its steps fix the stages: use them as the stages and add "
                  "`--from-request`. You may only propose merging steps into fewer stages; a merge takes effect only "
-                 "when the user says yes to it at job confirmation, and never in an unattended job."):
+                 "when the user says yes to it at job confirmation, and never in an auto job."):
         assert rule in m, rule[:60]
     assert "goal items and assumptions" in m and "four goal items" in read("confirm.md")
     print("manager.md: the P1 and P4 rules: ok")
