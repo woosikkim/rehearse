@@ -32,6 +32,7 @@ BASH_CAP_MS = 600000  # Claude Code's largest Bash timeout; rehearse ending/run 
 NEED_ENDING = "edits are locked: register and confirm an ending first"
 DIRECTOR = ("rehearse:director",)  # agent_type is always namespaced (probes P16, P18d)
 WORKER = ("rehearse:worker",)
+REVIEWER = ("rehearse:reviewer",)  # fresh eyes on a stopped worker's log: reads and searches only
 WRAPPED = re.compile(r"<(?:task-notification|system-reminder)\b")  # harness messages that arrive as prompts
 REPORT_LINES = ("fixed", "built, not verified against the real target", "not fixed")
 PLUGIN_FILES = ("results.jsonl", "state.json", "commands.jsonl", "log.md")  # the run folder's own records
@@ -159,24 +160,27 @@ def advance(cur):
 
 
 def strike(cur, msgs, cause):
+    """A strike is a record, never a trigger (4.0.0): a count is never failure. The loop ends only through the
+    failure records and their gates (apply_failed)."""
     cur["strikes"] += 1
     cur["pending_change"] = False
     if cur.get("strike_log") is not None:  # a stage begun before 3.1.0 has no log: it stays "not recorded"
         cur["strike_log"].append({"cause": cause, "at": S.now(cur)})
-    if cur["strikes"] < int(float(option("MAX_STRIKES", "3"))):
-        return
-    if not S.headless(cur):
-        cur.update(phase="stuck", stuck_at=S.now(cur))
-        if cur.get("stuck_log") is not None:
-            cur["stuck_log"].append({"at": S.now(cur), "answer": None})
-        msgs.append("%s has %d strikes and is stuck: ask the user once (confirm.md): these checks are wrong "
-                    "(correct them; the work stays), redo this stage, try again, or stop here, which ends the whole "
-                    "rehearse job; say which applies and its cost; then record the answer with rehearse stuck. %s"
-                    % (S.label(cur), cur["strikes"], S.failing_checks(cur)))
-    else:
+
+
+def wait_for_user(cur, msgs, why):
+    """The stage waits for the user (the stuck phase until step 3 renames it), or ends headless."""
+    if S.headless(cur):
         cur["phase"] = "done.not_fixed"
-        msgs.append('%s has %d strikes. Write report.md starting with "not fixed": what is known and what '
-                    'to try next' % (S.label(cur), cur["strikes"]))
+        msgs.append('nobody can answer: write report.md starting with "not fixed": the routes tried, why each '
+                    'failed, and what would be needed next')
+        return
+    cur.update(phase="stuck", stuck_at=S.now(cur))
+    if cur.get("stuck_log") is not None:
+        cur["stuck_log"].append({"at": S.now(cur), "answer": None})
+    msgs.append("%s waits for the user: %s. Give a solution-ready report (confirm.md): the routes tried with their "
+                "steps, why each failed, the one thing needed, and everything prepared; then record the answer with "
+                "rehearse stuck (stop here ends the whole rehearse job). %s" % (S.label(cur), why, S.failing_checks(cur)))
 
 
 def reopen(cur, why, **kw):
@@ -357,6 +361,11 @@ def about(s):
                  s["run_folder"], S.mirror_path(s), s["root"], BIN)]
     if s.get("findings"):
         lines.append("- the director's findings to address: %s" % json.dumps(s["findings"], ensure_ascii=False))
+    if S.untried(s):
+        lines.append("- untried candidates from the review, to try by hand (candidates, not orders): %s" % "; ".join(
+            "%s (%s)" % (c["name"], c.get("differs", "")) for c in S.untried(s)))
+        lines.append("- routes already tried (never repeat one): %s" % "; ".join(
+            "%s: %s" % (x["route"], x["outcome"]) for x in s.get("tried") or []))
     return "\n".join(lines)
 
 
@@ -366,11 +375,25 @@ def spawn_worker(s, tin):
         cur["workers"] += 1
         cur["worker"] = {"half": half, "at": S.now(cur), "relocks": len(cur["relocks"]), "reopen": bool(cur["reopen"])}
         cur["spawn"] = {"kind": "worker", "at": S.now(cur), "background": False, "stopped": False}
+        cur["review_due"] = None  # the new worker is the answer to the review
     kind = stage_def(cur).get("kind") or "build"
     text = "\n\n".join(["[rehearse] %s %s" % (S.label(cur), half), instruction("worker.md"),
                         instruction("%s-%s.md" % (kind, half)), "This stage (from the job file):\n" + about(cur),
                         "The manager adds:\n" + str(tin.get("prompt") or "")])
     return updated(tin, text, option("WORKER_MODEL", "sonnet"))
+
+
+def spawn_reviewer(s, tin):
+    """Fresh eyes on a stopped worker's log: the review instructions, the tried records, the run folder."""
+    with S.locked(s) as cur:
+        cur["reviewer"] = {"at": S.now(cur)}
+        cur["spawn"] = {"kind": "reviewer", "at": S.now(cur), "background": False, "stopped": False}
+    tried = "\n".join("- %s: steps %s: %s" % (x["route"], ", ".join(x["steps"]), x["outcome"])
+                      for x in cur.get("tried") or []) or "- none recorded"
+    text = "\n\n".join(["[rehearse] %s review" % S.label(cur), instruction("review.md"),
+                        "This stage (from the job file):\n" + about(cur), "Routes tried so far:\n" + tried,
+                        "The manager adds:\n" + str(tin.get("prompt") or "")])
+    return updated(tin, text, option("REVIEWER_MODEL", option("DIRECTOR_MODEL", "opus")))
 
 
 def spawn_director(s, tin):
@@ -414,8 +437,31 @@ def on_pre(p, sid):
         if kind in WORKER:
             if s["phase"] not in ("look", "build"):
                 return deny(s, "a worker is started only in look or build; the job is in %s" % s["phase"])
+            due = s.get("review_due")
+            if due:  # gate one: a review with an untried candidate, made after the stop, before the next worker
+                if not S.latest_review(s, due["at"]):
+                    return deny(s, "a worker stopped without %s: review its log first (rehearse review; in a "
+                                   "one-stage job start rehearse:reviewer), or rehearse failed"
+                                % ("an ending" if s["phase"] == "look" else "a pass"), "review first")
+                if not S.untried(s):
+                    return deny(s, "the review found no untried candidate: the next step is rehearse failed",
+                                "no candidate")
             return spawn_worker(s, tin)
+        if kind in REVIEWER:
+            tried, rv = s.get("tried") or [], S.latest_review(s)
+            due = s.get("review_due") or (tried and (not rv or rv["at"] < tried[-1]["at"]))
+            if s["phase"] not in ("look", "build") or not due:
+                return deny(s, "a reviewer is started after a worker stopped without a pass or an ending, or once "
+                               "tried routes are recorded (a one-stage job); nothing is due for review",
+                            "nothing to review")
+            return spawn_reviewer(s, tin)
         return None
+    if p.get("agent_type") in REVIEWER:  # the reviewer reads and searches only
+        if tool in EDIT_TOOLS:
+            return deny(s, "the reviewer reads and searches only; it never edits", "reviewer edit")
+        if tool == "Bash" and any(seg["targets"] or seg["outputs"]
+                                  for seg in P.parse(str(tin.get("command") or ""), cwd)):
+            return deny(s, "the reviewer reads and searches only; this command writes files", "reviewer edit")
     locked = s["phase"] in S.LOCKED
     outs = declared(s) if locked else set()
     # the plugin's own records in the run folder are written by the plugin only, in every phase, for any caller:
@@ -605,7 +651,7 @@ def apply_ending(cur, res, msgs):
         for c in e.get("calls") or []:
             c["answer"] = answered.get(c["question"])
     cur.update(ending=e, fewest_failing=nfail((res.get("before") or {}).get("results")), failing_runs=0,
-               pending_change=False, reopen=None, no_ending=0, start_director=already, redo=None)
+               pending_change=False, reopen=None, start_director=already, redo=None)
     if S.final(cur):
         cur["job_ending"] = e
     calls = e.get("calls") or []
@@ -732,10 +778,62 @@ def apply_stuck(cur, res, msgs):
     return False
 
 
+def apply_tried(cur, res, msgs):
+    cur.setdefault("tried", []).append({"route": res.get("route"), "steps": res.get("steps") or [], "outcome": res.get("outcome"),
+                         "by": res.get("agent_type"), "at": S.now(cur)})
+    msgs.append("tried route recorded (%d so far): %s" % (len(cur["tried"]), res.get("route")))
+    return False
+
+
+def apply_review(cur, res, msgs):
+    by = res.get("agent_type")
+    if by in {x.get("by") for x in cur.get("tried") or []}:
+        msgs.append("a review needs fresh eyes: the agent that made the tried records may not review them (in a "
+                    "one-stage job start rehearse:reviewer)")
+        return True
+    rv = {"searched": res.get("searched") or [], "candidates": res.get("candidates") or [],
+          "dropped": res.get("dropped") or [], "by": by, "at": S.now(cur)}
+    cur.setdefault("reviews", []).append(rv)
+    left = S.untried(cur)
+    msgs.append("review recorded: %d candidate(s) untried%s" % (
+        len(left), "; next: a new rehearse:worker with them" if left else "; next: rehearse failed"))
+    return False
+
+
+def apply_failed(cur, res, msgs):
+    """Gate two: only after a review whose every candidate is tried or dropped."""
+    if cur["phase"] not in ("look", "build"):
+        msgs.append("rehearse failed is recorded in look or build")
+        return True
+    if not cur.get("reviews"):
+        msgs.append("no review is recorded for %s: review the log first" % S.label(cur))
+        return True
+    left = S.untried(cur)
+    if left:
+        msgs.append("candidates of the latest review are neither tried nor dropped: %s" % ", ".join(
+            c["name"] for c in left))
+        return True
+    if res.get("needs") and not cur.get("tried"):
+        msgs.append("needs is recorded only after at least one route was tried and recorded")
+        return True
+    cur["failed"] = {"needs": res.get("needs"), "exhausted": bool(res.get("exhausted")), "summary": res.get("summary"),
+                     "by": res.get("agent_type"), "at": S.now(cur)}
+    cur["review_due"] = None
+    wait_for_user(cur, msgs, "it needs %s" % res["needs"] if res.get("needs") else
+                  "every route found was tried: %d routes, %d reviews" % (len(cur["tried"]), len(cur["reviews"])))
+    return False
+
+
 def apply_result(cur, res, msgs):
     kind = res.get("kind")
-    if not res.get("ok") and kind in ("plan", "ending", "run", "stuck"):
+    if not res.get("ok") and kind in ("plan", "ending", "run", "stuck", "tried", "review", "failed"):
         return False
+    if kind == "tried":
+        return apply_tried(cur, res, msgs)
+    if kind == "review":
+        return apply_review(cur, res, msgs)
+    if kind == "failed":
+        return apply_failed(cur, res, msgs)
     if kind == "plan":
         return apply_plan(cur, res, msgs)
     if kind == "ending":
@@ -783,20 +881,22 @@ def results(text):
 def agent_note(s, tin, resp, event):
     """The note on a worker's or the director's tool result: what happened, the phase, the next step, the ending."""
     kind = tin.get("subagent_type")
-    if kind not in WORKER + DIRECTOR:
+    if kind not in WORKER + DIRECTOR + REVIEWER:
         return None
     if isinstance(resp, dict) and (resp.get("status") == "async_launched" or resp.get("isAsync")):
         # interactive sessions run it in the background anyway (probes P19, P20): its stop comes later
         with S.locked(s) as cur:
             sp = cur.get("spawn")
             if sp and not sp.get("agent_id") and not sp["stopped"] and \
-                    sp["kind"] == ("director" if kind in DIRECTOR else "worker"):
+                    sp["kind"] == ("director" if kind in DIRECTOR else "reviewer" if kind in REVIEWER else "worker"):
                 sp.update(agent_id=resp.get("agentId"), background=True)
-        who = "director" if kind in DIRECTOR else "%s worker" % S.label(s)
+        who = "director" if kind in DIRECTOR else ("reviewer" if kind in REVIEWER else "%s worker" % S.label(s))
         return context(event, "[rehearse] %s launched in the background: end your turn now; when its notification "
                               "arrives, run `rehearse job` and do its next step." % who)
     if kind in DIRECTOR:
         head = s.get("verdict_note") or "[rehearse] no verdict was recorded"
+    elif kind in REVIEWER:
+        head = "[rehearse] %s reviewer: %s" % (S.label(s), (s.get("reviewer") or {}).get("outcome") or "no stop recorded")
     else:
         w = s.get("worker") or {}
         head = "[rehearse] %s %s worker: %s" % (S.label(s), w.get("half"), w.get("outcome") or "no stop recorded")
@@ -871,6 +971,11 @@ def on_post(p, sid):
                                       "question did not match one word for word. " + call_note(cur))
             msg = answer(cur, rest[0], add=False)
         return context(event, msg) if msg else None
+    if tool in L.SEARCH_TOOLS:  # a search is a logged step a tried record or a review can cite
+        with S.locked(s) as cur:
+            L.log_command(cur["run_folder"], "%s: %s" % (tool, tin.get("query") or tin.get("url") or ""),
+                          L.output_text(p), cur["phase"], tool=tool)
+        return None
     if tool != "Bash":
         return None
     cmd = str(tin.get("command") or "")
@@ -928,7 +1033,10 @@ def last_json(text, key="verdict"):
 
 
 def worker_stop(s):
-    """Record what a worker's turn did: build passed / relocked / neither (a strike); look registered or not."""
+    """Record what a worker's turn did: build passed / relocked / stopped without a pass; look registered or not.
+    A worker that stops without the result must have tried and recorded routes, one citing a logged search; else
+    its stop is held (SubagentStop block) and it goes on searching."""
+    held = None
     with S.locked(s) as cur:
         w, msgs = cur.get("worker"), []
         if not w or w.get("outcome"):
@@ -942,8 +1050,7 @@ def worker_stop(s):
             elif cur["phase"] == "build" and runs and runs[-1]["passing"]:
                 out = "passed"
             else:
-                out = "neither"
-                strike(cur, msgs, "build worker stopped without a pass")
+                out = "stopped without a pass"
         elif registered:
             out = "re-registered, %s" % ("already passes" if cur["start_director"] else "fails") if w["reopen"] \
                 else "ending registered"
@@ -951,11 +1058,22 @@ def worker_stop(s):
             out = "passed"  # a passing run of the old ending after a relock or change
         else:
             out = "no ending"
-            cur["no_ending"] += 1
-            if cur["no_ending"] >= 2:
-                cur["no_ending"] = 0
-                strike(cur, msgs, "two look workers without an ending")
-        w["outcome"] = out + ("; " + " ".join(msgs) if msgs else "")
+        if out in ("stopped without a pass", "no ending"):
+            mine = [x for x in cur.get("tried") or [] if x["at"] >= w["at"] and x.get("by") in WORKER]
+            if not any(set(x["steps"]) & L.search_steps(cur["run_folder"]) for x in mine):
+                held = ("search first: find other methods by web search (WebSearch, WebFetch or rehearse fetch) and "
+                        "from what you know, try each by hand, record each with rehearse tried --route --steps "
+                        "--outcome (at least one tried route must cite a logged search), then stop"
+                        + (" (%d tried route(s) so far, none citing a search)" % len(mine) if mine else ""))
+            else:
+                cur["review_due"] = {"at": S.now(cur), "half": w["half"], "tried": len(mine)}
+                strike(cur, msgs, "build worker stopped without a pass" if w["half"] == "build"
+                       else "look worker stopped without an ending")
+                msgs.append("review its log before the next worker (rehearse review; one-stage job: rehearse:reviewer)")
+        if held is None:
+            w["outcome"] = out + ("; " + " ".join(msgs) if msgs else "")
+    if held:
+        return block(s, held, "stop without a search")  # block() takes the lock itself: never inside it
     return None
 
 
@@ -966,12 +1084,20 @@ def on_subagent_stop(p, sid):
     sp = s.get("spawn") or {}
     if sp.get("agent_id") and p.get("agent_id") != sp["agent_id"]:
         return None  # not the agent we launched (a stray stop fires right after a background launch)
-    if p.get("agent_type") in WORKER + DIRECTOR and sp:
+    if p.get("agent_type") in WORKER:
+        held = worker_stop(s)
+        if held:  # the worker is held: it has not stopped
+            return held
+    if p.get("agent_type") in WORKER + DIRECTOR + REVIEWER and sp:
         with S.locked(s) as cur:
             cur["spawn"]["stopped"] = True
+            if p.get("agent_type") in REVIEWER and cur.get("reviewer"):
+                rv = S.latest_review(cur, cur["reviewer"]["at"])
+                cur["reviewer"]["outcome"] = ("review recorded: %d candidate(s) untried" % len(S.untried(cur))
+                                              if rv else "no review recorded")
         s = S.current(sid)
-    if p.get("agent_type") in WORKER:
-        return worker_stop(s)
+    if p.get("agent_type") in WORKER + REVIEWER:
+        return None
     if p.get("agent_type") not in DIRECTOR or not s.get("spawn_fingerprint"):
         return None
     v = last_json(str(p.get("last_assistant_message") or "")) or {}

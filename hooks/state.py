@@ -36,9 +36,9 @@ def fresh_stage(fp, at=None):
             "fp_phase_entry": fp, "director_runs": [], "findings": None, "verdicts": [], "spawn_fingerprint": None,
             "config_edits": [], "started_at": at or time.time(), "runs": [], "failing_runs": 0, "fewest_failing": None,
             "direct_pending": False, "project_edits_since_run": 0, "code_edits_since_run": 0, "relocks": [],
-            "strikes": 0, "pending_change": False, "reopen": None, "redo": None, "no_ending": 0, "worker": None,
+            "strikes": 0, "pending_change": False, "reopen": None, "redo": None, "worker": None,
             "spawn": None, "workers": 0, "start_director": False, "strike_log": [], "stuck_log": [],
-            "corrections": []}
+            "corrections": [], "tried": [], "reviews": [], "review_due": None, "failed": None, "reviewer": None}
 
 
 STAGE_KEYS = tuple(fresh_stage(None))
@@ -54,6 +54,24 @@ def now(cur):
     t = max(t, last + 1e-6)
     cur["clock"] = t
     return t
+
+
+def tried_names(s):
+    return {str(x.get("route", "")).strip().lower() for x in s.get("tried") or []}
+
+
+def latest_review(s, since=0):
+    rv = [r for r in s.get("reviews") or [] if r.get("at", 0) >= since]
+    return rv[-1] if rv else None
+
+
+def untried(s):
+    """The latest review's candidates that no tried record names and no drop explains."""
+    rv = latest_review(s)
+    if not rv:
+        return []
+    done = tried_names(s) | {str(x.get("name", "")).strip().lower() for x in rv.get("dropped") or []}
+    return [c for c in rv.get("candidates") or [] if str(c.get("name", "")).strip().lower() not in done]
 
 
 def passed(s):
@@ -96,6 +114,16 @@ def next_step(s):
         return "register the job ending with rehearse ending --job"
     if ph == "job-confirm":
         return "have the job confirmed: ask the user"
+    if ph in ("look", "build") and s.get("review_due"):
+        rv = latest_review(s, s["review_due"]["at"])
+        if not rv:
+            return ("a worker stopped without %s: review its log (rehearse review ...; in a one-stage job start "
+                    "rehearse:reviewer), then a new worker gets the candidates, or rehearse failed"
+                    % ("an ending" if ph == "look" else "a pass"))
+        if untried(s):
+            return "start a new rehearse:worker with the review's candidates: %s" % ", ".join(
+                c["name"] for c in untried(s))
+        return "the review found no untried candidate: rehearse failed --needs '<the one thing>' or --exhausted"
     if ph == "look":
         if s.get("redo") is not None:
             return "start a look worker to re-register the ending; the user said: %s" % s["redo"]
@@ -195,7 +223,7 @@ def process_lines(s):
     ran = sum(int(r.get("rehearse") or 0) for r in exact)
     rec = sum(1 for r in records if "at" in r)
     by_text = sum(len(re.findall(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:plan|ending|run|fetch|job|status|stuck|"
-                                 r"stage)\b", r.get("cmd") or "")) for r in steps if "rehearse" not in r)
+                                 r"stage|tried|review|failed)\b", r.get("cmd") or "")) for r in steps if "rehearse" not in r)
     commands = "- rehearse commands: %d; results recorded: %d; without a record: %d" % (ran, rec, max(ran - rec, 0))
     if rec > ran:  # a script (python3 - <<EOF ...) that calls rehearse in a loop is not countable from its text
         commands += "; results from commands inside scripts, not counted: %d" % (rec - ran)
@@ -226,6 +254,11 @@ def process_lines(s):
     relocks = sum(len(st.get("relocks") or []) for _, st in rows)
     refusals = old if s.get("refusals") is None else counts(collections.Counter(r.get("kind") for r in s["refusals"]))
     free = sum(1 for n in s.get("notes") or [] if str(n).startswith("stuck answer: "))
+    loops = "- routes tried: " + logged("tried", lambda have: "%d; reviews: %d; candidates dropped: %d; failed: %s" % (
+        sum(len(st["tried"]) for _, st in have), sum(len(st.get("reviews") or []) for _, st in have),
+        sum(len(r.get("dropped") or []) for _, st in have for r in st.get("reviews") or []),
+        "; ".join("%s: %s" % (lab, "needs " + st["failed"]["needs"] if st["failed"].get("needs") else "exhausted")
+                  for lab, st in have if st.get("failed")) or "none")).replace("3.1.0", "4.0.0")
     fixes = ["  - %s, %s: %s -> %s (the user: %s)" % (c.get("stage"), c.get("requirement"), c.get("before") or "none",
                                                       c.get("after") or "dropped", one_line(c.get("user") or ""))
              for _, st in rows for c in st.get("corrections") or []]
@@ -236,6 +269,7 @@ def process_lines(s):
             "- refusals: " + refusals,
             "- stuck: %s; free-text answers while stuck: %d" % (stuck, free),
             "- corrected checks (%d):%s" % (len(fixes), "\n" + "\n".join(fixes) if fixes else " none"),
+            loops,
             "- relocks: %d" % relocks]
 
 

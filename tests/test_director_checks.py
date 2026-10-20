@@ -201,7 +201,7 @@ try:
 
     p = rejected_three_times({"REHEARSE_CONFIRM_ENDING": "0"})
     s = p.state()
-    assert s["phase"] == "done.not_fixed" and s["strikes"] == 3, s["phase"]
+    assert s["phase"] == "build" and s["strikes"] == 3, s["phase"]  # a count is never failure (4.0.0)
     print("verdict: ok")
 
     # ---------------- stop matrix ----------------
@@ -219,12 +219,12 @@ try:
     p.edit("main.py", FIXED + "# later, unrelated\n")  # a closed run does not come back on a later edit
     assert p.stop() is None and p.state()["phase"] == "done.passed"
 
-    p = rejected_three_times({"REHEARSE_CONFIRM_ENDING": "0"})
-    assert blocked(p.stop(), 'write report.md starting with "not fixed"')
+    p = rejected_three_times({"REHEARSE_CONFIRM_ENDING": "0"})  # headless, still in build after three REWORKs
+    assert blocked(p.stop(), "spawn rehearse:director")
     p.report("fixed")
-    assert blocked(p.stop(), '"not fixed"')
-    p.report("not fixed: the total still comes from the cached copy")
-    assert p.stop() is None
+    assert blocked(p.stop(), "not verified")
+    p.report("not fixed: the total still comes from the cached copy\n\n## Not verified\nthe total\n")
+    assert p.stop() is None and p.state()["phase"] == "done.not_fixed"  # the honest give-up
 
     p = in_confirm()
     assert p.stop() is None  # confirm, attended (the default)

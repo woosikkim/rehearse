@@ -53,7 +53,7 @@ Start no worker. Do the stage as a worker would: follow `${CLAUDE_PLUGIN_ROOT}/h
 
 ## 7. Each stage (two or more stages)
 
-Start agents one at a time with the Agent tool. The plugin writes their prompt from the job file: the stage's plan line, inputs, outputs, goal and ending. Your prompt adds only what the job file lacks (the user's answers, a blocker you know of). Hand over the result to reach, never the steps: the worker chooses the method.
+Start agents one at a time with the Agent tool. The plugin writes their prompt from the job file: the stage's plan line, inputs, outputs, goal and ending. Your prompt adds only what the job file lacks (the user's answers, a blocker you know of). The first dispatch hands over the result to reach, never the steps: the worker chooses the method. After a reported failure, the next worker also gets the untried candidates from your review, as candidates, not orders (the plugin puts them in its prompt).
 
 **A spawn launched in the background.** If the note on the Agent result says the worker or director was launched in the background, end your turn with one short line to the user ("stage 2 worker is running; I continue when it finishes") and do nothing else for that stage. Do not poll `rehearse job` in a loop, and do not start a second worker or director. When its task notification arrives, run `rehearse job` and follow its next step (a worker's note is also in the job file). If the spawn's result came back at once with its answer (headless), go on as below.
 
@@ -67,14 +67,28 @@ The note on each worker's result says what happened. Act on it:
 - `ending registered`: confirm with the user (ask) or go on (auto), then a build worker.
 - `re-registered, fails`: confirm, then a build worker.
 - `re-registered, already passes`: confirm, then the director; never a build worker.
-- `no ending`: a look worker again (a second `no ending` in a row is a strike). With a blocker and the user present, ask the stuck question (section 8) instead.
+- `no ending` (a look worker stopped without registering an ending) and `stopped without a pass` (a build worker): the worker tried and recorded its routes; now review as a coach (section 7a). The next worker is refused until a review exists.
 - `passed` (a build worker, or a look worker whose passing run of the old ending reopened the stage): the director.
 - `relocked`: a look worker.
-- `neither`: a strike; read `rehearse job` and act on its next step.
+- `relocked`: a look worker. A strike is recorded for a send-back, a relock or a stop without a pass; strikes are shown in the report and never decide anything.
 
 Every note carries a `next:` line; do that.
 
 Before the next stage's worker starts, you may rewrite the job ending with what you now know; a changed one goes back to the user once.
+
+## 7a. A worker that stopped without the result: review as a coach
+
+The note says `no ending` or `stopped without a pass`. The worker tried and recorded its routes (`rehearse job` lists them). Now:
+
+1. Read the worker's log: `log.md` in the run folder and the tried routes with their steps. Anything not in the log counts as not tried.
+2. Search for the possible methods yourself: from what you know and by web search (`WebSearch`, `WebFetch`, or `rehearse fetch`). A review must cite at least one logged search.
+3. Compare, and name the untried candidates, each tied to the record, with one line on how it differs from every tried route; a trivial variant of something tried is dropped with a reason: `rehearse review --searched S<n>,... --candidate '<name>' '<how it differs>' ... [--drop '<name>' '<why>']` (see `${CLAUDE_PLUGIN_ROOT}/hooks/instructions/review.md`).
+4. Start a new worker (never the one that failed): it gets the candidates and tries them by hand. This repeats while a genuinely new candidate remains.
+5. When a review finds no untried candidate, record the failure: `rehearse failed --exhausted`, or `rehearse failed --needs '<the one thing only the user can give>'` when every route without the user was tried. The plugin refuses `failed` while a candidate is untried.
+
+**A one-stage job:** you did the work yourself, so the review needs fresh eyes: start `rehearse:reviewer` (read-only) and it records the review; the plugin refuses a review from the agent that made the tried records. Then try its candidates yourself, recording each with `rehearse tried`.
+
+**A better route that needs the user** (a key, a login, a paid plan) is never a reason to stop while a route works without them: continue with the best working route and put what the better one would need in the report; it may be raised at the next natural question.
 
 ## 8. Stuck
 

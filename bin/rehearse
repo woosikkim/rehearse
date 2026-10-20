@@ -11,6 +11,9 @@ REHEARSE-RESULT <json>, which the plugin's hook records.
   rehearse job          (also: rehearse status)
   rehearse stuck --stop-here | --try-again | --correct --says '<the user's words>' | --change --confirmed
                   (the user's answer to the stuck question; stop here ends the whole rehearse job)
+  rehearse tried --route '<name>' --steps S<n>,... --outcome '<what happened>'     (one route, tried and logged)
+  rehearse review --searched S<n>,... --candidate '<name>' '<how it differs>' ... [--drop '<name>' '<why>' ...]
+  rehearse failed --needs '<the one thing>' | --exhausted [--summary '<text>']    (only after a review, gate two)
 
 goal items: purpose, deliverable, done, out_of_scope; a source of request or answer needs the text word for word
 in the request or in the user's answers. inputs/outputs: comma-separated paths, or - for none.
@@ -271,6 +274,89 @@ def cmd_job(s, argv):
     return result(s["run_id"], "job", ok=True, phase=s["phase"], stage=s.get("stage"), stages_passed=S.passed(s))
 
 
+def _steps(arg):
+    return [x.strip() for x in (arg or "").split(",") if x.strip()]
+
+
+def cmd_tried(s, argv):
+    """One route the worker (or the manager, in a one-stage job) tried: the logged steps that tried it, the outcome."""
+    ap = argparse.ArgumentParser(prog="rehearse tried")
+    ap.add_argument("--route", required=True)
+    ap.add_argument("--steps", required=True, help="the logged steps that tried it, S<n>,S<m>")
+    ap.add_argument("--outcome", required=True)
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        return result(s["run_id"], "tried", ok=False, error="bad arguments: --route, --steps S<n>,..., --outcome")
+    steps = _steps(a.steps)
+    logged = {r["step"] for r in L.records(s["run_folder"]) if "step" in r}
+    missing = [x for x in steps if x not in logged]
+    if not steps or missing:
+        why = "every step must be in the log: %s" % (", ".join(missing) or "none given")
+        print(why)
+        return result(s["run_id"], "tried", ok=False, error=why)
+    print("tried: %s (%s): %s" % (a.route, ", ".join(steps), a.outcome))
+    return result(s["run_id"], "tried", ok=True, route=a.route, steps=steps, outcome=a.outcome)
+
+
+def cmd_review(s, argv):
+    """The coach's review of a stopped worker's log: the searches, the untried candidates, the dropped variants."""
+    ap = argparse.ArgumentParser(prog="rehearse review")
+    ap.add_argument("--searched", required=True, help="logged search steps (WebSearch, WebFetch, rehearse fetch)")
+    ap.add_argument("--candidate", nargs=2, action="append", default=[], metavar=("NAME", "HOW_IT_DIFFERS"))
+    ap.add_argument("--drop", nargs=2, action="append", default=[], metavar=("NAME", "WHY_A_VARIANT"))
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        return result(s["run_id"], "review", ok=False,
+                      error="bad arguments: --searched S<n>,... [--candidate NAME HOW] ... [--drop NAME WHY] ...")
+    searched, problems = _steps(a.searched), []
+    searches = L.search_steps(s["run_folder"])
+    not_search = [x for x in searched if x not in searches]
+    if not searched or not_search:
+        problems.append("every --searched step must be a logged search (a WebSearch or WebFetch call, or rehearse "
+                        "fetch): %s" % (", ".join(not_search) or "none given"))
+    tried = S.tried_names(s)
+    for name, _ in a.candidate:
+        if name.strip().lower() in tried:
+            problems.append("candidate %r names a route already tried; a candidate is something new" % name)
+    if problems:
+        print("review refused:\n" + "\n".join("  " + x for x in problems))
+        return result(s["run_id"], "review", ok=False, error="; ".join(problems))
+    print("review: searched %s; candidates %d; dropped %d" % (", ".join(searched), len(a.candidate), len(a.drop)))
+    return result(s["run_id"], "review", ok=True, searched=searched,
+                  candidates=[{"name": n, "differs": h} for n, h in a.candidate],
+                  dropped=[{"name": n, "why": w} for n, w in a.drop])
+
+
+def cmd_failed(s, argv):
+    """The stage's honest end: it needs one thing from the user, or everything found was tried (gate two)."""
+    ap = argparse.ArgumentParser(prog="rehearse failed")
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--needs", help="the one thing only the user can give")
+    g.add_argument("--exhausted", action="store_true")
+    ap.add_argument("--summary", default="")
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        return result(s["run_id"], "failed", ok=False, error="bad arguments: --needs '<thing>' | --exhausted [--summary]")
+    why = None
+    if s["phase"] not in ("look", "build"):
+        why = "rehearse failed is recorded in look or build; the job is in %s" % s["phase"]
+    elif not s.get("reviews"):
+        why = "no review is recorded for %s: review the log first (rehearse review)" % S.label(s)
+    elif S.untried(s):
+        why = "candidates of the latest review are neither tried nor dropped: %s" % ", ".join(
+            c["name"] for c in S.untried(s))
+    elif a.needs and not s.get("tried"):
+        why = "needs is recorded only after at least one route was tried and recorded"
+    if why:
+        print(why)
+        return result(s["run_id"], "failed", ok=False, error=why)
+    print("failed: " + ("needs " + a.needs if a.needs else "exhausted"))
+    return result(s["run_id"], "failed", ok=True, needs=a.needs, exhausted=bool(a.exhausted), summary=a.summary)
+
+
 def cmd_stuck(s, argv):
     """The manager records the user's answer to the stuck question; the plugin never reads it from their words."""
     ap = argparse.ArgumentParser(prog="rehearse stuck")
@@ -318,7 +404,8 @@ def cmd_stage(s, argv):
 def main():
     global FOLDER
     cmds = {"plan": cmd_plan, "ending": cmd_ending, "run": cmd_run, "fetch": cmd_fetch, "job": cmd_job,
-            "status": cmd_job, "stuck": cmd_stuck, "stage": cmd_stage}
+            "status": cmd_job, "stuck": cmd_stuck, "stage": cmd_stage, "tried": cmd_tried, "review": cmd_review,
+            "failed": cmd_failed}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return result(None, "usage", ok=False)
