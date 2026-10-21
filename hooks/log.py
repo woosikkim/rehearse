@@ -134,3 +134,38 @@ def trace_lines(path, since=0, limit=10):
             result = ("raised " + ev["exc"]) if ev.get("t") == "exception" else ("= " + str(ev.get("ret")))
             lines.append("  -> %s(%s) %s  [%s:%s]" % (key[0], args, result, ev.get("file"), ev.get("line")))
     return lines[-limit:]
+
+
+def usage(path):
+    """Tokens per model from a Claude Code transcript (JSONL): the assistant turns, deduplicated by message id (one
+    message is written as several lines, one per content block, all carrying the same usage). None when the file
+    cannot be read: "not readable" is never zero."""
+    try:
+        f = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    seen, out = set(), {}
+    with f:
+        for ln in f:
+            try:
+                e = json.loads(ln)
+            except ValueError:
+                continue
+            m = e.get("message") if isinstance(e, dict) and e.get("type") == "assistant" else None
+            if not isinstance(m, dict) or not isinstance(m.get("usage"), dict):
+                continue
+            key = m.get("id") or e.get("requestId") or e.get("uuid")
+            if key in seen:
+                continue
+            seen.add(key)
+            u = m["usage"]
+            tot = out.setdefault(str(m.get("model") or "unknown model"),
+                                 {"turns": 0, "in": 0, "out": 0, "cache_read": 0, "cache_create": 0})
+            tot["turns"] += 1
+            for k, src in (("in", "input_tokens"), ("out", "output_tokens"), ("cache_read", "cache_read_input_tokens"),
+                           ("cache_create", "cache_creation_input_tokens")):
+                try:
+                    tot[k] += int(u.get(src) or 0)
+                except (TypeError, ValueError):
+                    pass
+    return out

@@ -28,7 +28,7 @@ def realpath(cur, path):
     return os.path.realpath(os.path.join(cur, os.path.expanduser(str(path))))
 
 
-REHEARSE_CALL = re.compile(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:plan|ending|run|fetch|job|status|wait|wrong|irreversible|stage|tried|review|failed)\b")
+REHEARSE_CALL = re.compile(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:plan|ending|run|fetch|job|status|wait|wrong|irreversible|feedback|stage|tried|review|failed)\b")
 
 
 def invocations(cmd):

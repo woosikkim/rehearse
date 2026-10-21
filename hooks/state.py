@@ -12,6 +12,7 @@ import fcntl
 import json
 import os
 import re
+import hashlib
 import secrets
 import time
 
@@ -150,6 +151,82 @@ def next_step(s):
     return NEXT.get(ph, "see the instructions")
 
 
+def digest(x):
+    """A short digest of a snapshot (the files and outputs the director saw), so two verdicts can be compared."""
+    return hashlib.sha1(json.dumps(x, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:12]
+
+
+def false_rework(rows):
+    """The false-REWORK signal: a REWORK followed by a PASS on the same digest with no config edit between, which
+    means the director changed its mind on the same work. Pairs without a digest (before 4.0.0) are counted apart."""
+    hits, blind = [], 0
+    for lab, st in rows:
+        vs = [v for v in st.get("verdicts") or [] if not v.get("void")]
+        for a, b in zip(vs, vs[1:]):
+            if a.get("verdict") == "REWORK" and b.get("verdict") == "PASS":
+                if not a.get("digest") or not b.get("digest"):
+                    blind += 1
+                elif a["digest"] == b["digest"] and not b.get("config_edits_between"):
+                    hits.append(lab)
+    text = "%d (%s)" % (len(hits), ", ".join(hits) or "none")
+    if blind:
+        text += "; %d REWORK-then-PASS pair(s) without a digest (recorded since 4.0.0): cannot tell" % blind
+    return text
+
+
+def usage_text(s):
+    """Tokens and time per stage and per role, from each agent's transcript at its stop and the manager's at each
+    stage end. No dollars."""
+    us = s.get("usage")
+    if us is None:
+        return "not recorded (job predates 4.0.0)"
+    if not us:
+        return "none yet"
+    parts = []
+    for u in us:
+        tk = u.get("tokens")
+        if tk is None:
+            tokens = "tokens not readable"
+        else:
+            tokens = ", ".join("%s: in %d (cache read %d) out %d over %d turn(s)" % (
+                m, v.get("in", 0) + v.get("cache_create", 0), v.get("cache_read", 0), v.get("out", 0), v.get("turns", 0))
+                for m, v in sorted(tk.items())) or "no turn recorded"
+        secs = u.get("seconds") or 0
+        parts.append("%s %s: %s; %dm%02ds" % (u.get("stage"), u.get("role"), tokens, secs // 60, secs % 60))
+    return "\n" + "\n".join("  - " + x for x in parts)
+
+
+def find_job(run_id, hint=None):
+    """A job file by id in the plugin data folder: the folder a known job file lives in, else the usual places."""
+    roots = [os.path.dirname(os.path.dirname(hint))] if hint else []
+    roots += [sessions_root(), os.path.expanduser("~/.claude/plugins/data/rehearse-rehearse/sessions")]
+    for root in roots:
+        try:
+            for sid in os.listdir(root):
+                path = os.path.join(root, sid, run_id + ".json")
+                if os.path.isfile(path):
+                    return load(path)
+        except OSError:
+            continue
+    return None
+
+
+def newest_for_cwd(cwd):
+    """For `rehearse feedback`: the newest run, in any phase, whose run folder is in cwd or an ancestor."""
+    d = os.path.realpath(cwd)
+    while True:
+        rd = os.path.join(d, ".rehearsal")
+        if os.path.isdir(rd):
+            for run in sorted(os.listdir(rd), reverse=True):
+                s = load(os.path.join(rd, run, "state.json"))
+                if v3(s):
+                    return s
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
 def irreversible_due(s):
     """The user OK'd the irreversible step and it has not run yet."""
     ir = s.get("irreversible") or {}
@@ -250,7 +327,7 @@ def process_lines(s):
     exact = [r for r in steps if "rehearse" in r]
     ran = sum(int(r.get("rehearse") or 0) for r in exact)
     rec = sum(1 for r in records if "at" in r)
-    by_text = sum(len(re.findall(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:plan|ending|run|fetch|job|status|wait|wrong|irreversible|"
+    by_text = sum(len(re.findall(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:plan|ending|run|fetch|job|status|wait|wrong|irreversible|feedback|"
                                  r"stage|tried|review|failed)\b", r.get("cmd") or "")) for r in steps if "rehearse" not in r)
     commands = "- rehearse commands: %d; results recorded: %d; without a record: %d" % (ran, rec, max(ran - rec, 0))
     if rec > ran:  # a script (python3 - <<EOF ...) that calls rehearse in a loop is not countable from its text
@@ -304,7 +381,14 @@ def process_lines(s):
             "- corrected checks (%d):%s" % (len(fixes), "\n" + "\n".join(fixes) if fixes else " none"),
             loops,
             "- relocks: %d" % relocks,
-            "- chosen on your behalf: %d; irreversible step: %s" % (len(s.get("decisions") or []), irreversible_text(s))]
+            "- chosen on your behalf: %s; irreversible step: %s" % (
+                "not recorded (job predates 4.0.0)" if s.get("decisions") is None else len(s["decisions"]),
+                irreversible_text(s)),
+            "- false-REWORK signal (REWORK then PASS on the same digest, no config edit between): " + false_rework(rows),
+            "- stopped by the user: %s" % ("no" if not s.get("stop_here") and not s["phase"] == "done.cancelled" else
+                                           "yes (reason: %s)" % (s.get("stop_reason") or (
+                                               "none given" if "stop_reason" in s else "not recorded before 4.0.0"))),
+            "- tokens and time (per stage and role; no dollars): " + usage_text(s)]
 
 
 def chosen_lines(s):
@@ -507,6 +591,7 @@ def new_run(session_id, root, request, fp, mode="ask", headless=False, task=None
              run_folder=folder, request=request, prompts=[], goal=None, assumptions=[], blockers=[], stages=[],
              stages_from=None, job_ending=None, job_confirmation=None, confirm_return=None, not_verified=[],
              calls=[], irreversible=None, decisions=[],  # 4.0.0: plan-level calls, the OK'd step, what was chosen
+             usage=[], manager_seen=None, stop_reason=None,  # 4.0.0 records: tokens and time per stage and role
              fixtures=[], notes=[], results_read=0, refusals=[], user_words=[], created_at=time.time(),
              updated_at=time.time())
     _save(s)

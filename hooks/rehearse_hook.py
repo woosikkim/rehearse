@@ -11,6 +11,7 @@ Fails open: any error or malformed input exits 0 with no decision.
 import json
 import os
 import re
+import shutil
 import traceback
 import sys
 import time
@@ -138,9 +139,42 @@ def archive(cur):
     cur["stages"][cur["stage"] - 1].update({k: cur.get(k) for k in S.STAGE_KEYS}, passed=True, reruns=[])
 
 
-def advance(cur):
+def irreversible_missing(cur):
+    """The declared live command's program, when it does not exist: a final PASS cannot stand on a step that cannot
+    run (the stages build it; the plan line fixed its interface)."""
+    ir = cur.get("irreversible")
+    segs = P.parse(ir["cmd"], cur["root"]) if ir else []
+    pp = segs[0]["pp"] if segs else None
+    if not pp:
+        return None
+    if os.sep in str(pp):
+        return None if os.path.isfile(pp) else "the declared irreversible command's program does not exist: %s" % (
+            os.path.relpath(pp, cur["root"]))
+    return None if shutil.which(pp) else "the declared irreversible command's program is not on PATH: %s" % pp
+
+
+def last_judgment(cur):
+    """The director run that ends the job: the final stage, or a one-stage job's only one."""
+    return S.final(cur) or len(cur["stages"]) == 1
+
+
+def record_usage(cur, role, path, seconds, cumulative=False):
+    """Tokens (from a transcript) and time for one agent's turn, or the manager's share since its last record."""
+    tot = L.usage(path) if path else None
+    tokens = tot
+    if tot is not None and cumulative:  # the manager's transcript holds the whole session: the share is the difference
+        seen = cur.get("manager_seen") or {}
+        tokens = {m: {k: v - (seen.get(m) or {}).get(k, 0) for k, v in d.items()} for m, d in tot.items()}
+        tokens = {m: d for m, d in tokens.items() if d.get("turns")}
+        cur["manager_seen"] = tot
+    cur.setdefault("usage", []).append({"stage": S.label(cur), "role": role, "tokens": tokens,
+                                        "seconds": int(max(seconds, 0)), "at": S.now(cur)})
+
+
+def advance(cur, transcript=None):
     """A director PASS: the next stage, the final stage, or the end of the job."""
     n, m = cur["stage"], len(cur["stages"])
+    record_usage(cur, "manager", transcript, S.now(cur) - (cur.get("started_at") or S.now(cur)), cumulative=True)
     if S.final(cur) or m == 1:
         if m == 1:
             cur["stages"][0]["passed"] = True
@@ -319,14 +353,14 @@ def on_prompt(p, sid):
         return None
     m = ACTIVATE.match(prompt)
     rest = m.group(1).strip() if m else None
-    is_stop = rest is not None and rest.lower() == "stop"
-    if is_stop:  # also after done.passed without a report, or done.not_fixed: the manager may stop afterwards
+    stop = re.match(r"stop(?:\s+(\S.*))?$", rest, re.I | re.S) if rest is not None else None
+    if stop:  # `rehearse stop [<reason>]`; also after done.passed without a report, or done.not_fixed
         s = S.newest(sid)
         if not S.v3(s) or s.get("closed") or s["phase"] == "done.cancelled":
             return None
         with S.locked(s) as cur:
-            cur["phase"] = "done.cancelled"
-            cur["notes"].append("cancelled by user")
+            cur.update(phase="done.cancelled", stop_reason=(stop.group(1) or "").strip() or None)
+            cur["notes"].append("cancelled by user" + (": " + cur["stop_reason"] if cur["stop_reason"] else ""))
         return {"systemMessage": "rehearse stopped (job %s cancelled)" % s["run_id"]}
     s = S.current(sid)
     if rest is not None and rest.lower() in ("job", "status"):  # a status question, never a new job
@@ -433,6 +467,12 @@ def spawn_director(s, tin):
         cur.update(verdict_note=None, phase="judge", start_director=False,
                    spawn={"kind": "director", "at": S.now(cur), "background": False, "stopped": False})
     extra = "- ending record: %s (the \"ending\" key)\n- findings: %s\n%s" % (S.mirror_path(cur), fpath, about(cur))
+    if cur.get("irreversible") and last_judgment(cur):
+        ir = cur["irreversible"]
+        extra += ("\n- irreversible step declared in the plan: %s (live command: %s). Before PASS: the program it "
+                  "names exists with that interface, and the dry-run invocation named in the plan line passes in "
+                  "your own run; the live command never runs (it is refused). Otherwise REWORK with the finding"
+                  % (ir["what"], ir["cmd"]))
     if S.final(cur):
         extra += "\nEvery stage ending; rerun each with `rehearse run --stage <n> --as-director` (a live source: " \
                  "check its structure, or against the saved fixture):\n" + "\n".join(
@@ -804,7 +844,7 @@ def apply_wait(cur, res, msgs):
     if cur.get("failed") and cur["failed"].get("answer") is None:
         cur["failed"]["answer"] = a
     if a == "stop here":
-        cur.update(stop_here=True, pending_change=False)
+        cur.update(stop_here=True, pending_change=False, stop_reason=res.get("says") or cur.get("stop_reason"))
         msgs.append('the user chose to stop here; write report.md starting with "not fixed", then finish')
     elif a == "resume":  # the user gave what was needed: the stage goes on where it waited, with their words
         cur.update(phase=cur.get("wait_from") or "build", failing_runs=0, pending_change=False)
@@ -1222,6 +1262,7 @@ def on_subagent_stop(p, sid):
     if p.get("agent_type") in WORKER + DIRECTOR + REVIEWER and sp:
         with S.locked(s) as cur:
             cur["spawn"]["stopped"] = True
+            record_usage(cur, sp.get("kind") or "agent", p.get("agent_transcript_path"), S.now(cur) - sp.get("at", 0))
             if p.get("agent_type") in REVIEWER and cur.get("reviewer"):
                 rv = S.latest_review(cur, cur["reviewer"]["at"])
                 cur["reviewer"]["outcome"] = ("review recorded: %d candidate(s) untried" % len(S.untried(cur))
@@ -1244,15 +1285,24 @@ def on_subagent_stop(p, sid):
                "findings": v.get("findings"), "extra_inputs": v.get("extra_inputs"), "tests": v.get("tests"),
                "at": S.now(cur)}
         cur["spawn_fingerprint"] = None
+        # the false-REWORK signal: the snapshot's digest and the config edits since the previous verdict
+        prev = [x["at"] for x in cur["verdicts"]]
+        rec["digest"] = S.digest(spawn)
+        rec["config_edits_between"] = sum(1 for e in cur["config_edits"] if e["at"] > (prev[-1] if prev else 0))
         cur["verdicts"].append(rec)
         n = S.label(cur)
+        missing = irreversible_missing(cur) if verdict == "PASS" and last_judgment(cur) else None
+        if missing and not changed and cur["phase"] == "judge":  # a PASS cannot stand on a step that cannot run
+            verdict = rec["verdict"] = "REWORK"
+            v = dict(v, findings=list(v.get("findings") or []) + [missing])
+            rec.update(findings=v["findings"], overridden="PASS: " + missing)
         if changed or cur["phase"] != "judge":
             rec["void"] = "project files changed while the director worked: %s" % (", ".join(changed) or "edited")
             if cur["phase"] == "judge":
                 cur.update(phase="build", start_director=True)
             msg = "[rehearse] %s: the verdict is void: %s. Start rehearse:director again" % (n, rec["void"])
         elif verdict == "PASS":
-            msg = advance(cur)
+            msg = advance(cur, p.get("transcript_path"))
         elif verdict == "REWORK":
             cur.update(findings=v.get("findings"), phase="build", start_director=False)
             strike(cur, msgs, "REWORK")
@@ -1337,6 +1387,10 @@ def on_stop(p, sid):
         if ph == "done.passed":  # the job is over; later work in this session is not governed by it
             cur["closed"] = True
         if cur["phase"] in ("done.passed", "done.not_fixed") and first is not None:
+            if cur.get("usage") is not None and not cur.get("usage_closed"):
+                record_usage(cur, "manager", p.get("transcript_path"),
+                             S.now(cur) - (cur.get("started_at") or S.now(cur)), cumulative=True)
+                cur["usage_closed"] = True
             S.finish_report(cur)
     return None
 

@@ -19,6 +19,8 @@ REHEARSE-RESULT <json>, which the plugin's hook records.
   rehearse wait --resume --says '<the user's words>' | --correct --says '<words>' | --change --confirmed | --stop-here
                   (the user's answer while the stage waits; stop here ends the whole rehearse job)
   rehearse irreversible      (runs the OK'd irreversible step once, after the final pass; refused otherwise)
+  rehearse feedback '<line>' [--job <run id>]   (after the job, from any session: a dated line kept with the job)
+  rehearse wait --stop-here --says '<the user's words>'   (the stop reason, recorded)
 
 goal items: purpose, deliverable, done, out_of_scope; a source of request or answer needs the text word for word
 in the request or in the user's answers. inputs/outputs: comma-separated paths, or - for none.
@@ -502,6 +504,40 @@ def cmd_irreversible(s, argv):
     return result(s["run_id"], "irreversible", ok=True, rc=rc, stdout=clip(out, 2000), stderr=clip(err, 2000))
 
 
+def cmd_feedback(argv):
+    """After-job feedback, from any session on the machine: dated lines kept beside the job's file in the plugin
+    data folder (<run id>.feedback.jsonl), where every job of every project lives. The job file itself is not touched."""
+    global FOLDER
+    ap = argparse.ArgumentParser(prog="rehearse feedback")
+    ap.add_argument("line")
+    ap.add_argument("--job", help="the run id; default: the newest job in this directory or above, in any phase")
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        return result(None, "feedback", ok=False, error="bad arguments: rehearse feedback '<line>' [--job <run id>]")
+    here = S.newest_for_cwd(os.getcwd())
+    s = S.find_job(a.job, hint=(here or {}).get("path")) if a.job else here
+    if not s:
+        why = "no job found%s" % (" with id %s" % a.job if a.job else " in this directory or above it: give --job <run id>")
+        print(why)
+        return result(None, "feedback", ok=False, error=why)
+    if os.path.isdir(s.get("run_folder") or ""):
+        FOLDER = s["run_folder"]
+    path = os.path.splitext(s["path"])[0] + ".feedback.jsonl"
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"line": a.line.strip(), "at": time.time(),
+                                "date": time.strftime("%Y-%m-%d %H:%M")}, ensure_ascii=False) + "\n")
+        lines = [json.loads(ln) for ln in open(path, encoding="utf-8") if ln.strip()]
+    except OSError as x:
+        print("could not write the feedback beside the job file (%s): %s" % (path, x))
+        return result(s["run_id"], "feedback", ok=False, error=str(x))
+    print("feedback for job %s (%d line(s), kept at %s):" % (s["run_id"], len(lines), path))
+    for ln in lines:
+        print("  %s  %s" % (ln.get("date"), ln.get("line")))
+    return result(s["run_id"], "feedback", ok=True, lines=len(lines), path=path)
+
+
 def cmd_stage(s, argv):
     sys.path.insert(0, os.path.join(PLUGIN, "stage"))
     import client
@@ -513,11 +549,13 @@ def main():
     global FOLDER
     cmds = {"plan": cmd_plan, "ending": cmd_ending, "run": cmd_run, "fetch": cmd_fetch, "job": cmd_job,
             "status": cmd_job, "wait": cmd_wait, "wrong": cmd_wrong, "stage": cmd_stage, "tried": cmd_tried,
-            "review": cmd_review, "failed": cmd_failed, "irreversible": cmd_irreversible}
+            "review": cmd_review, "failed": cmd_failed, "irreversible": cmd_irreversible, "feedback": None}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return result(None, "usage", ok=False)
     kind = sys.argv[1]
+    if kind == "feedback":  # after the job: no live job is needed
+        return cmd_feedback(sys.argv[2:])
     s = S.find_for_cwd(os.getcwd())
     if not s:
         print("no active rehearse job in this directory or above it")

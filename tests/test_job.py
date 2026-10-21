@@ -1648,6 +1648,158 @@ try:
     print("interactive auto, one stage: confirmed up front after the plan's calls; later endings and calls are "
           "accepted and listed as chosen: ok")
 
+    # ================= 4.0.0 step 4 review: the live invocation differs from the dry run; the program must exist =================
+    LIVE = ["--irreversible", "publish the post", "python3 blog.py publish --live"]
+    p = Proj({"main.py": prog(0), "blog.py": "import sys\nprint('live' if '--live' in sys.argv else 'dry run')\n"})
+    p.prompt(REQ3)
+    p.rehearse(*PLAN1, *LIVE)
+    assert not denied(p.pre("Bash", command="python3 blog.py publish --dry-run"))  # the dry run: different text
+    out = p.pre("Bash", command="cd x && python3 blog.py publish --live")  # the live text: refused anywhere
+    assert denied(out) and "rehearse irreversible" in text(out), out
+    so, _ = p.rehearse("ending", "--cmd", "python3 blog.py publish --dry-run", "--expect", "dry", "contains",
+                       "b: 2", "--cite", "request")
+    assert p.phase() == "confirm", so  # an ending may exercise the dry run (it fails now: the line is missing)
+    so, _ = p.rehearse("ending", "--cmd", "python3 blog.py publish --live", "--expect", "x", "contains", "x",
+                       "--cite", "request")
+    assert "never inside an ending command" in so
+    md = open(os.path.join(ROOT, "hooks", "instructions", "manager.md")).read()
+    assert "Declare the live invocation so that it differs from the dry run" in md and "--dry-run" in md
+    print("the live invocation is refused, its dry run is allowed and may be an ending; the manager is told to "
+          "declare them apart: ok")
+
+    p = Proj(dict(PUB, **{"main.py": prog(0)}))  # the declared program must exist before the final PASS
+    p.prompt(REQ3)
+    p.rehearse(*PLAN1, *IRR)
+    p.rehearse(*END3)
+    p.prompt("yes")
+    p.prompt("yes")
+    p.write("main.py", prog(3))
+    p.rehearse("run")
+    os.remove(p.j("publish.py"))  # the stages never built it
+    ui = p.spawn()["hookSpecificOutput"]["updatedInput"]
+    assert "irreversible step declared in the plan: publish the draft (live command: python3 publish.py)" in ui["prompt"]
+    p.verdict(PASS)
+    s = p.state()
+    assert s["phase"] == "build" and s["verdicts"][-1]["verdict"] == "REWORK", (s["phase"], s["verdicts"][-1])
+    assert s["verdicts"][-1]["overridden"].startswith("PASS: the declared irreversible command's program does not exist")
+    assert "program does not exist: publish.py" in s["findings"][-1], s["findings"]
+    p.write("publish.py", PUB["publish.py"])
+    p.spawn()
+    p.verdict(PASS)
+    assert p.phase() == "done.passed"
+    print("a final PASS with the declared program missing is recorded as REWORK with the finding: ok")
+
+    # ================= 4.0.0 step 5: feedback, tokens and time, the false-REWORK digest, the stop reason =================
+    def transcript(path, model, turns):
+        """A Claude Code transcript: one assistant message is written as several lines sharing one usage."""
+        with open(path, "w") as f:
+            for i, (inp, out) in enumerate(turns):
+                for block in ("text", "tool_use"):
+                    f.write(json.dumps({"type": "assistant", "requestId": "req%d" % i, "message": {
+                        "id": "msg%d" % i, "model": model, "usage": {"input_tokens": inp, "output_tokens": out,
+                                                                     "cache_read_input_tokens": 100,
+                                                                     "cache_creation_input_tokens": 10}}}) + "\n")
+                f.write(json.dumps({"type": "user", "message": {"content": "x"}}) + "\n")
+    assert L.usage("/nonexistent") is None  # not readable is never zero
+    wt, dt, mt = (os.path.join(TMP, n) for n in ("w.jsonl", "d.jsonl", "m.jsonl"))
+    transcript(wt, "claude-sonnet", [(1000, 50), (2000, 70)])
+    transcript(dt, "claude-opus", [(500, 20)])
+    transcript(mt, "claude-opus", [(300, 10), (300, 10)])
+    assert L.usage(wt) == {"claude-sonnet": {"turns": 2, "in": 3000, "out": 120, "cache_read": 200, "cache_create": 20}}
+    p = building()
+    p.spawn("rehearse:worker")
+    fail(p, 0, who=WORKER)
+    p.ev("SubagentStop", None, WORKER, agent_transcript_path=wt, stop_hook_active=False, last_assistant_message="done")
+    p.ev("PostToolUse", None, tool_name="Agent", tool_input={"subagent_type": "rehearse:worker", "prompt": "x"},
+         tool_response={"content": "done"})
+    u = p.state()["usage"]
+    assert len(u) == 1 and u[0]["role"] == "worker" and u[0]["stage"] == "stage 1" and u[0]["tokens"]["claude-sonnet"]["in"] == 3000
+    p.spawn()
+    p.ev("SubagentStop", None, DIRECTOR, agent_transcript_path=dt, transcript_path=mt, stop_hook_active=False,
+         last_assistant_message=PASS)
+    u = p.state()["usage"]
+    assert [x["role"] for x in u] == ["worker", "director", "manager"] and u[1]["tokens"]["claude-opus"]["out"] == 20, u
+    assert u[2]["tokens"]["claude-opus"]["turns"] == 2 and p.state()["manager_seen"]["claude-opus"]["in"] == 600, u[2]
+    transcript(mt, "claude-opus", [(300, 10), (300, 10), (400, 30)])  # the manager wrote the report: one more turn
+    p.report("fixed\n\n## Not verified\nnone\n")
+    assert p.ev("Stop", None, transcript_path=mt, stop_hook_active=False) is None
+    u = p.state()["usage"]
+    assert len(u) == 4 and u[3]["role"] == "manager" and u[3]["tokens"] == {"claude-opus": {
+        "turns": 1, "in": 400, "out": 30, "cache_read": 100, "cache_create": 10}}, u[3]
+    rep = open(os.path.join(p.state()["run_folder"], "report.md")).read()
+    assert "- stage 1 worker: claude-sonnet: in 3020 (cache read 200) out 120 over 2 turn(s); 0m" in rep, rep
+    assert "- stage 1 director: claude-opus: in 510 (cache read 100) out 20 over 1 turn(s)" in rep, rep
+    q = building()  # a transcript that cannot be read: not readable, never zero
+    q.spawn()
+    q.verdict(PASS)
+    assert q.state()["usage"][0]["tokens"] is None and "tokens not readable" in q.rehearse("job")[0]
+    print("tokens and time per stage and per role, from the transcripts, the manager's as the difference; "
+          "unreadable is never zero: ok")
+
+    p = building()  # the false-REWORK signal: REWORK then PASS on the same digest with no config edit between
+    p.write("main.py", prog(3))
+    p.rehearse("run")
+    p.spawn()
+    p.verdict(REWORK)
+    p.spawn()
+    p.verdict(PASS)
+    vs = p.state()["verdicts"]  # a one-stage job keeps its verdicts at the top level
+    assert vs[0]["digest"] == vs[1]["digest"] and vs[1]["config_edits_between"] == 0 and len(vs[0]["digest"]) == 12, vs
+    so, _ = p.rehearse("job")
+    assert "false-REWORK signal (REWORK then PASS on the same digest, no config edit between): 1 (stage 1)" in so, so
+    p = building()  # a config edit between: not the signal, whatever the digest
+    p.write("main.py", prog(3))
+    p.rehearse("run")
+    p.spawn()
+    p.verdict(REWORK)
+    p.edit("settings.json", "{}")
+    p.spawn()
+    p.verdict(PASS)
+    vs = p.state()["verdicts"]  # a one-stage job keeps its verdicts at the top level
+    assert vs[1]["config_edits_between"] == 1, vs
+    assert "false-REWORK signal (REWORK then PASS on the same digest, no config edit between): 0 (none)" in p.rehearse("job")[0]
+    old = {"stages": [{"verdicts": [{"verdict": "REWORK", "at": 1}, {"verdict": "PASS", "at": 2}]}], "phase": "done.passed",
+           "run_id": "x", "run_folder": TMP, "stop_here": True}  # a job from before 4.0.0: no digest, no reason recorded
+    lines = "\n".join(S.process_lines(old))
+    assert "1 REWORK-then-PASS pair(s) without a digest (recorded since 4.0.0): cannot tell" in lines, lines
+    assert "stopped by the user: yes (reason: not recorded before 4.0.0)" in lines and "chosen on your behalf: not recorded" in lines
+    assert "tokens and time (per stage and role; no dollars): not recorded (job predates 4.0.0)" in lines
+    print("the false-REWORK signal: the digest and the config edits between verdicts; old files say cannot tell: ok")
+
+    p = waiting()  # the stop reason: the user's words on stop here, or after rehearse stop
+    p.prompt("stop, I am out of time")
+    p.rehearse("wait", "--stop-here", "--says", "I am out of time")
+    assert p.state()["stop_reason"] == "I am out of time" and "stopped by the user: yes (reason: I am out of time)" in p.rehearse("job")[0]
+    q = building()
+    out = q.prompt("rehearse stop the target moved")
+    assert q.phase() == "done.cancelled" and q.state()["stop_reason"] == "the target moved" and "cancelled" in out["systemMessage"]
+    assert "cancelled by user: the target moved" in q.state()["notes"]
+    q = building()
+    q.prompt("rehearse stop")
+    assert q.phase() == "done.cancelled" and q.state()["stop_reason"] is None
+    print("the stop reason: rehearse stop <reason> and --says on stop here, shown in the Process section: ok")
+
+    p = building()  # feedback after the job, from any directory: kept beside the job file, never inside it
+    p.write("main.py", prog(3))
+    p.rehearse("run")
+    p.spawn()
+    p.verdict(PASS)
+    p.report("fixed\n\n## Not verified\nnone\n")
+    p.stop()
+    before = open(p.state()["path"]).read()
+    so, _ = p.rehearse("feedback", "the draft was too long")
+    side = os.path.splitext(p.state()["path"])[0] + ".feedback.jsonl"
+    assert "1 line(s)" in so and os.path.exists(side) and open(p.state()["path"]).read() == before, so
+    r = subprocess.run([sys.executable, BIN, "feedback", "--job", p.state()["run_id"], "and the title was fine"],
+                       cwd=TMP, capture_output=True, text=True, env=dict(ENV, CLAUDE_PLUGIN_DATA=DATA))  # another directory
+    assert "2 line(s)" in r.stdout and "and the title was fine" in r.stdout, r.stdout + r.stderr
+    lines = [json.loads(ln) for ln in open(side)]
+    assert [x["line"] for x in lines] == ["the draft was too long", "and the title was fine"] and all("date" in x for x in lines)
+    r = subprocess.run([sys.executable, BIN, "feedback", "--job", "nope", "x"], cwd=TMP, capture_output=True, text=True, env=ENV)
+    assert "no job found with id nope" in r.stdout
+    assert P.invocations("rehearse feedback 'x'") == 1
+    print("rehearse feedback: dated lines beside the job file, from the project or by id from anywhere: ok")
+
     # ================= 3.2.0: stop here is said to end the whole job =================
     p = building()
     p.write("main.py", prog(1))
