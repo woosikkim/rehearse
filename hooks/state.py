@@ -16,15 +16,15 @@ import secrets
 import time
 
 ENDED = ("done.cancelled", "done.not_fixed")
-LOCKED = ("goal", "job-confirm", "look", "confirm", "stuck")  # edits of project files and declared outputs refused
-WAIT = ("goal", "job-confirm", "confirm", "stuck")  # where a manager may stop when someone can answer: it waits
+LOCKED = ("goal", "job-confirm", "look", "confirm", "wait")  # edits of project files and declared outputs refused
+WAIT = ("goal", "job-confirm", "confirm", "wait")  # where a manager may stop when someone can answer: it waits
 NO_LOOK = ("no look step since edits were locked again: take one (a stage step into project code, or rehearse "
            "fetch; file://<path> for a draft or CSV), then register")
 GOAL_ITEMS = ("purpose", "deliverable", "done", "out_of_scope")
 NEXT = {"judge": "wait for the director's verdict",
-        "stuck": "ask the user once (these checks are wrong / redo this stage / try again / stop here, which ends the "
-                 "whole rehearse job), then record the answer: rehearse stuck --correct --says '<words>' | --change "
-                 "--confirmed | --try-again | --stop-here",
+        "wait": "give the solution-ready report and ask the user once (give what is needed / these checks are wrong / "
+                "redo this stage / stop here, which ends the whole rehearse job), then record the answer: rehearse "
+                "wait --resume --says '<words>' | --correct --says '<words>' | --change --confirmed | --stop-here",
         "done.passed": "write report.md, then finish",
         "done.not_fixed": 'write report.md starting with "not fixed"',
         "done.cancelled": "the job is cancelled"}
@@ -37,7 +37,7 @@ def fresh_stage(fp, at=None):
             "config_edits": [], "started_at": at or time.time(), "runs": [], "failing_runs": 0, "fewest_failing": None,
             "direct_pending": False, "project_edits_since_run": 0, "code_edits_since_run": 0, "relocks": [],
             "strikes": 0, "pending_change": False, "reopen": None, "redo": None, "worker": None,
-            "spawn": None, "workers": 0, "start_director": False, "strike_log": [], "stuck_log": [],
+            "spawn": None, "workers": 0, "start_director": False, "strike_log": [], "wait_log": [], "wrongs": [],
             "corrections": [], "tried": [], "reviews": [], "review_due": None, "failed": None, "reviewer": None}
 
 
@@ -54,6 +54,12 @@ def now(cur):
     t = max(t, last + 1e-6)
     cur["clock"] = t
     return t
+
+
+def cites_search(x, web):
+    """True if a tried record (steps) or a review (searched) cites a logged WebSearch step, or carries a recorded
+    reason why none was available (--no-websearch)."""
+    return bool(set(x.get("steps") or x.get("searched") or []) & web) or bool(x.get("no_websearch"))
 
 
 def tried_names(s):
@@ -143,13 +149,14 @@ def next_step(s):
 
 
 def failing(s):
-    """The requirements the last run of the ending failed."""
-    after = (s.get("ending") or {}).get("after") or {}
-    return [r for r in after.get("results") or [] if not r.get("passed")]
+    """The requirements the last run of the ending failed: the registration run, until a later `rehearse run`."""
+    e = s.get("ending") or {}
+    last = e.get("after") or e.get("before") or {}
+    return [r for r in last.get("results") or [] if not r.get("passed")]
 
 
 def failing_checks(s):
-    """The checks the last run failed, in one line, so a stuck question can name them."""
+    """The checks the last run failed, in one line, so the wait question can name them."""
     bad = failing(s)
     if not bad:
         return "failing checks: none recorded"
@@ -157,10 +164,10 @@ def failing_checks(s):
 
 
 def question_since(s):
-    """The stamp after which the user must have answered for a stuck decision: the stage becoming stuck, or
-    the last worker's stop (a blocked look), or the stage start."""
-    if s.get("phase") == "stuck":
-        return s.get("stuck_at") or 0
+    """The stamp after which the user must have answered for a wait decision: the wait began, or (stop here, from
+    any question) the last worker's stop or the stage start."""
+    if s.get("phase") == "wait":
+        return s.get("wait_at") or 0
     return max((s.get("worker") or {}).get("at") or 0, s.get("started_at") or 0)
 
 
@@ -176,7 +183,7 @@ def job_text(s):
     stages = s.get("stages") or []
     lines = ["job %s: phase %s, %s, strikes %d, failing runs %d" % (
         s["run_id"], s["phase"], where(s), s.get("strikes", 0), s.get("failing_runs", 0))]
-    if s["phase"] == "stuck":
+    if s["phase"] == "wait":
         lines.append(failing_checks(s))
     lines += ["  stage %d %s (%s)%s: %s" % (i, st.get("name"), st.get("kind"), ", passed" if st.get("passed") else "",
                                            st.get("line")) for i, st in enumerate(stages, 1)]
@@ -222,7 +229,7 @@ def process_lines(s):
     exact = [r for r in steps if "rehearse" in r]
     ran = sum(int(r.get("rehearse") or 0) for r in exact)
     rec = sum(1 for r in records if "at" in r)
-    by_text = sum(len(re.findall(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:plan|ending|run|fetch|job|status|stuck|"
+    by_text = sum(len(re.findall(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:plan|ending|run|fetch|job|status|wait|wrong|"
                                  r"stage|tried|review|failed)\b", r.get("cmd") or "")) for r in steps if "rehearse" not in r)
     commands = "- rehearse commands: %d; results recorded: %d; without a record: %d" % (ran, rec, max(ran - rec, 0))
     if rec > ran:  # a script (python3 - <<EOF ...) that calls rehearse in a loop is not countable from its text
@@ -246,19 +253,24 @@ def process_lines(s):
     strikes = logged("strike_log", lambda have: "%d (%s)" % (
         sum(len(st["strike_log"]) for _, st in have),
         counts(collections.Counter(e.get("cause") for _, st in have for e in st["strike_log"]))))
-    stuck = logged("stuck_log", lambda have: "%d (%s)" % (
-        sum(len(st["stuck_log"]) for _, st in have),
-        ", ".join(e.get("answer") or "unanswered" for _, st in have for e in st["stuck_log"]) or "none"))
+    rows = [(lab, dict(st, wait_log=st["stuck_log"]) if st.get("wait_log") is None and st.get("stuck_log") is not None
+             else st) for lab, st in rows]  # a stage from 3.1.0 to 3.2.0 kept this log under the stuck phase's name
+    waits = logged("wait_log", lambda have: "%d (%s)" % (
+        sum(len(st["wait_log"]) for _, st in have),
+        ", ".join(e.get("answer") or "unanswered" for _, st in have for e in st["wait_log"]) or "none"))
     reworks = ["  - %s: %s" % (lab, one_line((v.get("findings") or ["no reason given"])[0]))
                for lab, st in rows for v in st.get("verdicts") or [] if v.get("verdict") == "REWORK" and not v.get("void")]
     relocks = sum(len(st.get("relocks") or []) for _, st in rows)
     refusals = old if s.get("refusals") is None else counts(collections.Counter(r.get("kind") for r in s["refusals"]))
-    free = sum(1 for n in s.get("notes") or [] if str(n).startswith("stuck answer: "))
+    free = sum(1 for n in s.get("notes") or [] if str(n).startswith("wait answer: "))
+    wrongs = sum(len(st.get("wrongs") or []) for _, st in rows)
+    no_web = sum(1 for _, st in rows for x in (st.get("tried") or []) + (st.get("reviews") or []) if x.get("no_websearch"))
     loops = "- routes tried: " + logged("tried", lambda have: "%d; reviews: %d; candidates dropped: %d; failed: %s" % (
         sum(len(st["tried"]) for _, st in have), sum(len(st.get("reviews") or []) for _, st in have),
         sum(len(r.get("dropped") or []) for _, st in have for r in st.get("reviews") or []),
         "; ".join("%s: %s" % (lab, "needs " + st["failed"]["needs"] if st["failed"].get("needs") else "exhausted")
                   for lab, st in have if st.get("failed")) or "none")).replace("3.1.0", "4.0.0")
+    loops += "; without a web search, reason recorded: %d" % no_web
     fixes = ["  - %s, %s: %s -> %s (the user: %s)" % (c.get("stage"), c.get("requirement"), c.get("before") or "none",
                                                       c.get("after") or "dropped", one_line(c.get("user") or ""))
              for _, st in rows for c in st.get("corrections") or []]
@@ -267,7 +279,7 @@ def process_lines(s):
             "- strikes: " + strikes,
             "- REWORK reasons (%d):%s" % (len(reworks), "\n" + "\n".join(reworks) if reworks else " none"),
             "- refusals: " + refusals,
-            "- stuck: %s; free-text answers while stuck: %d" % (stuck, free),
+            "- waits: %s; free-text answers while waiting: %d; checks reported wrong: %d" % (waits, free, wrongs),
             "- corrected checks (%d):%s" % (len(fixes), "\n" + "\n".join(fixes) if fixes else " none"),
             loops,
             "- relocks: %d" % relocks]

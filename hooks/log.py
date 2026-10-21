@@ -84,10 +84,12 @@ def new_results(folder, offset):
 SEARCH_TOOLS = ("WebSearch", "WebFetch")
 
 
-def search_steps(folder):
-    """The logged steps that count as a search: a WebSearch or WebFetch call, or a `rehearse fetch`."""
+def search_steps(folder, web=False):
+    """The logged steps that count as a search: a WebSearch or WebFetch call, or a `rehearse fetch`. With web=True
+    only the WebSearch calls: the ones that find methods, which the rule asks for (a fetch alone never satisfies it)."""
     return {r["step"] for r in records(folder) if "step" in r
-            and (r.get("tool") in SEARCH_TOOLS or r.get("result") == "fetch")}
+            and (r.get("tool") == "WebSearch" or (not web and (r.get("tool") in SEARCH_TOOLS
+                                                                or r.get("result") == "fetch")))}
 
 
 def log_command(folder, cmd, output, phase, kinds=None, invocations=0, tool=None):

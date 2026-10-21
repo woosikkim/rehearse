@@ -27,23 +27,23 @@ One question with: the goal items (each marked from the request, from the user's
 
 Options: `yes`, `no, change the plan`, `stop here and write the report`.
 
-## The stuck question
+## The wait question
 
-Say what blocked the stage in plain words: name the checks that fail (the plugin's note lists them) and what the director found. Then offer exactly these four options, each with what it does and what it costs, and say which one applies to what blocked the stage:
+The stage waits only after a recorded failure, a check proven wrong, or an irreversible step without an OK. Give a solution-ready report first: the routes tried with their logged steps, why each failed, the one thing needed, and everything prepared so that the user's answer is the last missing piece. Name the checks that fail (the plugin's note lists them) and what the director found. Then offer exactly these four options, each with what it does and what it costs, and say which one applies:
 
-- `these checks are wrong`: the failing checks encode a judgment the user disagrees with. The work stays; only the ending changes to match their answer, then the director judges. Costs one director run. This is the option when the work is done and the checks are the disagreement.
+- `give what is needed` (a key, a login, a file, a decision): the stage resumes where it waited with their answer; an ending that already passes goes straight to the director. Costs what remained of the stage.
+- `these checks are wrong`: the failing checks encode a judgment the user disagrees with, or a check the target cannot meet (the plugin's note names the proposed correction when a `wrong` record raised it). The work stays; only the ending changes to match their answer, then the director judges. Costs one director run.
 - `redo this stage`: the stage is looked at again and rebuilt: a look worker, the ending registered and confirmed again, the build, the director. Costs a whole stage again. Needs a second, explicit yes.
-- `try again`: same checks, one more build round, strikes reset: a build worker, or the director straight away when the ending already passes. Costs one worker-and-director round.
 - `stop here`: **ends the whole rehearse job now**, not just this stage: `report.md` says `not fixed`, and every remaining stage runs without rehearse. Nothing more is checked.
 
-Never frame this as "how do you want to accept" or "continue?": one option ends the job, and the user must see that. A question from the user is not a decision: answer it, then ask again. The plugin never reads the decision from the user's words; only `rehearse stuck` records it, and the stage stays stuck until it runs.
+Never frame this as "how do you want to accept" or "continue?": one option ends the job, and the user must see that. A question from the user is not a decision: answer it, then ask again. The plugin never reads the decision from the user's words; only `rehearse wait` records it, and the stage waits until it runs.
 
 ## After the answer
 
 - `yes`: the next step opens (a build, or stage 1's look). A proposed merge applies only on this yes.
 - Any other answer to a stage ending (`no`, a correction): the plugin moves the stage back to look and records the user's words. Start a look worker for the same stage and pass it the user's words; on a one-stage job, look again yourself, register the corrected ending, and ask again.
 - Change the plan: run `rehearse plan` again (once a stage has passed, `rehearse plan --stage <n>` with exactly one `--stage-def` and no goal flags), or `rehearse ending --job` for the job ending, and ask again.
-- `stop here` (at any question): run `rehearse stuck --stop-here`, write `report.md` starting with `not fixed`, saying what is known so far, and finish.
-- `these checks are wrong`: run `rehearse stuck --correct --says '<the user's words>'`. The words must be theirs, word for word, from an answer since the stage became stuck; a paraphrase is refused. Then register the ending again yourself (`rehearse ending`, no look step needed): the same command and tests, and only the checks that were failing may change, citing `request` for a value from their words; any other check added, removed or changed is refused. Then ask the confirmation. If it already passes, the director judges next; the report lists every corrected check with the user's words.
-- `try again`: run `rehearse stuck --try-again` and follow the next step it prints: a build worker, or the director when the ending already passes; a look worker if the stage was blocked while looking.
-- `redo this stage`: ask once more, yes or no: "Redo stage <n> from the look? Its ending gets registered and confirmed again, then it is built and judged again." Only after a yes: `rehearse stuck --change --confirmed`, then rewrite the stage with `rehearse plan --stage <n>`, exactly one `--stage-def` and no goal flags (in the final stage, register the job ending again instead), then a look worker.
+- `stop here` (at any question): run `rehearse wait --stop-here`, write `report.md` starting with `not fixed`, saying what is known so far, and finish.
+- `give what is needed`: run `rehearse wait --resume --says '<the user's words>'`. The words must be theirs, word for word, from an answer since the wait began; a paraphrase is refused. Follow the next step it prints: a worker, or the director when the ending already passes.
+- `these checks are wrong`: run `rehearse wait --correct --says '<the user's words>'`. The words must be theirs, word for word, from an answer since the wait began; a paraphrase is refused. Then register the ending again yourself (`rehearse ending`, no look step needed): the same command and tests, and only the checks that were failing may change, citing `request` for a value from their words; any other check added, removed or changed is refused. Then ask the confirmation. If it already passes, the director judges next; the report lists every corrected check with the user's words.
+- `redo this stage`: ask once more, yes or no: "Redo stage <n> from the look? Its ending gets registered and confirmed again, then it is built and judged again." Only after a yes: `rehearse wait --change --confirmed`, then rewrite the stage with `rehearse plan --stage <n>`, exactly one `--stage-def` and no goal flags (in the final stage, register the job ending again instead), then a look worker.

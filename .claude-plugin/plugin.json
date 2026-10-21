@@ -21,12 +21,6 @@
       "description": "ask (default): you confirm the goal, the plan and each ending. auto: the goal, the plan and the job ending are confirmed up front, then nothing is asked; later endings and judgment calls are accepted as registered and listed as chosen on your behalf. A mode word right after `rehearse` overrides this for one job.",
       "default": "ask"
     },
-    "max_strikes": {
-      "type": "number",
-      "title": "Strikes per stage",
-      "description": "How many relocks and director reworks a stage may take before it is stuck (headless: the job ends with a not fixed report).",
-      "default": 3
-    },
     "loop_breaker_rounds": {
       "type": "number",
       "title": "Loop breaker rounds",

@@ -282,10 +282,10 @@ try:
     assert out and "hook error" in out.get("systemMessage", "") and "hook-errors.log" in out["systemMessage"], out
     assert "KeyError" in open(os.path.join(DATA, "hook-errors.log")).read()
 
-    p = in_confirm()  # stop here, from the confirmation answer: the words decide nothing; rehearse stuck does (3.0.1)
+    p = in_confirm()  # stop here, from the confirmation answer: the words decide nothing; rehearse wait does (3.0.1)
     p.ev("UserPromptSubmit", prompt="stop here and write the report")
     assert not p.state().get("stop_here") and p.state()["phase"] == "look"
-    p.rehearse("stuck", "--stop-here")
+    p.rehearse("wait", "--stop-here")
     assert p.state()["stop_here"]
     assert blocked(p.stop(), '"not fixed"')
     p.report("not fixed: stopped before the change, at the user's request")
@@ -295,7 +295,7 @@ try:
     p.ev("PostToolUse", tool_name="AskUserQuestion", tool_input={"questions": []},
          tool_response={"questions": [], "answers": {"Go on?": "Stop here and write the report"}, "annotations": {}})
     assert not p.state().get("stop_here") and p.state()["phase"] == "build"
-    p.rehearse("stuck", "--stop-here")
+    p.rehearse("wait", "--stop-here")
     assert p.state()["stop_here"]
     assert blocked(p.stop(), '"not fixed"')
     p.report("not fixed: what is known is in the log")
@@ -330,7 +330,7 @@ try:
     p = in_confirm()
     ask(p, "Stop here and write the report")  # not a yes: back to look; the stop is recorded by the command
     assert not p.state().get("stop_here") and p.state()["phase"] == "look"
-    p.rehearse("stuck", "--stop-here")
+    p.rehearse("wait", "--stop-here")
     assert p.state()["stop_here"]
     print("confirmation via question: ok")
 

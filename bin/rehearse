@@ -9,11 +9,13 @@ REHEARSE-RESULT <json>, which the plugin's hook records.
   rehearse run [--as-director] [--stage <n>]
   rehearse fetch <url> [curl args]
   rehearse job          (also: rehearse status)
-  rehearse stuck --stop-here | --try-again | --correct --says '<the user's words>' | --change --confirmed
-                  (the user's answer to the stuck question; stop here ends the whole rehearse job)
-  rehearse tried --route '<name>' --steps S<n>,... --outcome '<what happened>'     (one route, tried and logged)
+  rehearse tried --route '<name>' --steps S<n>,... --outcome '<what happened>' [--no-websearch '<why none>']
   rehearse review --searched S<n>,... --candidate '<name>' '<how it differs>' ... [--drop '<name>' '<why>' ...]
+                  [--no-websearch '<why none>']          (a logged WebSearch step is cited, or the reason recorded)
   rehearse failed --needs '<the one thing>' | --exhausted [--summary '<text>']    (only after a review, gate two)
+  rehearse wrong --check '<requirement>' --evidence S<n>,... --propose '<value>'   (a check the target cannot meet)
+  rehearse wait --resume --says '<the user's words>' | --correct --says '<words>' | --change --confirmed | --stop-here
+                  (the user's answer while the stage waits; stop here ends the whole rehearse job)
 
 goal items: purpose, deliverable, done, out_of_scope; a source of request or answer needs the text word for word
 in the request or in the user's answers. inputs/outputs: comma-separated paths, or - for none.
@@ -284,6 +286,7 @@ def cmd_tried(s, argv):
     ap.add_argument("--route", required=True)
     ap.add_argument("--steps", required=True, help="the logged steps that tried it, S<n>,S<m>")
     ap.add_argument("--outcome", required=True)
+    ap.add_argument("--no-websearch", help="why no WebSearch step is cited (WebSearch unavailable in this session)")
     try:
         a = ap.parse_args(argv)
     except SystemExit:
@@ -291,20 +294,38 @@ def cmd_tried(s, argv):
     steps = _steps(a.steps)
     logged = {r["step"] for r in L.records(s["run_folder"]) if "step" in r}
     missing = [x for x in steps if x not in logged]
+    why = _no_websearch(s, a.no_websearch)
     if not steps or missing:
         why = "every step must be in the log: %s" % (", ".join(missing) or "none given")
+    if why:
         print(why)
         return result(s["run_id"], "tried", ok=False, error=why)
     print("tried: %s (%s): %s" % (a.route, ", ".join(steps), a.outcome))
-    return result(s["run_id"], "tried", ok=True, route=a.route, steps=steps, outcome=a.outcome)
+    return result(s["run_id"], "tried", ok=True, route=a.route, steps=steps, outcome=a.outcome,
+                  no_websearch=a.no_websearch)
+
+
+def _no_websearch(s, reason):
+    """A reason for citing no WebSearch is refused when the log shows one was made in this run."""
+    web = L.search_steps(s["run_folder"], web=True)
+    if reason and web:
+        return "--no-websearch is refused: WebSearch was used in this run (%s); cite a WebSearch step" % ", ".join(sorted(web))
+    return None
+
+
+def _tried_with_search(s):
+    web = L.search_steps(s["run_folder"], web=True)
+    return any(S.cites_search(x, web) for x in s.get("tried") or [])
 
 
 def cmd_review(s, argv):
     """The coach's review of a stopped worker's log: the searches, the untried candidates, the dropped variants."""
     ap = argparse.ArgumentParser(prog="rehearse review")
-    ap.add_argument("--searched", required=True, help="logged search steps (WebSearch, WebFetch, rehearse fetch)")
+    ap.add_argument("--searched", required=True, help="logged search steps: a WebSearch, with WebFetch or rehearse "
+                                                       "fetch steps alongside")
     ap.add_argument("--candidate", nargs=2, action="append", default=[], metavar=("NAME", "HOW_IT_DIFFERS"))
     ap.add_argument("--drop", nargs=2, action="append", default=[], metavar=("NAME", "WHY_A_VARIANT"))
+    ap.add_argument("--no-websearch", help="why no WebSearch step is cited (WebSearch unavailable in this session)")
     try:
         a = ap.parse_args(argv)
     except SystemExit:
@@ -316,6 +337,15 @@ def cmd_review(s, argv):
     if not searched or not_search:
         problems.append("every --searched step must be a logged search (a WebSearch or WebFetch call, or rehearse "
                         "fetch): %s" % (", ".join(not_search) or "none given"))
+    elif not S.cites_search({"searched": searched, "no_websearch": a.no_websearch},
+                            L.search_steps(s["run_folder"], web=True)):
+        problems.append("at least one --searched step must be a logged WebSearch (methods are found by search; a "
+                        "fetch alone is not a search); if WebSearch is unavailable in this session, give the "
+                        "reason with --no-websearch")
+    if _no_websearch(s, a.no_websearch):
+        problems.append(_no_websearch(s, a.no_websearch))
+    if len(s.get("stages") or []) == 1:
+        print("note: in a one-stage job only rehearse:reviewer may record the review; the hook refuses any other")
     tried = S.tried_names(s)
     for name, _ in a.candidate:
         if name.strip().lower() in tried:
@@ -326,7 +356,7 @@ def cmd_review(s, argv):
     print("review: searched %s; candidates %d; dropped %d" % (", ".join(searched), len(a.candidate), len(a.drop)))
     return result(s["run_id"], "review", ok=True, searched=searched,
                   candidates=[{"name": n, "differs": h} for n, h in a.candidate],
-                  dropped=[{"name": n, "why": w} for n, w in a.drop])
+                  dropped=[{"name": n, "why": w} for n, w in a.drop], no_websearch=a.no_websearch)
 
 
 def cmd_failed(s, argv):
@@ -348,8 +378,9 @@ def cmd_failed(s, argv):
     elif S.untried(s):
         why = "candidates of the latest review are neither tried nor dropped: %s" % ", ".join(
             c["name"] for c in S.untried(s))
-    elif a.needs and not s.get("tried"):
-        why = "needs is recorded only after at least one route was tried and recorded"
+    elif not _tried_with_search(s):
+        why = ("failed is recorded only after at least one route was tried, recorded, and cites a logged WebSearch "
+               "(or a recorded --no-websearch reason)")
     if why:
         print(why)
         return result(s["run_id"], "failed", ok=False, error=why)
@@ -357,41 +388,70 @@ def cmd_failed(s, argv):
     return result(s["run_id"], "failed", ok=True, needs=a.needs, exhausted=bool(a.exhausted), summary=a.summary)
 
 
-def cmd_stuck(s, argv):
-    """The manager records the user's answer to the stuck question; the plugin never reads it from their words."""
-    ap = argparse.ArgumentParser(prog="rehearse stuck")
+def cmd_wait(s, argv):
+    """The manager records the user's answer while the stage waits; the plugin never reads it from their words."""
+    ap = argparse.ArgumentParser(prog="rehearse wait")
     g = ap.add_mutually_exclusive_group(required=True)
-    for flag in ("--stop-here", "--try-again", "--correct", "--change"):
+    for flag in ("--stop-here", "--resume", "--correct", "--change"):
         g.add_argument(flag, action="store_true")
     ap.add_argument("--confirmed", action="store_true")
-    ap.add_argument("--says", help="the user's words, with --correct: which checks are wrong and what is right")
+    ap.add_argument("--says", help="the user's words: what they gave (resume), or which checks are wrong (correct)")
     try:
         a = ap.parse_args(argv)
     except SystemExit:
-        return result(s["run_id"], "stuck", ok=False,
-                      error="one of --stop-here, --try-again, --correct --says '<the user's words>', --change --confirmed")
-    answer = "stop here" if a.stop_here else "try again" if a.try_again else "correct" if a.correct else "change"
+        return result(s["run_id"], "wait", ok=False, error="one of --stop-here, --resume --says '<the user's words>', "
+                                                          "--correct --says '<the user's words>', --change --confirmed")
+    answer = "stop here" if a.stop_here else "resume" if a.resume else "correct" if a.correct else "change"
     why = None
-    if answer != "stop here" and s["phase"] not in ("stuck", "look"):
-        why = "rehearse stuck is accepted in stuck, or in look after a blocked look worker; the job is in %s" % s["phase"]
-    elif answer == "correct" and not (a.says or "").strip():
-        why = ("correct keeps the work and changes only the failing checks: give the user's words with --says "
-               "'<which checks are wrong and what is right>'; they are recorded with every corrected check")
-    elif answer == "correct" and not S.said(s, a.says, S.question_since(s)):
-        why = ("--says must be the user's words, word for word, from an answer recorded since the stage became "
-               "stuck; not a paraphrase")
+    if answer != "stop here" and s["phase"] != "wait":
+        why = "rehearse wait is accepted while the stage waits; the job is in %s" % s["phase"]
+    elif answer in ("correct", "resume") and not (a.says or "").strip():
+        why = ("give the user's words with --says: %s; they are recorded with the decision" % (
+            "which checks are wrong and what is right (correct keeps the work and changes only the failing checks)"
+            if answer == "correct" else "what they gave or decided"))
+    elif answer in ("correct", "resume") and not S.said(s, a.says, S.question_since(s)):
+        why = ("--says must be the user's words, word for word, from an answer recorded since the wait began; "
+               "not a paraphrase")
     elif answer == "correct" and not S.failing(s):
         why = "correct has nothing to apply: no failing check is recorded for %s" % S.label(s)
     elif answer == "change" and not a.confirmed:
         why = ("change redoes %s from the look: a look worker, the ending registered and confirmed again, then the "
-               "build and the director; strikes reset. Put that to the user as one yes-or-no question, and run this "
-               "again with --confirmed only after an explicit yes" % S.label(s))
+               "build and the director. Put that to the user as one yes-or-no question, and run this again with "
+               "--confirmed only after an explicit yes" % S.label(s))
     if why:
         print(why)
-        return result(s["run_id"], "stuck", ok=False, error=why)
+        return result(s["run_id"], "wait", ok=False, error=why)
     print("recorded: " + answer + (" (the whole rehearse job ends now; any remaining stage runs without rehearse)"
                                    if answer == "stop here" else ""))
-    return result(s["run_id"], "stuck", ok=True, answer=answer, says=a.says)
+    return result(s["run_id"], "wait", ok=True, answer=answer, says=a.says)
+
+
+def cmd_wrong(s, argv):
+    """A check the real target cannot meet, with the evidence step and a proposed correction: raised at once."""
+    ap = argparse.ArgumentParser(prog="rehearse wrong")
+    ap.add_argument("--check", required=True, help="the failing requirement, as registered")
+    ap.add_argument("--evidence", required=True, help="logged steps that show it cannot pass, S<n>,S<m>")
+    ap.add_argument("--propose", required=True, help="the value or wording that would be right")
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        return result(s["run_id"], "wrong", ok=False, error="bad arguments: --check, --evidence S<n>,..., --propose")
+    steps = _steps(a.evidence)
+    logged = {r["step"] for r in L.records(s["run_folder"]) if "step" in r}
+    missing = [x for x in steps if x not in logged]
+    bad = [r.get("requirement") for r in S.failing(s)]
+    why = None
+    if s["phase"] not in ("look", "build"):
+        why = "rehearse wrong is recorded in look or build; the job is in %s" % s["phase"]
+    elif not steps or missing:
+        why = "every evidence step must be in the log: %s" % (", ".join(missing) or "none given")
+    elif a.check not in bad:
+        why = "wrong names a check the last run failed: %s" % (", ".join(bad) or "none recorded")
+    if why:
+        print(why)
+        return result(s["run_id"], "wrong", ok=False, error=why)
+    print("wrong: %s (evidence %s); proposed: %s" % (a.check, ", ".join(steps), a.propose))
+    return result(s["run_id"], "wrong", ok=True, check=a.check, evidence=steps, propose=a.propose)
 
 
 def cmd_stage(s, argv):
@@ -404,8 +464,8 @@ def cmd_stage(s, argv):
 def main():
     global FOLDER
     cmds = {"plan": cmd_plan, "ending": cmd_ending, "run": cmd_run, "fetch": cmd_fetch, "job": cmd_job,
-            "status": cmd_job, "stuck": cmd_stuck, "stage": cmd_stage, "tried": cmd_tried, "review": cmd_review,
-            "failed": cmd_failed}
+            "status": cmd_job, "wait": cmd_wait, "wrong": cmd_wrong, "stage": cmd_stage, "tried": cmd_tried,
+            "review": cmd_review, "failed": cmd_failed}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return result(None, "usage", ok=False)

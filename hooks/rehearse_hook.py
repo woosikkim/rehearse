@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """rehearse: the single hook entry. Reads one Claude Code hook payload on stdin, dispatches on hook_event_name.
 
-UserPromptSubmit: activation, `rehearse stop`, goal answers, confirmations, the stuck answers.
+UserPromptSubmit: activation, `rehearse stop`, goal answers, confirmations, the words said while waiting.
 PreToolUse: the edit gate in the locked phases (project files and declared outputs); created files may not run
 there; worker and director spawns get their prompt, model and the foreground flag.
 PostToolUse(Failure): the log, REHEARSE-RESULT lines from bin/rehearse, the run counter, the Agent notes.
@@ -169,18 +169,19 @@ def strike(cur, msgs, cause):
 
 
 def wait_for_user(cur, msgs, why):
-    """The stage waits for the user (the stuck phase until step 3 renames it), or ends headless."""
+    """The stage waits for the user (the wait phase; entered only by a recorded failure, a check proven wrong, or
+    an irreversible step without an OK; never by a count), or ends headless, where nobody can answer."""
     if S.headless(cur):
         cur["phase"] = "done.not_fixed"
         msgs.append('nobody can answer: write report.md starting with "not fixed": the routes tried, why each '
-                    'failed, and what would be needed next')
+                    'failed, and what would be needed next (%s)' % why)
         return
-    cur.update(phase="stuck", stuck_at=S.now(cur))
-    if cur.get("stuck_log") is not None:
-        cur["stuck_log"].append({"at": S.now(cur), "answer": None})
+    cur.update(wait_from=cur["phase"], phase="wait", wait_at=S.now(cur))
+    if cur.get("wait_log") is not None:
+        cur["wait_log"].append({"at": S.now(cur), "why": why, "answer": None})
     msgs.append("%s waits for the user: %s. Give a solution-ready report (confirm.md): the routes tried with their "
                 "steps, why each failed, the one thing needed, and everything prepared; then record the answer with "
-                "rehearse stuck (stop here ends the whole rehearse job). %s" % (S.label(cur), why, S.failing_checks(cur)))
+                "rehearse wait (stop here ends the whole rehearse job). %s" % (S.label(cur), why, S.failing_checks(cur)))
 
 
 def reopen(cur, why, **kw):
@@ -264,10 +265,10 @@ def user_said(cur, text):
     cur.setdefault("user_words", []).append({"text": text, "at": cur["user_answer_at"]})
 
 
-STUCK_NOTE = ("[rehearse] still stuck. The plugin does not read the decision from the user's words: read their answer, "
-              "then record it with rehearse stuck --stop-here | --try-again | --change --confirmed (change only after "
-              "their explicit yes to redoing the stage). A question from the user is not a decision: answer it, then "
-              "ask again")
+WAIT_NOTE = ("[rehearse] still waiting. The plugin does not read the decision from the user's words: read their "
+             "answer, then record it with rehearse wait --resume --says '<their words>' | --correct --says '<their "
+             "words>' | --change --confirmed | --stop-here (change only after their explicit yes to redoing the "
+             "stage). A question from the user is not a decision: answer it, then ask again")
 
 
 def answer(cur, text, add=True):
@@ -275,12 +276,12 @@ def answer(cur, text, add=True):
     a = text.strip()
     low = a.lower().rstrip(".!")
     ph = cur["phase"]
-    user_said(cur, a)  # rehearse stuck needs a user answer recorded after the question arose, word for word
+    user_said(cur, a)  # rehearse wait needs a user answer recorded after the question arose, word for word
     if ph in ("job-confirm", "confirm"):
         return confirm_answer(cur, a, low)
-    if ph == "stuck":  # the decision comes from `rehearse stuck` (apply_stuck), never from matching these words
-        cur["notes"].append("stuck answer: " + a)
-        return STUCK_NOTE
+    if ph == "wait":  # the decision comes from `rehearse wait` (apply_wait), never from matching these words
+        cur["notes"].append("wait answer: " + a)
+        return WAIT_NOTE
     if add:
         cur["prompts"].append(a)
     return None
@@ -429,8 +430,8 @@ def on_pre(p, sid):
             return deny(s, "worker still running in the background; wait for its notification, then rehearse job")
         if kind in DIRECTOR and s["phase"] not in ("build", "judge"):
             return deny(s, "the director is started in build (or again in judge); the job is in %s%s" % (
-                s["phase"], ": settle it with the user and record the answer with rehearse stuck; after try again, "
-                            "an ending that already passes goes straight to the director" if s["phase"] == "stuck"
+                s["phase"], ": settle it with the user and record the answer with rehearse wait; after resume, "
+                            "an ending that already passes goes straight to the director" if s["phase"] == "wait"
                 else ""))
         if kind in DIRECTOR:
             return spawn_director(s, tin)
@@ -712,54 +713,53 @@ def apply_run(cur, res, msgs):
     return False
 
 
-def apply_stuck(cur, res, msgs):
-    """The user's answer to the stuck question, recorded by the manager with `rehearse stuck`."""
+def apply_wait(cur, res, msgs):
+    """The user's answer while the stage waits, recorded by the manager with `rehearse wait`; stop here from any
+    question. The 3.0.1 and 3.2.0 guards: the user must have spoken since the question arose; --says is their words,
+    word for word; correct changes only the failing checks; change needs a second explicit yes."""
     a = res.get("answer")
-    if a != "stop here" and cur["phase"] != "stuck" and not (cur["phase"] == "look" and not S.headless(cur)):
-        msgs.append("rehearse stuck is accepted in stuck, or in look after a blocked look worker; the job is in %s"
-                    % cur["phase"])
+    if a != "stop here" and cur["phase"] != "wait":
+        msgs.append("rehearse wait is accepted while the stage waits; the job is in %s" % cur["phase"])
         return True
-    # structural: the user must have spoken (a prompt or a question answer) since the question arose: the stage
-    # becoming stuck, or the last worker's stop (a blocked look), or the stage start
-    stuck = cur["phase"] == "stuck"
+    waiting = cur["phase"] == "wait"
     since = S.question_since(cur)
     if not cur.get("user_answer_at") or cur["user_answer_at"] < since:
         msgs.append("no answer from the user is recorded since %s: ask them (a prompt, or AskUserQuestion), then "
-                    "record what they chose" % ("the stage became stuck" if stuck else "the last worker stopped"))
+                    "record what they chose" % ("the wait began" if waiting else "the last worker stopped"))
         return True
-    if a == "correct":  # the one path that relaxes an ending: anchored to the user's words and the failing checks
-        bad = S.failing(cur)
-        if not bad:
-            msgs.append("correct has nothing to apply: no failing check is recorded for %s (no run of the ending "
-                        "failed); the stuck question's other options apply" % S.label(cur))
-            return True
-        if not S.said(cur, res.get("says"), since):
-            msgs.append("--says must be the user's words, word for word, from an answer recorded since the stage "
-                        "became stuck (as a goal item's answer source); not a paraphrase")
-            return True
-    cur["notes"].append("stuck decision: %s" % a)
-    log = cur.get("stuck_log")
+    if a in ("correct", "resume") and not S.said(cur, res.get("says"), since):
+        msgs.append("--says must be the user's words, word for word, from an answer recorded since the wait began "
+                    "(as a goal item's answer source); not a paraphrase")
+        return True
+    if a == "correct" and not S.failing(cur):  # the one path that relaxes an ending: anchored to the failing checks
+        msgs.append("correct has nothing to apply: no failing check is recorded for %s (no run of the ending "
+                    "failed); the other options apply" % S.label(cur))
+        return True
+    cur["notes"].append("wait decision: %s" % a)
+    log = cur.get("wait_log")
     if log is None:
         pass  # a stage begun before 3.1.0: not recorded
-    elif stuck and log and log[-1].get("answer") is None:
-        log[-1]["answer"] = a
+    elif waiting and log and log[-1].get("answer") is None:
+        log[-1].update(answer=a, says=res.get("says"))
     else:
-        log.append({"at": S.now(cur), "answer": a, "where": cur["phase"]})
+        log.append({"at": S.now(cur), "answer": a, "says": res.get("says"), "where": cur["phase"]})
+    if cur.get("failed") and cur["failed"].get("answer") is None:
+        cur["failed"]["answer"] = a
     if a == "stop here":
         cur.update(stop_here=True, pending_change=False)
         msgs.append('the user chose to stop here; write report.md starting with "not fixed", then finish')
-    elif a == "try again":
-        cur["pending_change"] = False
-        if cur["phase"] == "stuck":
+    elif a == "resume":  # the user gave what was needed: the stage goes on where it waited, with their words
+        cur.update(phase=cur.get("wait_from") or "build", failing_runs=0, pending_change=False)
+        if cur["phase"] == "build":
             # a run that passed after the last verdict, with no edit since: the director next, not a build worker
             runs, verdicts = cur["runs"], cur["verdicts"]
             judged = verdicts[-1]["at"] if verdicts else 0
-            cur.update(phase="build", strikes=0, failing_runs=0, start_director=bool(
-                runs and runs[-1]["passing"] and runs[-1]["at"] > judged and not cur["project_edits_since_run"]))
-        msgs.append("try again: next: " + S.next_step(cur))
+            cur["start_director"] = bool(runs and runs[-1]["passing"] and runs[-1]["at"] > judged
+                                         and not cur["project_edits_since_run"])
+        msgs.append("resume with what the user gave (%s): next: %s" % (res.get("says"), S.next_step(cur)))
     elif a == "correct":  # the work stays; only the failing checks may change, then the director judges
         old = cur.get("ending") or {}
-        reopen(cur, "correct", strikes=0, pending_change=False)
+        reopen(cur, "correct", pending_change=False)
         cur["reopen"].update(says=res.get("says"), failing=[r.get("requirement") for r in S.failing(cur)],
                              cmd=old.get("cmd"), tests=old.get("tests"))
         msgs.append("correct: edits stay locked for %s; the work stays. Register the ending again with the checks "
@@ -767,32 +767,70 @@ def apply_stuck(cur, res, msgs):
                     "value from their words), then have it confirmed; if it already passes, the director judges "
                     "next" % (S.label(cur), " for the job ending" if S.final(cur) else ""))
     elif a == "change":
-        reopen(cur, "change", strikes=0, pending_change=True)
+        reopen(cur, "change", pending_change=True)
         msgs.append("change: edits are locked for %s. %s Then look again (a stage step into project code, or "
                     "rehearse fetch) and register the ending again" % (S.label(cur), (
                         "Register the job ending again with rehearse ending." if S.final(cur) else
                         "rehearse plan --stage %d may rewrite the stage." % cur["stage"])))
     else:
-        msgs.append("rehearse stuck: unknown answer %r" % a)
+        msgs.append("rehearse wait: unknown answer %r" % a)
+        return True
+    return False
+
+
+def apply_wrong(cur, res, msgs):
+    """A check proven wrong by evidence: raised at once, instead of retrying against a check that cannot pass."""
+    if cur["phase"] not in ("look", "build"):
+        msgs.append("rehearse wrong is recorded in look or build; the job is in %s" % cur["phase"])
+        return True
+    bad = [r.get("requirement") for r in S.failing(cur)]
+    if res.get("check") not in bad:
+        msgs.append("wrong names a check the last run failed: %s" % (", ".join(bad) or "none recorded"))
+        return True
+    cur.setdefault("wrongs", []).append({"check": res.get("check"), "evidence": res.get("evidence") or [],
+                                         "propose": res.get("propose"), "by": res.get("agent_type"), "at": S.now(cur)})
+    cur["review_due"] = None
+    wait_for_user(cur, msgs, "the check %r cannot pass on the real target (evidence %s); proposed: %r" % (
+        res.get("check"), ", ".join(res.get("evidence") or []), res.get("propose")))
+    return False
+
+
+def no_websearch_refused(cur, res, msgs):
+    """A recorded reason for citing no WebSearch is refused when the log shows one was made in this run."""
+    web = L.search_steps(cur["run_folder"], web=True)
+    if res.get("no_websearch") and web:
+        msgs.append("--no-websearch is refused: WebSearch was used in this run (%s); cite a WebSearch step"
+                    % ", ".join(sorted(web)))
         return True
     return False
 
 
 def apply_tried(cur, res, msgs):
-    cur.setdefault("tried", []).append({"route": res.get("route"), "steps": res.get("steps") or [], "outcome": res.get("outcome"),
-                         "by": res.get("agent_type"), "at": S.now(cur)})
+    if no_websearch_refused(cur, res, msgs):
+        return True
+    cur.setdefault("tried", []).append({"route": res.get("route"), "steps": res.get("steps") or [],
+                                        "outcome": res.get("outcome"), "no_websearch": res.get("no_websearch"),
+                                        "by": res.get("agent_type"), "at": S.now(cur)})
     msgs.append("tried route recorded (%d so far): %s" % (len(cur["tried"]), res.get("route")))
     return False
 
 
 def apply_review(cur, res, msgs):
     by = res.get("agent_type")
+    if len(cur["stages"]) == 1 and by not in REVIEWER:  # the strongest fresh eyes: the manager did the work
+        msgs.append("in a one-stage job only rehearse:reviewer records the review: start it")
+        return True
     if by in {x.get("by") for x in cur.get("tried") or []}:
-        msgs.append("a review needs fresh eyes: the agent that made the tried records may not review them (in a "
-                    "one-stage job start rehearse:reviewer)")
+        msgs.append("a review needs fresh eyes: the agent that made the tried records may not review them")
+        return True
+    if no_websearch_refused(cur, res, msgs):
+        return True
+    if not S.cites_search(res, L.search_steps(cur["run_folder"], web=True)):
+        msgs.append("a review cites at least one logged WebSearch step (WebFetch and rehearse fetch steps may be "
+                    "cited alongside); if WebSearch is unavailable in this session, record why with --no-websearch")
         return True
     rv = {"searched": res.get("searched") or [], "candidates": res.get("candidates") or [],
-          "dropped": res.get("dropped") or [], "by": by, "at": S.now(cur)}
+          "dropped": res.get("dropped") or [], "no_websearch": res.get("no_websearch"), "by": by, "at": S.now(cur)}
     cur.setdefault("reviews", []).append(rv)
     left = S.untried(cur)
     msgs.append("review recorded: %d candidate(s) untried%s" % (
@@ -813,11 +851,13 @@ def apply_failed(cur, res, msgs):
         msgs.append("candidates of the latest review are neither tried nor dropped: %s" % ", ".join(
             c["name"] for c in left))
         return True
-    if res.get("needs") and not cur.get("tried"):
-        msgs.append("needs is recorded only after at least one route was tried and recorded")
+    web = L.search_steps(cur["run_folder"], web=True)
+    if not any(S.cites_search(x, web) for x in cur.get("tried") or []):
+        msgs.append("failed is recorded only after at least one route was tried, recorded, and cites a logged "
+                    "WebSearch (or a recorded --no-websearch reason)")
         return True
     cur["failed"] = {"needs": res.get("needs"), "exhausted": bool(res.get("exhausted")), "summary": res.get("summary"),
-                     "by": res.get("agent_type"), "at": S.now(cur)}
+                     "by": res.get("agent_type"), "at": S.now(cur), "answer": None}
     cur["review_due"] = None
     wait_for_user(cur, msgs, "it needs %s" % res["needs"] if res.get("needs") else
                   "every route found was tried: %d routes, %d reviews" % (len(cur["tried"]), len(cur["reviews"])))
@@ -826,7 +866,7 @@ def apply_failed(cur, res, msgs):
 
 def apply_result(cur, res, msgs):
     kind = res.get("kind")
-    if not res.get("ok") and kind in ("plan", "ending", "run", "stuck", "tried", "review", "failed"):
+    if not res.get("ok") and kind in ("plan", "ending", "run", "wait", "wrong", "tried", "review", "failed"):
         return False
     if kind == "tried":
         return apply_tried(cur, res, msgs)
@@ -840,8 +880,10 @@ def apply_result(cur, res, msgs):
         return apply_ending(cur, res, msgs)
     if kind == "run":
         return apply_run(cur, res, msgs)
-    if kind == "stuck":
-        return apply_stuck(cur, res, msgs)
+    if kind == "wait":
+        return apply_wait(cur, res, msgs)
+    if kind == "wrong":
+        return apply_wrong(cur, res, msgs)
     if kind == "fetch" and res.get("ok") and res.get("fixture"):
         cur["fixtures"].append(res["fixture"])
         look_step(cur)
@@ -1058,13 +1100,20 @@ def worker_stop(s):
             out = "passed"  # a passing run of the old ending after a relock or change
         else:
             out = "no ending"
-        if out in ("stopped without a pass", "no ending"):
+        wrong = [x for x in cur.get("wrongs") or [] if x["at"] >= w["at"]]
+        if wrong and out in ("stopped without a pass", "no ending"):  # it raised a check the target cannot meet
+            out = "reported a check wrong (%s): %s" % (wrong[-1]["check"], "the stage waits for the user"
+                                                        if cur["phase"] == "wait" else "nobody can answer: not fixed")
+        elif out in ("stopped without a pass", "no ending"):
             mine = [x for x in cur.get("tried") or [] if x["at"] >= w["at"] and x.get("by") in WORKER]
-            if not any(set(x["steps"]) & L.search_steps(cur["run_folder"]) for x in mine):
-                held = ("search first: find other methods by web search (WebSearch, WebFetch or rehearse fetch) and "
-                        "from what you know, try each by hand, record each with rehearse tried --route --steps "
-                        "--outcome (at least one tried route must cite a logged search), then stop"
-                        + (" (%d tried route(s) so far, none citing a search)" % len(mine) if mine else ""))
+            web = L.search_steps(cur["run_folder"], web=True)
+            if not any(S.cites_search(x, web) for x in mine):
+                held = ("search first: find other methods by web search (WebSearch) and from what you know, try "
+                        "each by hand, record each with rehearse tried --route --steps --outcome; at least one "
+                        "tried route must cite a logged WebSearch step (WebFetch and rehearse fetch may be cited "
+                        "alongside, never alone; if WebSearch is unavailable in this session, record why with "
+                        "--no-websearch '<reason>'), then stop"
+                        + (" (%d tried route(s) so far, none citing a WebSearch)" % len(mine) if mine else ""))
             else:
                 cur["review_due"] = {"at": S.now(cur), "half": w["half"], "tried": len(mine)}
                 strike(cur, msgs, "build worker stopped without a pass" if w["half"] == "build"
