@@ -1,0 +1,1 @@
+In this folder, write totals.py so that `python3 totals.py` prints the total amount of the September 2026 orders from the vendor's orders service (see vendor/README.md), as one line: `2026-09 total <amount>` with two decimals.
