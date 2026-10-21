@@ -2,10 +2,11 @@
 
 For the owner. How to run a real job (the library job's stages 3 and 4) on branch `v4` while the installed plugin stays as it is, with only one copy of the hooks firing, and how to go back afterwards.
 
-## What is installed today (checked 2026-10-21)
+## What is installed (since 2026-10-21)
 
-- The marketplace `rehearse` points at this repo folder, with auto-update on. At each session start Claude Code compares the version in `.claude-plugin/plugin.json` with the installed one and, when it differs, copies the **whole working tree** (uncommitted changes included) into `~/.claude/plugins/cache/rehearse/rehearse/<version>/`. That copy is what every session loads; repo edits never reach a session until the next copy.
-- Because step 1 of 4.0.0 set the version to `4.0.0` on the branch, the install is **not 3.2.0**: `installed_plugins.json` points at `cache/rehearse/rehearse/4.0.0`, copied on 2026-10-20 at 16:39 local, the step-1 tree. The 3.2.0 copy still sits beside it. Later commits on the branch kept the version `4.0.0`, so no further copy was made: everyday sessions run the step-1 snapshot.
+- The marketplace `rehearse` points at the GitHub repo `woosikkim/rehearse`, with auto-update on. Everyday sessions get what is on GitHub `main` (3.2.0 now) and nothing else: work in the repo folder can never reach them, and a self-job (a rehearse job on this repo) is safe again. A new version reaches everyday sessions only when it is on `main` and a session starts after that.
+- Until 2026-10-21 the marketplace pointed at the repo folder itself, and auto-update copied the working tree whenever the version in plugin.json changed. Step 1 of 4.0.0 bumped the version on the branch, so from 2026-10-20 16:39 everyday sessions ran a snapshot of the step-1 tree. No rehearse job was started between that moment and the switch, so no job result came from the snapshot.
+- Switching the marketplace deleted the plugin's data folder (`~/.claude/plugins/data/rehearse-rehearse/`, where every job file lives). The job files were restored from their copies in each project's `.rehearsal/<run id>/state.json`; nothing else was in the folder. The copies are the backup: never delete a project's `.rehearsal` folder while its job file may still be wanted.
 
 ## Running stages 3 and 4 on the branch
 
@@ -23,7 +24,7 @@ claude --plugin-dir /mnt/d/Projects/rehearse --settings '{"enabledPlugins":{"reh
 4. Run the job. The job file lands in that session's plugin data folder; the run folder is `.rehearsal/<run id>/` in the scraper project as always. `rehearse feedback` afterwards works from the scraper folder.
 5. Afterwards, nothing to undo: a normal `claude` session loads the installed copy again.
 
-Do not run `claude plugin update` during the job: it would replace the installed copy from the working tree, and if that session loaded the installed copy it would change the hooks under a running job.
+Do not run `claude plugin update` or a marketplace change during the job: a plugin update replaces the installed copy, and a marketplace removal deletes the plugin's data folder with every job file in it.
 
 ## Fallback: switching the installed copy off persistently
 
@@ -37,18 +38,6 @@ claude plugin enable rehearse@rehearse              # afterwards
 
 `disable` and `enable` write `enabledPlugins` in `~/.claude/settings.json`; other sessions started in between run without rehearse.
 
-## Putting the everyday install back on 3.2.0 (optional, before the job)
-
-Only if you want everyday sessions on the released 3.2.0 instead of the step-1 snapshot:
-
-```
-cd /mnt/d/Projects/rehearse && git checkout main      # main is 3.2.0
-claude plugin update rehearse@rehearse                 # copies the tree: the install becomes 3.2.0
-git checkout v4                                        # back to the branch
-```
-
-Do this while no rehearse job runs anywhere, and never with uncommitted changes in the tree (they would be copied). The auto-update will copy the tree again at the next version change; if that is unwanted, set `autoUpdate` to `false` for the `rehearse` entry in `~/.claude/plugins/known_marketplaces.json`.
-
 ## After the release
 
-`claude plugin update rehearse@rehearse` with the tagged commit checked out copies 4.0.0 into the cache for good, and the `--plugin-dir` session is no longer needed.
+Once 4.0.0 is on GitHub `main`, the next session start installs it by itself (auto-update), or `claude plugin update rehearse@rehearse` does it at once; the `--plugin-dir` session is no longer needed.
