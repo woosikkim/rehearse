@@ -15,7 +15,10 @@ SRC="$REPO/tests/live/cases/$CASE"
 WORK=${2:-${TMPDIR:-/tmp}/rehearse-live/$CASE-$(date -u +%Y%m%dT%H%M%S)}
 mkdir -p "$WORK" && cp -r "$SRC/fixture/." "$WORK/"
 PROMPT="rehearse auto $(cat "$SRC/prompt.txt")"
-echo "case $CASE in $WORK"
+export PATH="$REPO/bin:$PATH"
+FOUND=$(command -v rehearse)
+[ "$FOUND" = "$REPO/bin/rehearse" ] || { echo "command -v rehearse gives $FOUND, not $REPO/bin/rehearse: another copy would run; stop"; exit 2; }
+echo "case $CASE in $WORK (rehearse = $FOUND)"
 cd "$WORK" || exit 2
 REHEARSE_HEADLESS=1 timeout "${LIVE_TIMEOUT:-3600}" claude -p \
     --permission-mode bypassPermissions \

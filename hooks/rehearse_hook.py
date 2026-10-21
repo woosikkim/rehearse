@@ -481,6 +481,24 @@ def spawn_director(s, tin):
     return updated(tin, instruction("director.md") + "\n\nThis run:\n" + extra, option("DIRECTOR_MODEL", "opus"))
 
 
+OWN_BIN = os.path.join(os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")), "bin", "rehearse")
+SUBCOMMANDS = r"(?:plan|ending|run|fetch|job|wait|wrong|irreversible|feedback|stage|tried|review|failed)\b"
+
+
+def foreign_rehearse(command):
+    """A rehearse command in `command` that is not this plugin's copy, or None: an absolute <other>/bin/rehearse,
+    or a bare `rehearse <subcommand>` that PATH resolves elsewhere (a session started from inside another Claude
+    Code session inherits the installed plugin's bin, and its CLI would then act on this job)."""
+    for m in re.finditer(r"(?:^|[\s;&|(=])(/\S*/bin/rehearse)(?=\s|$)", command):
+        if os.path.realpath(m.group(1)) != OWN_BIN:
+            return m.group(1)
+    if re.search(r"(?:^|[\s;&|(])rehearse\s+" + SUBCOMMANDS, command):
+        found = shutil.which("rehearse")
+        if found and os.path.realpath(found) != OWN_BIN:
+            return found
+    return None
+
+
 def on_pre(p, sid):
     s = S.current(sid)
     if not s or s["phase"].startswith("done"):
@@ -530,6 +548,11 @@ def on_pre(p, sid):
         if tool == "Bash" and any(seg["targets"] or seg["outputs"]
                                   for seg in P.parse(str(tin.get("command") or ""), cwd)):
             return deny(s, "the reviewer reads and searches only; this command writes files", "reviewer edit")
+    if tool == "Bash":
+        other = foreign_rehearse(str(tin.get("command") or ""))
+        if other:
+            return deny(s, "%s is another copy of rehearse, not this plugin's; this job's command is %s: use that "
+                           "path" % (other, OWN_BIN), "foreign rehearse")
     ir = s.get("irreversible")
     if tool == "Bash" and ir and ir["cmd"] in str(tin.get("command") or "") and not re.search(
             r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:irreversible|plan)\b", str(tin.get("command") or "")):
@@ -1280,6 +1303,14 @@ def verified(s):
     return bool(after.get("all_pass")) or bool(runs and runs[-1].get("all_pass"))
 
 
+def close_usage(cur, p):
+    """The manager's own tokens and time, once, when the job ends: on every ending, the headless not-fixed one too."""
+    if cur.get("usage") is not None and not cur.get("usage_closed"):
+        record_usage(cur, "manager", p.get("transcript_path"),
+                     S.now(cur) - (cur.get("started_at") or S.now(cur)), cumulative=True)
+        cur["usage_closed"] = True
+
+
 def on_stop(p, sid):
     s = S.newest(sid)
     if not S.v3(s) or s["phase"] == "done.cancelled" or s.get("closed"):
@@ -1293,6 +1324,7 @@ def on_stop(p, sid):
     if (first or "").startswith("not fixed") and nv and (S.headless(s) or s.get("stop_here")):
         with S.locked(s) as cur:
             cur["phase"] = "done.not_fixed"
+            close_usage(cur, p)
             S.finish_report(cur)
         return None
     nxt = None
@@ -1332,10 +1364,7 @@ def on_stop(p, sid):
         if ph == "done.passed":  # the job is over; later work in this session is not governed by it
             cur["closed"] = True
         if cur["phase"] in ("done.passed", "done.not_fixed") and first is not None:
-            if cur.get("usage") is not None and not cur.get("usage_closed"):
-                record_usage(cur, "manager", p.get("transcript_path"),
-                             S.now(cur) - (cur.get("started_at") or S.now(cur)), cumulative=True)
-                cur["usage_closed"] = True
+            close_usage(cur, p)
             S.finish_report(cur)
     return None
 

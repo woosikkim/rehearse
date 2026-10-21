@@ -22,6 +22,8 @@ TMP = os.path.realpath(tempfile.mkdtemp(prefix="rehearse-test-"))
 DATA = os.path.join(TMP, "plugin-data")
 ENV = dict(os.environ, CLAUDE_PLUGIN_DATA=DATA)
 ENV.pop("REHEARSE_RUN_TIMEOUT", None)
+# a bare `rehearse` in a test command is this plugin's copy, whatever the shell that runs the tests carries on PATH
+ENV["PATH"] = os.path.dirname(BIN) + os.pathsep + ENV.get("PATH", "")
 
 
 def hook(payload):
@@ -291,11 +293,12 @@ try:
     p.bash("cd sub && rehearse ending", "REHEARSE-RESULT {}\n" + line)
     assert p.state()["phase"] == "confirm"
     # rehearse ending / run may take minutes (the program, then the tests): they get the Bash tool's longest timeout
-    for cmd in ("rehearse ending --cmd x", "R=/opt/plugin/bin/rehearse\n$R run", "cd sub && rehearse run --as-director",
+    for cmd in ("rehearse ending --cmd x", "R=%s\n$R run" % BIN, "cd sub && rehearse run --as-director",
                 "rehearse stage step 'x'"):
         out = p.pre("Bash", command=cmd)
         assert out["hookSpecificOutput"]["updatedInput"]["timeout"] == 600000, (cmd, out)
     assert p.pre("Bash", command="rehearse status") is None and p.pre("Bash", command="python3 run.py") is None
+    assert denied(p.pre("Bash", command="/opt/plugin/bin/rehearse run"))  # another copy of the plugin: refused
     # The command invoked through an interpreter by path (the executable bit can be lost on a
     # Windows-mounted checkout) is still the plugin command: the program position is the script.
     p = Proj({"main.py": BUGGY})

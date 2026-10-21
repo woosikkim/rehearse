@@ -68,10 +68,8 @@ def blocked_route(s, folder, web, rep, work):
     check("no question asked", len(s.get("prompts") or []) <= 1 and not any(
         r.get("tool") == "AskUserQuestion" for r in L.records(folder)))
     tried = s.get("tried") or []
-    check("a tried record for the blocked route with its steps",
+    check("the blocked route recorded with its steps",
           any(x.get("steps") for x in tried), "; ".join(str(x.get("route")) for x in tried))
-    check("a tried record cites a logged WebSearch", any(S.cites_search(x, web) and not x.get("no_websearch")
-                                                           for x in tried))
     check("the job passed", s["phase"] == "done.passed" and first.startswith(("fixed", "built")), first)
     try:
         out = subprocess.run([sys.executable, "totals.py"], cwd=work, capture_output=True, text=True, timeout=60)

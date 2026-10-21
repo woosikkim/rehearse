@@ -27,6 +27,7 @@ DATA = os.path.join(TMP, "plugin-data")
 ENV = {k: v for k, v in os.environ.items()
        if not k.startswith(("CLAUDE_PLUGIN_OPTION_", "REHEARSE_", "EVAL_REHEARSE_"))}
 ENV["CLAUDE_PLUGIN_DATA"] = DATA
+ENV["PATH"] = os.path.dirname(BIN) + os.pathsep + ENV.get("PATH", "")  # a bare `rehearse` is this copy
 UN = {"REHEARSE_CONFIRM_ENDING": "0"}
 WORKER = {"agent_type": "rehearse:worker", "agent_id": "w1"}
 DIRECTOR = {"agent_type": "rehearse:director", "agent_id": "d1"}
@@ -1737,6 +1738,40 @@ try:
     assert q.state()["usage"][0]["tokens"] is None and "tokens not readable" in q.rehearse("job")[0]
     print("tokens and time per stage and per role, from the transcripts, the manager's as the difference; "
           "unreadable is never zero: ok")
+    q = building(UN)  # the headless not-fixed ending records the manager too (4.0.0 step 6 finding)
+    q.spawn("rehearse:worker", env=UN)
+    q.bash("python3 main.py", "a: 1\nb: 1\n", WORKER, UN)
+    q.rehearse("wrong", "--check", "b: 2", "--evidence", q.last_step(), "--propose", "b: 1", who=WORKER, env=UN)
+    assert q.phase() == "done.not_fixed"
+    transcript(mt, "claude-opus", [(300, 10)])
+    q.report("not fixed\n\n## Not verified\nall\n")
+    assert q.ev("Stop", UN, transcript_path=mt, stop_hook_active=False) is None
+    u = q.state()["usage"]
+    assert u and u[-1]["role"] == "manager" and u[-1]["tokens"]["claude-opus"]["in"] == 300 and q.state()["usage_closed"], u
+    rep = open(os.path.join(q.state()["run_folder"], "report.md")).read()
+    assert "- stage 1 manager: claude-opus: in 310 (cache read 100) out 10 over 1 turn(s)" in rep, rep
+    assert q.ev("Stop", UN, transcript_path=mt, stop_hook_active=False) is None and len(q.state()["usage"]) == len(u)
+    print("the manager's tokens are recorded on the headless not-fixed ending too, once: ok")
+
+    # ================= 4.0.0 step 6: a rehearse that is not this plugin's copy is refused =================
+    p = one_stage()
+    other = os.path.join(TMP, "other-plugin", "bin")
+    os.makedirs(other, exist_ok=True)
+    fake = os.path.join(other, "rehearse")
+    with open(fake, "w") as f:
+        f.write("#!/bin/sh\necho other\n")
+    os.chmod(fake, 0o755)
+    so = p.pre("Bash", command="%s job" % fake)
+    assert denied(so) and BIN in text(so) and "another copy" in text(so), so
+    leak = {"PATH": other + os.pathsep + ENV.get("PATH", "")}
+    so = p.pre("Bash", command="cd /x && rehearse tried --route r --steps S1 --outcome o", env=leak)
+    assert denied(so) and BIN in text(so), so
+    assert not denied(p.pre("Bash", command="rehearse job", env={"PATH": os.path.dirname(BIN) + os.pathsep + ENV.get("PATH", "")}))
+    assert not denied(p.pre("Bash", command="%s job" % BIN, env=leak))
+    assert not denied(p.pre("Bash", command="grep -rn 'rehearse worker' . && ls bin/rehearse", env=leak))
+    assert not denied(p.pre("Bash", command="rehearse job", env={"PATH": "/nonexistent"}))  # not found: the shell says so
+    assert "foreign rehearse" in p.rehearse("job")[0] or "refusals" in p.rehearse("job")[0]
+    print("a rehearse that is not this plugin's copy is refused, by path or through PATH, naming the right one: ok")
 
     p = building()  # the false-REWORK signal: REWORK then PASS on the same digest with no config edit between
     p.write("main.py", prog(3))

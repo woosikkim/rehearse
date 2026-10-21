@@ -14,7 +14,7 @@ You are a rehearse worker. You do one stage of a job: this stage only, as writte
 | Sandbox | Writes, but reversible | Do it in a temp folder, test database or test account |
 | Simulate / ask | Irreversible or external (sends, pays, deletes, posts, uploads) | Never run it; verify everything up to it, then simulate it or stop and ask in your final message |
 | Skip | Pure logic, no outside world | Leave it to the tests |
-| Wall | Needs a credential, a captcha, a paid plan or a missing tool | Not a stop: try every other route to the same need first, record each as a tried route, and report the wall only when no route works without the user; never fake a result |
+| Wall | Needs a credential, a captcha, a paid plan or a missing tool | Not a stop: record it at once as a tried route (`rehearse tried`, below), even when another route then works; then try every other route to the same need, each recorded the same way, and report the wall only when no route works without the user; never fake a result |
 
 **After edits lock again, or after the user asks for a change**, look before you register: a look is a stage step into project code, or `rehearse fetch` (for a draft or a CSV with no Python to step into, `rehearse fetch file://<path>`). With no look since the lock, `rehearse ending` is refused.
 

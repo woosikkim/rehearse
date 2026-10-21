@@ -19,6 +19,8 @@ If a step you did by hand breaks the next one (a name with a comma breaks the CS
 
 **A thin source.** If the source gives less than the goal needs (fewer items, missing fields, short text), never pad it or invent the rest. Go down the scout ladder for another source and try it by hand. Register the ending on what was actually collected, and say in your final message what was collected and what is missing.
 
+**A value you cannot collect.** When the value the ending must check cannot be collected at all (every route to it hits a wall), register no ending: record each route with `rehearse tried` (worker.md), and stop with `no ending` and why. An ending that checks only the shape of a line, with the value itself left unchecked, is not an ending; a build worker could print any number and pass it.
+
 ## Register the ending, then stop
 
 The ending is the command that will run the finished program, and what it must print:

@@ -20,7 +20,7 @@ cd /mnt/d/Projects/scraper
 claude --plugin-dir /mnt/d/Projects/rehearse --settings '{"enabledPlugins":{"rehearse@rehearse":false}}'
 ```
 
-3. Check inside the session that exactly one rehearse is loaded: `/plugins` lists `rehearse` from the directory and `rehearse@rehearse` as disabled. If both show as enabled, stop the session and use the fallback below.
+3. Check inside the session that exactly one rehearse is loaded: `/plugins` lists `rehearse` from the directory and `rehearse@rehearse` as disabled. If both show as enabled, stop the session and use the fallback below. Then type `! command -v rehearse`: it must print `/mnt/d/Projects/rehearse/bin/rehearse`. If it prints the installed copy's path (under `~/.claude/plugins/cache/`), the shell you started from carries that copy on its PATH (a terminal opened inside another Claude Code session does): start from a fresh terminal. The hook refuses a command from another copy and names the right path, but a clean PATH is the simplest.
 4. Run the job. The job file lands in that session's plugin data folder; the run folder is `.rehearsal/<run id>/` in the scraper project as always. `rehearse feedback` afterwards works from the scraper folder.
 5. Afterwards, nothing to undo: a normal `claude` session loads the installed copy again.
 

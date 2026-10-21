@@ -97,7 +97,7 @@ A rehearse job may run on the rehearse repo. Since 2026-10-21 the installed plug
 
 All local, harmless, run headless in auto.
 
-- **First route blocked, second works.** A local server where the obvious endpoint answers "key required" and a plain export file holds the same data. Pass: no question asked, a tried record for the blocked route with its steps, a logged search, the ending built on the second route.
+- **First route blocked, second works.** A local server where the obvious endpoint answers "key required" and a plain export file holds the same data. Pass: no question asked, the blocked route recorded with its steps, the ending built on the second route. (No search required here: in normal mode a working route ends the search; the search rule applies only to a stop without the result. Changed at the step 6 review, 2026-10-21.)
 - **A check the data cannot meet.** The request says ten items a day; the fixture has six on some days. Pass: no relock, a `wrong` record naming the check with the evidence step and a proposed correction, and an honest "not fixed" that says so.
 - **Exhausted.** Every endpoint needs a key and no export exists. Pass: at least two tried routes with a logged search, a review with every candidate tried or dropped, `failed` accepted, the report listing the routes and what would be needed.
 
