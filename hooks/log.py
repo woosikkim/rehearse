@@ -81,16 +81,30 @@ def new_results(folder, offset):
     return out, offset + len(data)
 
 
-def log_command(folder, cmd, output, phase, kinds=None, invocations=0):
-    """Append one Bash command and the head of its output; return its step id (S1, S2, ...)."""
+SEARCH_TOOLS = ("WebSearch", "WebFetch")
+
+
+def search_steps(folder, web=False):
+    """The logged steps that count as a search: a WebSearch or WebFetch call, or a `rehearse fetch`. With web=True
+    only the WebSearch calls: the ones that find methods, which the rule asks for (a fetch alone never satisfies it)."""
+    return {r["step"] for r in records(folder) if "step" in r
+            and (r.get("tool") == "WebSearch" or (not web and (r.get("tool") in SEARCH_TOOLS
+                                                                or r.get("result") == "fetch")))}
+
+
+def log_command(folder, cmd, output, phase, kinds=None, invocations=0, tool=None):
+    """Append one Bash command (or a WebSearch/WebFetch call) and the head of its output; return its step id."""
     step = "S%d" % (1 + sum(1 for r in records(folder) if "step" in r))
     # the plugin's own result kinds (bin/rehearse excludes ending/run steps as sources): from the hook's records,
     # else read from the output before the trim can cut the last line
     kinds = [k for k in kinds or [] if k] or re.findall(r'^REHEARSE-RESULT .*?"kind": "([\w-]+)"', output, re.M)
     cmd, out = redact(cmd, command=True), trim(redact(output))
     # "rehearse": how many rehearse commands this step ran (each should have written a result); since 3.1.0
-    record(folder, {"step": step, "cmd": cmd, "phase": phase, "out": out, "result": kinds[-1] if kinds else None,
-                    "rehearse": invocations})
+    entry = {"step": step, "cmd": cmd, "phase": phase, "out": out, "result": kinds[-1] if kinds else None,
+             "rehearse": invocations}
+    if tool:
+        entry["tool"] = tool
+    record(folder, entry)
     with open(os.path.join(folder, "log.md"), "a", encoding="utf-8") as f:
         f.write("\n".join(["%s [%s] $ %s" % (step, phase, cmd)] + ([out] if out else [])) + "\n\n")
     return step
@@ -120,3 +134,38 @@ def trace_lines(path, since=0, limit=10):
             result = ("raised " + ev["exc"]) if ev.get("t") == "exception" else ("= " + str(ev.get("ret")))
             lines.append("  -> %s(%s) %s  [%s:%s]" % (key[0], args, result, ev.get("file"), ev.get("line")))
     return lines[-limit:]
+
+
+def usage(path):
+    """Tokens per model from a Claude Code transcript (JSONL): the assistant turns, deduplicated by message id (one
+    message is written as several lines, one per content block, all carrying the same usage). None when the file
+    cannot be read: "not readable" is never zero."""
+    try:
+        f = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    seen, out = set(), {}
+    with f:
+        for ln in f:
+            try:
+                e = json.loads(ln)
+            except ValueError:
+                continue
+            m = e.get("message") if isinstance(e, dict) and e.get("type") == "assistant" else None
+            if not isinstance(m, dict) or not isinstance(m.get("usage"), dict):
+                continue
+            key = m.get("id") or e.get("requestId") or e.get("uuid")
+            if key in seen:
+                continue
+            seen.add(key)
+            u = m["usage"]
+            tot = out.setdefault(str(m.get("model") or "unknown model"),
+                                 {"turns": 0, "in": 0, "out": 0, "cache_read": 0, "cache_create": 0})
+            tot["turns"] += 1
+            for k, src in (("in", "input_tokens"), ("out", "output_tokens"), ("cache_read", "cache_read_input_tokens"),
+                           ("cache_create", "cache_creation_input_tokens")):
+                try:
+                    tot[k] += int(u.get(src) or 0)
+                except (TypeError, ValueError):
+                    pass
+    return out

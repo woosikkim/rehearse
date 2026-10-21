@@ -4,13 +4,23 @@ REHEARSE-RESULT <json>, which the plugin's hook records.
 
   rehearse plan --goal <item> request|answer|assumed '<text>' (x4) --stage-def <name> fix|build '<plan line>' <inputs> <outputs>
                 [--stage-def ...] [--assume '<text>'] [--blocker '<text>'] [--from-request] [--stage <n>]
+                [--call '<judgment call, as a question>' '<answer taken when nobody can answer>' ...]
+                [--irreversible '<what the step does>' '<its command>']   (asked up front; runs once, after the final pass)
   rehearse ending [--job] --cmd '<cmd>' [--tests '<cmd>'] --expect '<requirement>' <check> <value> --cite <citation>
                   ... [--unchecked '<taste item>'] [--call '<requirement>' '<the judgment call, as a question>']
   rehearse run [--as-director] [--stage <n>]
   rehearse fetch <url> [curl args]
-  rehearse job          (also: rehearse status)
-  rehearse stuck --stop-here | --try-again | --correct --says '<the user's words>' | --change --confirmed
-                  (the user's answer to the stuck question; stop here ends the whole rehearse job)
+  rehearse job
+  rehearse tried --route '<name>' --steps S<n>,... --outcome '<what happened>' [--no-websearch '<why none>']
+  rehearse review --searched S<n>,... --candidate '<name>' '<how it differs>' ... [--drop '<name>' '<why>' ...]
+                  [--no-websearch '<why none>']          (a logged WebSearch step is cited, or the reason recorded)
+  rehearse failed --needs '<the one thing>' | --exhausted [--summary '<text>']    (only after a review, gate two)
+  rehearse wrong --check '<requirement>' --evidence S<n>,... --propose '<value>'   (a check the target cannot meet)
+  rehearse wait --resume --says '<the user's words>' | --correct --says '<words>' | --change --confirmed | --stop-here
+                  (the user's answer while the stage waits; stop here ends the whole rehearse job)
+  rehearse irreversible      (runs the OK'd irreversible step once, after the final pass; refused otherwise)
+  rehearse feedback '<line>' [--job <run id>]   (after the job, from any session: a dated line kept with the job)
+  rehearse wait --stop-here --says '<the user's words>'   (the stop reason, recorded)
 
 goal items: purpose, deliverable, done, out_of_scope; a source of request or answer needs the text word for word
 in the request or in the user's answers. inputs/outputs: comma-separated paths, or - for none.
@@ -29,6 +39,7 @@ import urllib.parse
 PLUGIN = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, os.path.join(PLUGIN, "hooks"))
 import ending as E  # noqa: E402
+import gates as G  # noqa: E402
 import log as L  # noqa: E402
 import state as S  # noqa: E402
 
@@ -126,6 +137,8 @@ def cmd_plan(s, argv):
     ap.add_argument("--blocker", action="append", default=[])
     ap.add_argument("--from-request", action="store_true")
     ap.add_argument("--stage", type=int)
+    ap.add_argument("--call", nargs=2, action="append", default=[], metavar=("QUESTION", "TAKEN_IF_NOBODY_ANSWERS"))
+    ap.add_argument("--irreversible", nargs=2, metavar=("WHAT", "COMMAND"))
     try:
         a = ap.parse_args(argv)
     except SystemExit:
@@ -149,6 +162,12 @@ def cmd_plan(s, argv):
     problems += ["stage %r: the kind is fix or build" % st["name"] for st in stages if st["kind"] not in ("fix", "build")]
     if len(stages) != 1 and a.stage is not None:
         problems.append("--stage <n> takes exactly one --stage-def")
+    if a.stage is not None and (a.call or a.irreversible):
+        problems.append("--call and --irreversible belong to the whole plan, not to --stage <n>")
+    problems += ["--call: the question and the answer taken when nobody can answer are both needed"
+                 for q, taken in a.call if not q.strip() or not taken.strip()]
+    if a.irreversible and not (a.irreversible[0].strip() and a.irreversible[1].strip()):
+        problems.append("--irreversible: what the step does and its command are both needed")
     elif not stages:
         problems.append("a plan needs at least one --stage-def")
     why = S.plan_refused(s, a.stage)
@@ -161,8 +180,14 @@ def cmd_plan(s, argv):
     for i, st in enumerate(stages, a.stage or 1):
         print("stage %d %s (%s): %s; in: %s; out: %s" % (i, st["name"], st["kind"], st["line"],
                                                        ", ".join(st["inputs"]) or "-", ", ".join(st["outputs"]) or "-"))
+    for q, taken in a.call:
+        print("judgment call (asked up front): %s; taken when nobody can answer: %s" % (q, taken))
+    if a.irreversible:
+        print("irreversible step (OK asked up front; runs once after the final pass): %s: %s" % tuple(a.irreversible))
     return result(s["run_id"], "plan", ok=True, goal=goal, stages=stages, assumptions=assumptions,
-                  blockers=a.blocker, from_request=a.from_request, change=a.stage)
+                  blockers=a.blocker, from_request=a.from_request, change=a.stage,
+                  calls=[{"question": q, "taken": taken} for q, taken in a.call],
+                  irreversible={"what": a.irreversible[0], "cmd": a.irreversible[1]} if a.irreversible else None)
 
 
 def cmd_ending(s, argv):
@@ -196,6 +221,11 @@ def cmd_ending(s, argv):
     # user as its own question at confirmation, never as one line among the checks
     problems += ["--call %r: no --expect has that requirement" % r for r, _ in a.call
                  if r not in {x["requirement"] for x in exps}]
+    ir = s.get("irreversible")
+    if ir and (ir["cmd"] in a.cmd or ir["cmd"] in (a.tests or "")):
+        problems.append("the irreversible step (%s) is never inside an ending command: an ending runs on every check "
+                        "and every director rerun; it runs once through rehearse irreversible after the final pass"
+                        % ir["cmd"])
     if problems:
         print("ending refused:\n" + "\n".join("  " + p for p in problems))
         return res(ok=False, error="; ".join(problems))
@@ -271,41 +301,162 @@ def cmd_job(s, argv):
     return result(s["run_id"], "job", ok=True, phase=s["phase"], stage=s.get("stage"), stages_passed=S.passed(s))
 
 
-def cmd_stuck(s, argv):
-    """The manager records the user's answer to the stuck question; the plugin never reads it from their words."""
-    ap = argparse.ArgumentParser(prog="rehearse stuck")
-    g = ap.add_mutually_exclusive_group(required=True)
-    for flag in ("--stop-here", "--try-again", "--correct", "--change"):
-        g.add_argument(flag, action="store_true")
-    ap.add_argument("--confirmed", action="store_true")
-    ap.add_argument("--says", help="the user's words, with --correct: which checks are wrong and what is right")
+def cmd_tried(s, argv):
+    """One route the worker (or the manager, in a one-stage job) tried: the logged steps that tried it, the outcome."""
+    ap = argparse.ArgumentParser(prog="rehearse tried")
+    ap.add_argument("--route", required=True)
+    ap.add_argument("--steps", required=True, help="the logged steps that tried it, S<n>,S<m>")
+    ap.add_argument("--outcome", required=True)
+    ap.add_argument("--no-websearch", help="why no WebSearch step is cited (only with the websearch setting off)")
     try:
         a = ap.parse_args(argv)
     except SystemExit:
-        return result(s["run_id"], "stuck", ok=False,
-                      error="one of --stop-here, --try-again, --correct --says '<the user's words>', --change --confirmed")
-    answer = "stop here" if a.stop_here else "try again" if a.try_again else "correct" if a.correct else "change"
-    why = None
-    if answer != "stop here" and s["phase"] not in ("stuck", "look"):
-        why = "rehearse stuck is accepted in stuck, or in look after a blocked look worker; the job is in %s" % s["phase"]
-    elif answer == "correct" and not (a.says or "").strip():
-        why = ("correct keeps the work and changes only the failing checks: give the user's words with --says "
-               "'<which checks are wrong and what is right>'; they are recorded with every corrected check")
-    elif answer == "correct" and not S.said(s, a.says, S.question_since(s)):
-        why = ("--says must be the user's words, word for word, from an answer recorded since the stage became "
-               "stuck; not a paraphrase")
-    elif answer == "correct" and not S.failing(s):
-        why = "correct has nothing to apply: no failing check is recorded for %s" % S.label(s)
-    elif answer == "change" and not a.confirmed:
-        why = ("change redoes %s from the look: a look worker, the ending registered and confirmed again, then the "
-               "build and the director; strikes reset. Put that to the user as one yes-or-no question, and run this "
-               "again with --confirmed only after an explicit yes" % S.label(s))
+        return result(s["run_id"], "tried", ok=False, error="bad arguments: --route, --steps S<n>,..., --outcome")
+    steps = G.steps(a.steps)
+    why = G.tried(s, steps, a.no_websearch)
     if why:
         print(why)
-        return result(s["run_id"], "stuck", ok=False, error=why)
+        return result(s["run_id"], "tried", ok=False, error=why)
+    print("tried: %s (%s): %s" % (a.route, ", ".join(steps), a.outcome))
+    return result(s["run_id"], "tried", ok=True, route=a.route, steps=steps, outcome=a.outcome,
+                  no_websearch=a.no_websearch)
+
+
+def cmd_review(s, argv):
+    """The coach's review of a stopped worker's log: the searches, the untried candidates, the dropped variants."""
+    ap = argparse.ArgumentParser(prog="rehearse review")
+    ap.add_argument("--searched", required=True, help="logged search steps: a WebSearch, with WebFetch or rehearse "
+                                                       "fetch steps alongside")
+    ap.add_argument("--candidate", nargs=2, action="append", default=[], metavar=("NAME", "HOW_IT_DIFFERS"))
+    ap.add_argument("--drop", nargs=2, action="append", default=[], metavar=("NAME", "WHY_A_VARIANT"))
+    ap.add_argument("--no-websearch", help="why no WebSearch step is cited (only with the websearch setting off)")
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        return result(s["run_id"], "review", ok=False,
+                      error="bad arguments: --searched S<n>,... [--candidate NAME HOW] ... [--drop NAME WHY] ...")
+    searched = G.steps(a.searched)
+    candidates = [{"name": n, "differs": h} for n, h in a.candidate]
+    if len(s.get("stages") or []) == 1:
+        print("note: in a one-stage job only rehearse:reviewer may record the review; the hook refuses any other")
+    why = G.review(s, searched, candidates, a.no_websearch)
+    if why:
+        print("review refused: " + why)
+        return result(s["run_id"], "review", ok=False, error=why)
+    print("review: searched %s; candidates %d; dropped %d" % (", ".join(searched), len(a.candidate), len(a.drop)))
+    return result(s["run_id"], "review", ok=True, searched=searched, candidates=candidates,
+                  dropped=[{"name": n, "why": w} for n, w in a.drop], no_websearch=a.no_websearch)
+
+
+def cmd_failed(s, argv):
+    """The stage's honest end: it needs one thing from the user, or everything found was tried (gate two)."""
+    ap = argparse.ArgumentParser(prog="rehearse failed")
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--needs", help="the one thing only the user can give")
+    g.add_argument("--exhausted", action="store_true")
+    ap.add_argument("--summary", default="")
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        return result(s["run_id"], "failed", ok=False, error="bad arguments: --needs '<thing>' | --exhausted [--summary]")
+    why = G.failed(s)
+    if why:
+        print(why)
+        return result(s["run_id"], "failed", ok=False, error=why)
+    print("failed: " + ("needs " + a.needs if a.needs else "exhausted"))
+    return result(s["run_id"], "failed", ok=True, needs=a.needs, exhausted=bool(a.exhausted), summary=a.summary)
+
+
+def cmd_wait(s, argv):
+    """The manager records the user's answer while the stage waits; the plugin never reads it from their words."""
+    ap = argparse.ArgumentParser(prog="rehearse wait")
+    g = ap.add_mutually_exclusive_group(required=True)
+    for flag in ("--stop-here", "--resume", "--correct", "--change"):
+        g.add_argument(flag, action="store_true")
+    ap.add_argument("--confirmed", action="store_true")
+    ap.add_argument("--says", help="the user's words: what they gave (resume), or which checks are wrong (correct)")
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        return result(s["run_id"], "wait", ok=False, error="one of --stop-here, --resume --says '<the user's words>', "
+                                                          "--correct --says '<the user's words>', --change --confirmed")
+    answer = "stop here" if a.stop_here else "resume" if a.resume else "correct" if a.correct else "change"
+    why = G.wait(s, answer, a.says, a.confirmed)
+    if why:
+        print(why)
+        return result(s["run_id"], "wait", ok=False, error=why)
     print("recorded: " + answer + (" (the whole rehearse job ends now; any remaining stage runs without rehearse)"
                                    if answer == "stop here" else ""))
-    return result(s["run_id"], "stuck", ok=True, answer=answer, says=a.says)
+    return result(s["run_id"], "wait", ok=True, answer=answer, says=a.says)
+
+
+def cmd_wrong(s, argv):
+    """A check the real target cannot meet, with the evidence step and a proposed correction: raised at once."""
+    ap = argparse.ArgumentParser(prog="rehearse wrong")
+    ap.add_argument("--check", required=True, help="the failing requirement, as registered")
+    ap.add_argument("--evidence", required=True, help="logged steps that show it cannot pass, S<n>,S<m>")
+    ap.add_argument("--propose", required=True, help="the value or wording that would be right")
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        return result(s["run_id"], "wrong", ok=False, error="bad arguments: --check, --evidence S<n>,..., --propose")
+    steps = G.steps(a.evidence)
+    why = G.wrong(s, a.check, steps)
+    if why:
+        print(why)
+        return result(s["run_id"], "wrong", ok=False, error=why)
+    print("wrong: %s (evidence %s); proposed: %s" % (a.check, ", ".join(steps), a.propose))
+    return result(s["run_id"], "wrong", ok=True, check=a.check, evidence=steps, propose=a.propose)
+
+
+def cmd_irreversible(s, argv):
+    """The step the user OK'd up front runs once, here, after the final pass; never inside an ending, never twice."""
+    ir = s.get("irreversible")
+    why = G.irreversible(s)
+    if not why:  # the hook records the run; until it has, the command's own records say whether it already ran
+        earlier, _ = L.new_results(s["run_folder"], 0)
+        if any(r.get("kind") == "irreversible" and r.get("ok") and r.get("run") == s["run_id"] for r in earlier):
+            why = "the irreversible step already ran once; it never runs twice"
+    if why:
+        print(why)
+        return result(s["run_id"], "irreversible", ok=False, error=why)
+    rc, out, err = sh(ir["cmd"], s["root"])
+    print("irreversible step ran once: %s (rc %s)\n%s%s" % (ir["what"], rc, clip(out), ("\n" + clip(err)) if err else ""))
+    return result(s["run_id"], "irreversible", ok=True, rc=rc, stdout=clip(out, 2000), stderr=clip(err, 2000))
+
+
+def cmd_feedback(argv):
+    """After-job feedback, from any session on the machine: dated lines kept beside the job's file in the plugin
+    data folder (<run id>.feedback.jsonl), where every job of every project lives. The job file itself is not touched."""
+    global FOLDER
+    ap = argparse.ArgumentParser(prog="rehearse feedback")
+    ap.add_argument("line")
+    ap.add_argument("--job", help="the run id; default: the newest job in this directory or above, in any phase")
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        return result(None, "feedback", ok=False, error="bad arguments: rehearse feedback '<line>' [--job <run id>]")
+    here = S.newest_for_cwd(os.getcwd())
+    s = S.find_job(a.job, hint=(here or {}).get("path")) if a.job else here
+    if not s:
+        why = "no job found%s" % (" with id %s" % a.job if a.job else " in this directory or above it: give --job <run id>")
+        print(why)
+        return result(None, "feedback", ok=False, error=why)
+    if os.path.isdir(s.get("run_folder") or ""):
+        FOLDER = s["run_folder"]
+    path = os.path.splitext(s["path"])[0] + ".feedback.jsonl"
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"line": a.line.strip(), "at": time.time(),
+                                "date": time.strftime("%Y-%m-%d %H:%M")}, ensure_ascii=False) + "\n")
+        lines = [json.loads(ln) for ln in open(path, encoding="utf-8") if ln.strip()]
+    except OSError as x:
+        print("could not write the feedback beside the job file (%s): %s" % (path, x))
+        return result(s["run_id"], "feedback", ok=False, error=str(x))
+    print("feedback for job %s (%d line(s), kept at %s):" % (s["run_id"], len(lines), path))
+    for ln in lines:
+        print("  %s  %s" % (ln.get("date"), ln.get("line")))
+    return result(s["run_id"], "feedback", ok=True, lines=len(lines), path=path)
 
 
 def cmd_stage(s, argv):
@@ -318,11 +469,14 @@ def cmd_stage(s, argv):
 def main():
     global FOLDER
     cmds = {"plan": cmd_plan, "ending": cmd_ending, "run": cmd_run, "fetch": cmd_fetch, "job": cmd_job,
-            "status": cmd_job, "stuck": cmd_stuck, "stage": cmd_stage}
+            "wait": cmd_wait, "wrong": cmd_wrong, "stage": cmd_stage, "tried": cmd_tried,
+            "review": cmd_review, "failed": cmd_failed, "irreversible": cmd_irreversible, "feedback": None}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return result(None, "usage", ok=False)
     kind = sys.argv[1]
+    if kind == "feedback":  # after the job: no live job is needed
+        return cmd_feedback(sys.argv[2:])
     s = S.find_for_cwd(os.getcwd())
     if not s:
         print("no active rehearse job in this directory or above it")

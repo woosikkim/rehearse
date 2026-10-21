@@ -1,0 +1,1 @@
+Write daily.py so that `python3 daily.py` prints one line per day, `<date> <count>`, counting the items in feed/items.jsonl for each of the 14 days from 2026-10-01 to 2026-10-14. The feed publishes ten items every day (feed/README.md), so every line must show 10.

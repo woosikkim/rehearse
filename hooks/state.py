@@ -12,19 +12,20 @@ import fcntl
 import json
 import os
 import re
+import hashlib
 import secrets
 import time
 
 ENDED = ("done.cancelled", "done.not_fixed")
-LOCKED = ("goal", "job-confirm", "look", "confirm", "stuck")  # edits of project files and declared outputs refused
-WAIT = ("goal", "job-confirm", "confirm", "stuck")  # where an attended manager may stop: it waits for the user
+LOCKED = ("goal", "job-confirm", "look", "confirm", "wait")  # edits of project files and declared outputs refused
+WAIT = ("goal", "job-confirm", "confirm", "wait")  # where a manager may stop when someone can answer: it waits
 NO_LOOK = ("no look step since edits were locked again: take one (a stage step into project code, or rehearse "
            "fetch; file://<path> for a draft or CSV), then register")
 GOAL_ITEMS = ("purpose", "deliverable", "done", "out_of_scope")
 NEXT = {"judge": "wait for the director's verdict",
-        "stuck": "ask the user once (these checks are wrong / redo this stage / try again / stop here, which ends the "
-                 "whole rehearse job), then record the answer: rehearse stuck --correct --says '<words>' | --change "
-                 "--confirmed | --try-again | --stop-here",
+        "wait": "give the solution-ready report and ask the user once (give what is needed / these checks are wrong / "
+                "redo this stage / stop here, which ends the whole rehearse job), then record the answer: rehearse "
+                "wait --resume --says '<words>' | --correct --says '<words>' | --change --confirmed | --stop-here",
         "done.passed": "write report.md, then finish",
         "done.not_fixed": 'write report.md starting with "not fixed"',
         "done.cancelled": "the job is cancelled"}
@@ -36,9 +37,9 @@ def fresh_stage(fp, at=None):
             "fp_phase_entry": fp, "director_runs": [], "findings": None, "verdicts": [], "spawn_fingerprint": None,
             "config_edits": [], "started_at": at or time.time(), "runs": [], "failing_runs": 0, "fewest_failing": None,
             "direct_pending": False, "project_edits_since_run": 0, "code_edits_since_run": 0, "relocks": [],
-            "strikes": 0, "pending_change": False, "reopen": None, "redo": None, "no_ending": 0, "worker": None,
-            "spawn": None, "workers": 0, "start_director": False, "strike_log": [], "stuck_log": [],
-            "corrections": []}
+            "pending_change": False, "reopen": None, "redo": None, "worker": None,
+            "spawn": None, "workers": 0, "start_director": False, "strike_log": [], "wait_log": [], "wrongs": [],
+            "corrections": [], "tried": [], "reviews": [], "review_due": None, "failed": None, "reviewer": None}
 
 
 STAGE_KEYS = tuple(fresh_stage(None))
@@ -54,6 +55,35 @@ def now(cur):
     t = max(t, last + 1e-6)
     cur["clock"] = t
     return t
+
+
+def strikes(s):
+    """The stage's strike count, from its log; a job file from before 3.1.0 kept a counter and no log."""
+    return len(s["strike_log"]) if s.get("strike_log") is not None else s.get("strikes", "not recorded")
+
+
+def cites_search(x, web):
+    """True if a tried record (steps) or a review (searched) cites a logged WebSearch step, or carries a recorded
+    reason why none was available (--no-websearch)."""
+    return bool(set(x.get("steps") or x.get("searched") or []) & web) or bool(x.get("no_websearch"))
+
+
+def tried_names(s):
+    return {str(x.get("route", "")).strip().lower() for x in s.get("tried") or []}
+
+
+def latest_review(s, since=0):
+    rv = [r for r in s.get("reviews") or [] if r.get("at", 0) >= since]
+    return rv[-1] if rv else None
+
+
+def untried(s):
+    """The latest review's candidates that no tried record names and no drop explains."""
+    rv = latest_review(s)
+    if not rv:
+        return []
+    done = tried_names(s) | {str(x.get("name", "")).strip().lower() for x in rv.get("dropped") or []}
+    return [c for c in rv.get("candidates") or [] if str(c.get("name", "")).strip().lower() not in done]
 
 
 def passed(s):
@@ -90,12 +120,24 @@ def next_step(s):
         return "wait for the %s's notification, then rehearse job" % running(s)
     if ph == "goal":
         if not s.get("stages"):
-            if s.get("attended") is False:  # nobody to ask
+            if headless(s):  # nobody to ask
                 return "record the four goal items (assumed where the request is silent), then rehearse plan"
             return "ask the goal questions the request leaves open, then rehearse plan"
         return "register the job ending with rehearse ending --job"
     if ph == "job-confirm":
         return "have the job confirmed: ask the user"
+    if ph == "done.passed" and irreversible_due(s):
+        return "run the irreversible step the user OK'd, once: rehearse irreversible; then write report.md, then finish"
+    if ph in ("look", "build") and s.get("review_due"):
+        rv = latest_review(s, s["review_due"]["at"])
+        if not rv:
+            return ("a worker stopped without %s: review its log (rehearse review ...; in a one-stage job start "
+                    "rehearse:reviewer), then a new worker gets the candidates, or rehearse failed"
+                    % ("an ending" if ph == "look" else "a pass"))
+        if untried(s):
+            return "start a new rehearse:worker with the review's candidates: %s" % ", ".join(
+                c["name"] for c in untried(s))
+        return "the review found no untried candidate: rehearse failed --needs '<the one thing>' or --exhausted"
     if ph == "look":
         if s.get("redo") is not None:
             return "start a look worker to re-register the ending; the user said: %s" % s["redo"]
@@ -114,14 +156,110 @@ def next_step(s):
     return NEXT.get(ph, "see the instructions")
 
 
+def digest(x):
+    """A short digest of a snapshot (the files and outputs the director saw), so two verdicts can be compared."""
+    return hashlib.sha1(json.dumps(x, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:12]
+
+
+def false_rework(rows):
+    """The false-REWORK signal: a REWORK followed by a PASS on the same digest with no config edit between, which
+    means the director changed its mind on the same work. Pairs without a digest (before 4.0.0) are counted apart."""
+    hits, blind = [], 0
+    for lab, st in rows:
+        vs = [v for v in st.get("verdicts") or [] if not v.get("void")]
+        for a, b in zip(vs, vs[1:]):
+            if a.get("verdict") == "REWORK" and b.get("verdict") == "PASS":
+                if not a.get("digest") or not b.get("digest"):
+                    blind += 1
+                elif a["digest"] == b["digest"] and not b.get("config_edits_between"):
+                    hits.append(lab)
+    text = "%d (%s)" % (len(hits), ", ".join(hits) or "none")
+    if blind:
+        text += "; %d REWORK-then-PASS pair(s) without a digest (recorded since 4.0.0): cannot tell" % blind
+    return text
+
+
+def usage_text(s):
+    """Tokens and time per stage and per role, from each agent's transcript at its stop and the manager's at each
+    stage end. No dollars."""
+    us = s.get("usage")
+    if us is None:
+        return "not recorded (job predates 4.0.0)"
+    if not us:
+        return "none yet"
+    parts = []
+    for u in us:
+        tk = u.get("tokens")
+        if tk is None:
+            tokens = "tokens not readable"
+        else:
+            tokens = ", ".join("%s: in %d (cache read %d) out %d over %d turn(s)" % (
+                m, v.get("in", 0) + v.get("cache_create", 0), v.get("cache_read", 0), v.get("out", 0), v.get("turns", 0))
+                for m, v in sorted(tk.items())) or "no turn recorded"
+        secs = u.get("seconds") or 0
+        parts.append("%s %s: %s; %dm%02ds" % (u.get("stage"), u.get("role"), tokens, secs // 60, secs % 60))
+    return "\n" + "\n".join("  - " + x for x in parts)
+
+
+def find_job(run_id, hint=None):
+    """A job file by id in the plugin data folder: the folder a known job file lives in, else the usual places."""
+    roots = [os.path.dirname(os.path.dirname(hint))] if hint else []
+    roots += [sessions_root(), os.path.expanduser("~/.claude/plugins/data/rehearse-rehearse/sessions")]
+    for root in roots:
+        try:
+            for sid in os.listdir(root):
+                path = os.path.join(root, sid, run_id + ".json")
+                if os.path.isfile(path):
+                    return load(path)
+        except OSError:
+            continue
+    return None
+
+
+def newest_for_cwd(cwd):
+    """For `rehearse feedback`: the newest run, in any phase, whose run folder is in cwd or an ancestor."""
+    d = os.path.realpath(cwd)
+    while True:
+        rd = os.path.join(d, ".rehearsal")
+        if os.path.isdir(rd):
+            for run in sorted(os.listdir(rd), reverse=True):
+                s = load(os.path.join(rd, run, "state.json"))
+                if v3(s):
+                    return s
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+def irreversible_due(s):
+    """The user OK'd the irreversible step and it has not run yet."""
+    ir = s.get("irreversible") or {}
+    return bool(ir.get("ok")) and not ir.get("ran")
+
+
+def irreversible_text(s):
+    ir = s.get("irreversible")
+    if not ir:
+        return "none declared"
+    if ir.get("ran"):
+        return "%s: OK'd by the user (%r), ran once (rc %s)" % (ir["what"], ir.get("says"), ir["ran"].get("rc"))
+    if ir.get("ok"):
+        return "%s: OK'd by the user (%r), not run yet" % (ir["what"], ir.get("says"))
+    if ir.get("ok") is False:
+        return "%s: not OK'd, left for the user" % ir["what"]
+    return "%s: the OK was not asked yet" % ir["what"]
+
+
 def failing(s):
-    """The requirements the last run of the ending failed."""
-    after = (s.get("ending") or {}).get("after") or {}
-    return [r for r in after.get("results") or [] if not r.get("passed")]
+    """The requirements the last run of the ending failed: the registration run, until a later `rehearse run`."""
+    e = s.get("ending") or {}
+    last = e.get("after") or e.get("before") or {}
+    return [r for r in last.get("results") or [] if not r.get("passed")]
 
 
 def failing_checks(s):
-    """The checks the last run failed, in one line, so a stuck question can name them."""
+    """The checks the last run failed, in one line, so the wait question can name them."""
     bad = failing(s)
     if not bad:
         return "failing checks: none recorded"
@@ -129,10 +267,10 @@ def failing_checks(s):
 
 
 def question_since(s):
-    """The stamp after which the user must have answered for a stuck decision: the stage becoming stuck, or
-    the last worker's stop (a blocked look), or the stage start."""
-    if s.get("phase") == "stuck":
-        return s.get("stuck_at") or 0
+    """The stamp after which the user must have answered for a wait decision: the wait began, or (stop here, from
+    any question) the last worker's stop or the stage start."""
+    if s.get("phase") == "wait":
+        return s.get("wait_at") or 0
     return max((s.get("worker") or {}).get("at") or 0, s.get("started_at") or 0)
 
 
@@ -146,9 +284,9 @@ def said(s, text, since=0):
 def job_text(s):
     """What `rehearse job` prints, and what the hook answers when the user types it as a prompt."""
     stages = s.get("stages") or []
-    lines = ["job %s: phase %s, %s, strikes %d, failing runs %d" % (
-        s["run_id"], s["phase"], where(s), s.get("strikes", 0), s.get("failing_runs", 0))]
-    if s["phase"] == "stuck":
+    lines = ["job %s: phase %s, %s, strikes %s, failing runs %d" % (
+        s["run_id"], s["phase"], where(s), strikes(s), s.get("failing_runs", 0))]
+    if s["phase"] == "wait":
         lines.append(failing_checks(s))
     lines += ["  stage %d %s (%s)%s: %s" % (i, st.get("name"), st.get("kind"), ", passed" if st.get("passed") else "",
                                            st.get("line")) for i, st in enumerate(stages, 1)]
@@ -194,8 +332,9 @@ def process_lines(s):
     exact = [r for r in steps if "rehearse" in r]
     ran = sum(int(r.get("rehearse") or 0) for r in exact)
     rec = sum(1 for r in records if "at" in r)
-    by_text = sum(len(re.findall(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:plan|ending|run|fetch|job|status|stuck|"
-                                 r"stage)\b", r.get("cmd") or "")) for r in steps if "rehearse" not in r)
+    # frozen at the 3.0.1 command set: this counts only records from before 3.1.0, which hold no later command
+    by_text = sum(len(re.findall(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:plan|ending|run|fetch|job|status|stuck|stage)\b",
+                                 r.get("cmd") or "")) for r in steps if "rehearse" not in r)
     commands = "- rehearse commands: %d; results recorded: %d; without a record: %d" % (ran, rec, max(ran - rec, 0))
     if rec > ran:  # a script (python3 - <<EOF ...) that calls rehearse in a loop is not countable from its text
         commands += "; results from commands inside scripts, not counted: %d" % (rec - ran)
@@ -218,14 +357,24 @@ def process_lines(s):
     strikes = logged("strike_log", lambda have: "%d (%s)" % (
         sum(len(st["strike_log"]) for _, st in have),
         counts(collections.Counter(e.get("cause") for _, st in have for e in st["strike_log"]))))
-    stuck = logged("stuck_log", lambda have: "%d (%s)" % (
-        sum(len(st["stuck_log"]) for _, st in have),
-        ", ".join(e.get("answer") or "unanswered" for _, st in have for e in st["stuck_log"]) or "none"))
+    rows = [(lab, dict(st, wait_log=st["stuck_log"]) if st.get("wait_log") is None and st.get("stuck_log") is not None
+             else st) for lab, st in rows]  # a stage from 3.1.0 to 3.2.0 kept this log under the stuck phase's name
+    waits = logged("wait_log", lambda have: "%d (%s)" % (
+        sum(len(st["wait_log"]) for _, st in have),
+        ", ".join(e.get("answer") or "unanswered" for _, st in have for e in st["wait_log"]) or "none"))
     reworks = ["  - %s: %s" % (lab, one_line((v.get("findings") or ["no reason given"])[0]))
                for lab, st in rows for v in st.get("verdicts") or [] if v.get("verdict") == "REWORK" and not v.get("void")]
     relocks = sum(len(st.get("relocks") or []) for _, st in rows)
     refusals = old if s.get("refusals") is None else counts(collections.Counter(r.get("kind") for r in s["refusals"]))
-    free = sum(1 for n in s.get("notes") or [] if str(n).startswith("stuck answer: "))
+    free = sum(1 for n in s.get("notes") or [] if str(n).startswith("wait answer: "))
+    wrongs = sum(len(st.get("wrongs") or []) for _, st in rows)
+    no_web = sum(1 for _, st in rows for x in (st.get("tried") or []) + (st.get("reviews") or []) if x.get("no_websearch"))
+    loops = "- routes tried: " + logged("tried", lambda have: "%d; reviews: %d; candidates dropped: %d; failed: %s" % (
+        sum(len(st["tried"]) for _, st in have), sum(len(st.get("reviews") or []) for _, st in have),
+        sum(len(r.get("dropped") or []) for _, st in have for r in st.get("reviews") or []),
+        "; ".join("%s: %s" % (lab, "needs " + st["failed"]["needs"] if st["failed"].get("needs") else "exhausted")
+                  for lab, st in have if st.get("failed")) or "none")).replace("3.1.0", "4.0.0")
+    loops += "; without a web search, reason recorded: %d" % no_web
     fixes = ["  - %s, %s: %s -> %s (the user: %s)" % (c.get("stage"), c.get("requirement"), c.get("before") or "none",
                                                       c.get("after") or "dropped", one_line(c.get("user") or ""))
              for _, st in rows for c in st.get("corrections") or []]
@@ -234,9 +383,28 @@ def process_lines(s):
             "- strikes: " + strikes,
             "- REWORK reasons (%d):%s" % (len(reworks), "\n" + "\n".join(reworks) if reworks else " none"),
             "- refusals: " + refusals,
-            "- stuck: %s; free-text answers while stuck: %d" % (stuck, free),
+            "- waits: %s; free-text answers while waiting: %d; checks reported wrong: %d" % (waits, free, wrongs),
             "- corrected checks (%d):%s" % (len(fixes), "\n" + "\n".join(fixes) if fixes else " none"),
-            "- relocks: %d" % relocks]
+            loops,
+            "- relocks: %d" % relocks,
+            "- chosen on your behalf: %s; irreversible step: %s" % (
+                "not recorded (job predates 4.0.0)" if s.get("decisions") is None else len(s["decisions"]),
+                irreversible_text(s)),
+            "- false-REWORK signal (REWORK then PASS on the same digest, no config edit between): " + false_rework(rows),
+            "- stopped by the user: %s" % ("no" if not s.get("stop_here") and not s["phase"] == "done.cancelled" else
+                                           "yes (reason: %s)" % (s.get("stop_reason") or (
+                                               "none given" if "stop_reason" in s else "not recorded before 4.0.0"))),
+            "- tokens and time (per stage and role; no dollars): " + usage_text(s)]
+
+
+def chosen_lines(s):
+    """The list the plugin writes right after the report's first line: every decision taken without the user, so
+    they can undo just those."""
+    ds = s.get("decisions") or []
+    if not ds:
+        return []
+    return ["## Chosen on your behalf (written by the plugin from the job file)"] + [
+        "- %s: %s (%s)" % (d.get("what"), d.get("taken"), d.get("reason")) for d in ds]
 
 
 def finish_report(s):
@@ -249,8 +417,12 @@ def finish_report(s):
         return
     if "## Process" in text:
         return
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(("\n" if text.endswith("\n") else "\n\n") + "\n".join(process_lines(s)) + "\n")
+    chosen = chosen_lines(s)
+    if chosen and "## Chosen on your behalf" not in text:
+        first, _, rest = text.partition("\n")
+        text = first + "\n\n" + "\n".join(chosen) + "\n" + rest
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text + ("\n" if text.endswith("\n") else "\n\n") + "\n".join(process_lines(s)) + "\n")
 
 
 def plan_refused(s, n=None):
@@ -380,7 +552,31 @@ def _stamp():
     return datetime.datetime.now(datetime.timezone.utc).strftime(STAMP)
 
 
-def new_run(session_id, root, request, fp, attended=True):
+def mode(s):
+    """"ask" or "auto"; a 3.x job file (an `attended` flag) reads as ask or auto plus headless."""
+    return s.get("mode") or ("auto" if s.get("attended") is False else "ask")
+
+
+def auto(s):
+    return mode(s) == "auto"
+
+
+def headless(s):
+    """Nobody can answer (evals, scripts): goal items are assumed, confirmations accepted, a wait ends as not fixed."""
+    return bool(s.get("headless")) or s.get("attended") is False
+
+
+def mode_text(s):
+    if headless(s):
+        return ("auto, headless: nobody can answer; record unasked goal items as assumed, endings are accepted at "
+                "registration, and anything that would wait for the user ends the job as not fixed")
+    if auto(s):
+        return ("auto: ask the goal items and confirm the plan, the stages and the job ending up front; after that "
+                "ask nothing: stage endings and judgment calls are accepted as registered and recorded")
+    return "ask: the user confirms the goal, the plan and each ending"
+
+
+def new_run(session_id, root, request, fp, mode="ask", headless=False, task=None, websearch=True):
     """A new job in goal. The key stays run_id: stage/client.py and the hook's result matching read it."""
     ts = _stamp()
     try:  # newest() and find_for_cwd() sort by this prefix: it must sort after every earlier job of the session,
@@ -397,9 +593,11 @@ def new_run(session_id, root, request, fp, attended=True):
     os.makedirs(session_dir(session_id), exist_ok=True)
     s = dict(fresh_stage(fp), run_id=run_id, session_id=session_id,
              path=os.path.join(session_dir(session_id), run_id + ".json"), phase="goal", stage=1, root=root,
-             attended=attended,  # the mode at activation, for next_step (bin/rehearse sees no plugin settings)
+             mode=mode, headless=headless, task=task, websearch=websearch,  # at activation; later checks read the job file
              run_folder=folder, request=request, prompts=[], goal=None, assumptions=[], blockers=[], stages=[],
              stages_from=None, job_ending=None, job_confirmation=None, confirm_return=None, not_verified=[],
+             calls=[], irreversible=None, decisions=[],  # 4.0.0: plan-level calls, the OK'd step, what was chosen
+             usage=[], manager_seen=None, stop_reason=None,  # 4.0.0 records: tokens and time per stage and role
              fixtures=[], notes=[], results_read=0, refusals=[], user_words=[], created_at=time.time(),
              updated_at=time.time())
     _save(s)

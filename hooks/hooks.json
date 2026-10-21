@@ -23,7 +23,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|AskUserQuestion|Agent",
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|AskUserQuestion|Agent|WebSearch|WebFetch",
         "hooks": [
           {
             "type": "command",

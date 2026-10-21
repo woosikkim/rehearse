@@ -19,6 +19,8 @@ If a step you did by hand breaks the next one (a name with a comma breaks the CS
 
 **A thin source.** If the source gives less than the goal needs (fewer items, missing fields, short text), never pad it or invent the rest. Go down the scout ladder for another source and try it by hand. Register the ending on what was actually collected, and say in your final message what was collected and what is missing.
 
+**A value you cannot collect.** When the value the ending must check cannot be collected at all (every route to it hits a wall), register no ending: record each route with `rehearse tried` (worker.md), and stop with `no ending` and why. An ending that checks only the shape of a line, with the value itself left unchecked, is not an ending; a build worker could print any number and pass it.
+
 ## Register the ending, then stop
 
 The ending is the command that will run the finished program, and what it must print:
@@ -32,7 +34,7 @@ rehearse ending --cmd '<command>' [--tests '<tests command>'] \
 - Checks: `equals`, `contains`, `regex`, `exit_code`, `fixture_equals <fixture name>`.
 - Every expected value cites where it came from: `fixture:<name>` (a saved fixture), `step:S<n>` (a logged step) or `request` (the user's words). The value must appear word for word in what you cite.
 - Add `--tests '<command>'` when you know which tests should cover it.
-- A check that rests on a borderline judgment (is X a tool? does Y count? is this the right cut-off?) gets `--call '<requirement>' '<the call, as one question>'`: the manager puts it to the user as its own question before building, never as one line among dozens of checks. Register the call for every such check; a judgment hidden in a check is what gets a stage stuck later.
+- A check that rests on a borderline judgment (is X a tool? does Y count? is this the right cut-off?) gets `--call '<requirement>' '<the call, as one question>'`: the manager puts it to the user as its own question before building, never as one line among dozens of checks. Register the call for every such check; a judgment hidden in a check is what makes a stage wait later.
 - The ending must fail now. A build fails because the program or the output does not exist yet.
 - Cover every requirement in the stage's plan line and the goal, with values from the sample you did by hand. What only taste can judge (tone, style) goes in `--unchecked`.
 

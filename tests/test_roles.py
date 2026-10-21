@@ -76,7 +76,7 @@ try:
     # (a) every instruction file the hook names exists, and every plugin path an instruction file names
     src = open(HOOK, encoding="utf-8").read()
     names = set(re.findall(r'instruction\("([\w.-]+\.md)"\)', src))
-    assert names == {"manager.md", "worker.md", "director.md"}, names
+    assert names == {"manager.md", "worker.md", "director.md", "review.md"}, names
     assert 'instruction("%s-%s.md" % (kind, half))' in src  # the worker's half: kind fix|build, phase look|build
     names |= {"%s-%s.md" % (k, h) for k in KINDS for h in HALVES}
     for name in sorted(names):
@@ -109,19 +109,18 @@ try:
         assert ui["prompt"].startswith(read("director.md")) and "plan line: main.py prints a: 1" in ui["prompt"]
         assert ui["model"] == "opus" and ui["run_in_background"] is False, ui
         assert j.state()["phase"] == "judge"
-        k = Job(kind)  # one "neither" strike with max_strikes 1: stuck
+        k = Job(kind)  # a worker's stop without the result and without a logged search is held (4.0.0)
         k.rehearse("ending", "--cmd", "python3 main.py", "--expect", "prints a: 1", "contains", "a: 1",
                    "--cite", "request")
         k.ev("UserPromptSubmit", prompt="yes")
-        one = {"CLAUDE_PLUGIN_OPTION_MAX_STRIKES": "1"}
-        k.spawn("rehearse:worker", one)
-        k.ev("SubagentStop", one, agent_type="rehearse:worker", agent_id="w1", agent_transcript_path="/x",
-             stop_hook_active=False, last_assistant_message="done")
-        k.ev("PostToolUse", one, tool_name="Agent", tool_input={"subagent_type": "rehearse:worker", "prompt": "x"},
-             tool_response={"content": "done"})
-        assert k.state()["phase"] == "stuck", k.state()["phase"]
+        k.spawn("rehearse:worker")
+        held = k.ev("SubagentStop", agent_type="rehearse:worker", agent_id="w1", agent_transcript_path="/x",
+                    stop_hook_active=False, last_assistant_message="done")
+        assert held and held.get("decision") == "block" and "search first" in held["reason"], held
+        assert k.state()["phase"] == "build" and k.state()["strike_log"] == []
     for agent, tools in (("worker", ["Agent", "AskUserQuestion"]),
-                         ("director", ["Write", "Edit", "MultiEdit", "NotebookEdit", "Agent", "AskUserQuestion"])):
+                         ("director", ["Write", "Edit", "MultiEdit", "NotebookEdit", "Agent", "AskUserQuestion"]),
+                         ("reviewer", ["Write", "Edit", "MultiEdit", "NotebookEdit", "Agent", "AskUserQuestion"])):
         head = open(os.path.join(ROOT, "agents", agent + ".md"), encoding="utf-8").read().split("---")[1]
         line = re.search(r"(?m)^disallowedTools:(.*)$", head).group(1)
         assert [x.strip() for x in line.split(",")] == tools, (agent, line)
@@ -134,7 +133,7 @@ try:
                  "irreversible step. Never one action per stage.",
                  "When the request already contains a plan, its steps fix the stages: use them as the stages and add "
                  "`--from-request`. You may only propose merging steps into fewer stages; a merge takes effect only "
-                 "when the user says yes to it at job confirmation, and never in an unattended job."):
+                 "when the user says yes to it at job confirmation, and never in an auto job."):
         assert rule in m, rule[:60]
     assert "goal items and assumptions" in m and "four goal items" in read("confirm.md")
     print("manager.md: the P1 and P4 rules: ok")
