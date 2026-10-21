@@ -20,6 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import findings as FD  # noqa: E402
 import fingerprint as F  # noqa: E402
+import gates as G  # noqa: E402
 import log as L  # noqa: E402
 import provenance as P  # noqa: E402
 import state as S  # noqa: E402
@@ -196,7 +197,6 @@ def advance(cur, transcript=None):
 def strike(cur, msgs, cause):
     """A strike is a record, never a trigger (4.0.0): a count is never failure. The loop ends only through the
     failure records and their gates (apply_failed)."""
-    cur["strikes"] += 1
     cur["pending_change"] = False
     if cur.get("strike_log") is not None:  # a stage begun before 3.1.0 has no log: it stays "not recorded"
         cur["strike_log"].append({"cause": cause, "at": S.now(cur)})
@@ -363,7 +363,7 @@ def on_prompt(p, sid):
             cur["notes"].append("cancelled by user" + (": " + cur["stop_reason"] if cur["stop_reason"] else ""))
         return {"systemMessage": "rehearse stopped (job %s cancelled)" % s["run_id"]}
     s = S.current(sid)
-    if rest is not None and rest.lower() in ("job", "status"):  # a status question, never a new job
+    if rest is not None and rest.lower() == "job":  # a status question, never a new job
         msg = S.job_text(s) if s else "no active rehearse job"
         return dict(context("UserPromptSubmit", msg), systemMessage=msg)
     if s and not s["phase"].startswith("done"):
@@ -751,8 +751,6 @@ def apply_ending(cur, res, msgs):
     # ending is its job ending, confirmed up front like a plan (headless: nobody can)
     up_front = len(cur["stages"]) == 1 and cur.get("job_confirmation") is None and not S.headless(cur)
     if S.auto(cur) and not up_front:
-        cur["not_verified"] += ["judgment call not put to a person: %s (decides: %s)" % (c["question"], c["requirement"])
-                                for c in calls]
         for c in calls:
             record_call(cur, c, "as registered: %s" % c["requirement"], by="auto")
         chosen(cur, "%s ending" % S.label(cur), "accepted as registered",
@@ -816,23 +814,11 @@ def apply_wait(cur, res, msgs):
     question. The 3.0.1 and 3.2.0 guards: the user must have spoken since the question arose; --says is their words,
     word for word; correct changes only the failing checks; change needs a second explicit yes."""
     a = res.get("answer")
-    if a != "stop here" and cur["phase"] != "wait":
-        msgs.append("rehearse wait is accepted while the stage waits; the job is in %s" % cur["phase"])
+    why = G.wait(cur, a, res.get("says"), confirmed=True)  # the second yes is the command's to check
+    if why:
+        msgs.append(why)
         return True
     waiting = cur["phase"] == "wait"
-    since = S.question_since(cur)
-    if not cur.get("user_answer_at") or cur["user_answer_at"] < since:
-        msgs.append("no answer from the user is recorded since %s: ask them (a prompt, or AskUserQuestion), then "
-                    "record what they chose" % ("the wait began" if waiting else "the last worker stopped"))
-        return True
-    if a in ("correct", "resume") and not S.said(cur, res.get("says"), since):
-        msgs.append("--says must be the user's words, word for word, from an answer recorded since the wait began "
-                    "(as a goal item's answer source); not a paraphrase")
-        return True
-    if a == "correct" and not S.failing(cur):  # the one path that relaxes an ending: anchored to the failing checks
-        msgs.append("correct has nothing to apply: no failing check is recorded for %s (no run of the ending "
-                    "failed); the other options apply" % S.label(cur))
-        return True
     cur["notes"].append("wait decision: %s" % a)
     log = cur.get("wait_log")
     if log is None:
@@ -878,12 +864,9 @@ def apply_wait(cur, res, msgs):
 
 def apply_wrong(cur, res, msgs):
     """A check proven wrong by evidence: raised at once, instead of retrying against a check that cannot pass."""
-    if cur["phase"] not in ("look", "build"):
-        msgs.append("rehearse wrong is recorded in look or build; the job is in %s" % cur["phase"])
-        return True
-    bad = [r.get("requirement") for r in S.failing(cur)]
-    if res.get("check") not in bad:
-        msgs.append("wrong names a check the last run failed: %s" % (", ".join(bad) or "none recorded"))
+    why = G.wrong(cur, res.get("check"), res.get("evidence") or [])
+    if why:
+        msgs.append(why)
         return True
     cur.setdefault("wrongs", []).append({"check": res.get("check"), "evidence": res.get("evidence") or [],
                                          "propose": res.get("propose"), "by": res.get("agent_type"), "at": S.now(cur)})
@@ -893,25 +876,10 @@ def apply_wrong(cur, res, msgs):
     return False
 
 
-def no_websearch_refused(cur, res, msgs):
-    """A recorded reason for citing no WebSearch is accepted only when the websearch setting declared the tool
-    unavailable at activation (websearch off, REHEARSE_WEBSEARCH=0), and never when the log shows one was made."""
-    if not res.get("no_websearch"):
-        return False
-    web = L.search_steps(cur["run_folder"], web=True)
-    if cur.get("websearch", True):
-        msgs.append("--no-websearch is refused: WebSearch is available in this environment (the websearch setting; "
-                    "REHEARSE_WEBSEARCH=0 declares it unavailable); cite a WebSearch step")
-        return True
-    if web:
-        msgs.append("--no-websearch is refused: WebSearch was used in this run (%s); cite a WebSearch step"
-                    % ", ".join(sorted(web)))
-        return True
-    return False
-
-
 def apply_tried(cur, res, msgs):
-    if no_websearch_refused(cur, res, msgs):
+    why = G.tried(cur, res.get("steps") or [], res.get("no_websearch"))
+    if why:
+        msgs.append(why)
         return True
     cur.setdefault("tried", []).append({"route": res.get("route"), "steps": res.get("steps") or [],
                                         "outcome": res.get("outcome"), "no_websearch": res.get("no_websearch"),
@@ -922,17 +890,9 @@ def apply_tried(cur, res, msgs):
 
 def apply_review(cur, res, msgs):
     by = res.get("agent_type")
-    if len(cur["stages"]) == 1 and by not in REVIEWER:  # the strongest fresh eyes: the manager did the work
-        msgs.append("in a one-stage job only rehearse:reviewer records the review: start it")
-        return True
-    if by in {x.get("by") for x in cur.get("tried") or []}:
-        msgs.append("a review needs fresh eyes: the agent that made the tried records may not review them")
-        return True
-    if no_websearch_refused(cur, res, msgs):
-        return True
-    if not S.cites_search(res, L.search_steps(cur["run_folder"], web=True)):
-        msgs.append("a review cites at least one logged WebSearch step (WebFetch and rehearse fetch steps may be "
-                    "cited alongside); if WebSearch is unavailable in this session, record why with --no-websearch")
+    why = G.review(cur, res.get("searched") or [], res.get("candidates") or [], res.get("no_websearch"), by, hook=True)
+    if why:
+        msgs.append(why)
         return True
     rv = {"searched": res.get("searched") or [], "candidates": res.get("candidates") or [],
           "dropped": res.get("dropped") or [], "no_websearch": res.get("no_websearch"), "by": by, "at": S.now(cur)}
@@ -945,21 +905,9 @@ def apply_review(cur, res, msgs):
 
 def apply_failed(cur, res, msgs):
     """Gate two: only after a review whose every candidate is tried or dropped."""
-    if cur["phase"] not in ("look", "build"):
-        msgs.append("rehearse failed is recorded in look or build")
-        return True
-    if not cur.get("reviews"):
-        msgs.append("no review is recorded for %s: review the log first" % S.label(cur))
-        return True
-    left = S.untried(cur)
-    if left:
-        msgs.append("candidates of the latest review are neither tried nor dropped: %s" % ", ".join(
-            c["name"] for c in left))
-        return True
-    web = L.search_steps(cur["run_folder"], web=True)
-    if not any(S.cites_search(x, web) for x in cur.get("tried") or []):
-        msgs.append("failed is recorded only after at least one route was tried, recorded, and cites a logged "
-                    "WebSearch (or a recorded --no-websearch reason)")
+    why = G.failed(cur)
+    if why:
+        msgs.append(why)
         return True
     cur["failed"] = {"needs": res.get("needs"), "exhausted": bool(res.get("exhausted")), "summary": res.get("summary"),
                      "by": res.get("agent_type"), "at": S.now(cur), "answer": None}
@@ -971,14 +919,11 @@ def apply_failed(cur, res, msgs):
 
 def apply_irreversible(cur, res, msgs):
     """The OK'd step ran once through its own command, after the final pass; a second run is refused."""
-    ir = cur.get("irreversible")
-    if not ir or not ir.get("ok") or cur["phase"] != "done.passed":
-        msgs.append("rehearse irreversible runs only the step the user OK'd, after the final pass (%s; phase %s)"
-                    % (S.irreversible_text(cur), cur["phase"]))
+    why = G.irreversible(cur)
+    if why:
+        msgs.append(why)
         return True
-    if ir.get("ran"):
-        msgs.append("the irreversible step already ran once (rc %s); it never runs twice" % ir["ran"].get("rc"))
-        return True
+    ir = cur["irreversible"]
     ir["ran"] = {"at": S.now(cur), "rc": res.get("rc"), "out": L.trim(str(res.get("stdout") or ""))}
     msgs.append("the irreversible step ran once (rc %s): say so in report.md, then finish" % res.get("rc"))
     return False

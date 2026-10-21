@@ -74,7 +74,6 @@ The note on each worker's result says what happened. Act on it:
 - `re-registered, already passes`: confirm, then the director; never a build worker.
 - `no ending` (a look worker stopped without registering an ending) and `stopped without a pass` (a build worker): the worker tried and recorded its routes; now review as a coach (section 7a). The next worker is refused until a review exists.
 - `passed` (a build worker, or a look worker whose passing run of the old ending reopened the stage): the director.
-- `relocked`: a look worker.
 - `relocked`: a look worker. A strike is recorded for a send-back, a relock or a stop without a pass; strikes are shown in the report and never decide anything.
 
 Every note carries a `next:` line; do that.

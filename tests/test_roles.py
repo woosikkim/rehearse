@@ -117,7 +117,7 @@ try:
         held = k.ev("SubagentStop", agent_type="rehearse:worker", agent_id="w1", agent_transcript_path="/x",
                     stop_hook_active=False, last_assistant_message="done")
         assert held and held.get("decision") == "block" and "search first" in held["reason"], held
-        assert k.state()["phase"] == "build" and k.state()["strikes"] == 0
+        assert k.state()["phase"] == "build" and k.state()["strike_log"] == []
     for agent, tools in (("worker", ["Agent", "AskUserQuestion"]),
                          ("director", ["Write", "Edit", "MultiEdit", "NotebookEdit", "Agent", "AskUserQuestion"]),
                          ("reviewer", ["Write", "Edit", "MultiEdit", "NotebookEdit", "Agent", "AskUserQuestion"])):

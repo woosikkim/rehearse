@@ -441,7 +441,7 @@ try:
     p = final_stage()
     s = p.state()
     assert s["ending"]["cmd"] == "cat drafts/summary.md" and s["ending"]["after"] is None
-    assert s["director_runs"] == [] and s["strikes"] == 0 and s["runs"] == [] and s["confirmation"]["affirmative"]
+    assert s["director_runs"] == [] and len(s["strike_log"]) == 0 and s["runs"] == [] and s["confirmation"]["affirmative"]
     assert s["stages"][1]["passed"] and s["stages"][1]["director_runs"][-1]["all_pass"]  # archived, then reset
     print("the final stage resets first, then copies the job ending: ok")
 
@@ -480,7 +480,7 @@ try:
     p.spawn("rehearse:worker")
     fail(p, 3, who=WORKER)
     fail(p, 3, who=WORKER)
-    assert "stage 1 build worker: relocked" in ctx(p.returned("rehearse:worker")) and p.state()["strikes"] == 1
+    assert "stage 1 build worker: relocked" in ctx(p.returned("rehearse:worker")) and len(p.state()["strike_log"]) == 1
     q2 = two_stage()
     so, _ = q2.rehearse(*S1_END)
     assert '"kind": "ending"' in so and '"stage": 1, "stages_passed": 0' in so, so
@@ -597,9 +597,10 @@ try:
     for k in ("ending", "confirmation", "findings", "spawn_fingerprint", "reopen", "worker", "review_due", "failed",
               "reviewer"):
         assert s[k] is None, k
-    for k in ("created", "produced", "director_runs", "runs", "relocks", "verdicts", "config_edits", "tried", "reviews"):
+    for k in ("created", "produced", "director_runs", "runs", "relocks", "verdicts", "config_edits", "tried", "reviews",
+              "strike_log", "wait_log", "wrongs"):
         assert s[k] == [], k
-    for k in ("failing_runs", "strikes", "project_edits_since_run", "code_edits_since_run", "workers"):
+    for k in ("failing_runs", "project_edits_since_run", "code_edits_since_run", "workers"):
         assert s[k] == 0, k
     assert s["fewest_failing"] is None and not s["pending_change"] and not s["direct_pending"]
     assert s["fp_activation"] == s["fp_phase_entry"] and "collect.py" in s["fp_activation"]["files"]
@@ -647,12 +648,12 @@ try:
     fail(p, 2)
     p.spawn()
     p.verdict(REWORK)
-    assert p.state()["fewest_failing"] == 2 and p.state()["strikes"] == 1 and p.phase() == "build"
+    assert p.state()["fewest_failing"] == 2 and len(p.state()["strike_log"]) == 1 and p.phase() == "build"
     print("a REWORK leaves fewest_failing: ok")
 
     p = relocked()
     s = p.state()
-    assert s["failing_runs"] == 0 and s["strikes"] == 1 and s["fp_phase_entry"] != s["fp_activation"]
+    assert s["failing_runs"] == 0 and len(s["strike_log"]) == 1 and s["fp_phase_entry"] != s["fp_activation"]
     assert denied(p.pre("Edit", file_path=p.j("main.py")))
     p.result("fetch", ok=True, fixture="f")
     p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "a", "contains", "a: 1", "--cite", "request",
@@ -705,11 +706,11 @@ try:
 
     p = building()
     p.spawn("rehearse:worker")
-    assert "stopped without a pass" in ctx(exhausted(p)) and p.state()["strikes"] == 1 and p.state()["review_due"]
+    assert "stopped without a pass" in ctx(exhausted(p)) and len(p.state()["strike_log"]) == 1 and p.state()["review_due"]
     p = one_stage()
     p.spawn("rehearse:worker")
-    assert blocked(p.stop_only("rehearse:worker"), "search first") and p.state()["strikes"] == 0
-    assert "no ending" in ctx(exhausted(p)) and p.state()["strikes"] == 1
+    assert blocked(p.stop_only("rehearse:worker"), "search first") and len(p.state()["strike_log"]) == 0
+    assert "no ending" in ctx(exhausted(p)) and len(p.state()["strike_log"]) == 1
     assert p.state()["review_due"]["half"] == "look" and denied(p.spawn("rehearse:worker"))  # the review first
     print("strikes: a stop without the result is recorded once earned; the next worker waits for a review: ok")
 
@@ -717,13 +718,13 @@ try:
     for _ in range(3):
         p.spawn()
         p.verdict(REWORK)
-    assert p.phase() == "build" and p.state()["strikes"] == 3  # a count is never failure
+    assert p.phase() == "build" and len(p.state()["strike_log"]) == 3  # a count is never failure
     assert not denied(p.spawn("rehearse:worker"))  # a REWORK needs no review: the findings are the candidates
     p = building(UN)
     for _ in range(3):
         p.spawn(env=UN)
         p.verdict(REWORK, env=UN)
-    assert p.phase() == "build" and p.state()["strikes"] == 3
+    assert p.phase() == "build" and len(p.state()["strike_log"]) == 3
     print("strikes are records only: three REWORKs leave the stage in build, attended or headless: ok")
 
     # ================= reopening and change =================
@@ -812,8 +813,10 @@ try:
         return p
 
     p = waiting()
-    _, out = p.rehearse("wait", "--change", "--confirmed")  # structural: nobody has answered since the wait began
-    assert blocked(out, "no answer from the user") and p.phase() == "wait" and p.state()["strikes"] == 1, out
+    so, _ = p.rehearse("wait", "--change", "--confirmed")  # structural: nobody has answered since the wait began
+    assert "no answer from the user" in so and p.phase() == "wait" and len(p.state()["strike_log"]) == 1, so
+    out = p.result("wait", ok=True, answer="change")  # and past the command
+    assert blocked(out, "no answer from the user") and p.phase() == "wait", out
     out = p.prompt("maybe later")
     assert p.phase() == "wait" and "wait answer: maybe later" in p.state()["notes"] and "rehearse wait" in ctx(out)
     out = p.ask("what is it waiting for? what's going on?")  # the manager asked "Continue?"; the user asks back
@@ -821,7 +824,7 @@ try:
     p.prompt("change")  # the words alone decide nothing (3.0.0 reopened the stage on them)
     p.ask("stop here")
     s = p.state()
-    assert s["phase"] == "wait" and not s.get("stop_here") and not s["pending_change"] and s["strikes"] == 1, s
+    assert s["phase"] == "wait" and not s.get("stop_here") and not s["pending_change"] and len(s["strike_log"]) == 1, s
     so, _ = p.rehearse("wait", "--change")  # change needs the user's second yes
     assert "--confirmed" in so and p.phase() == "wait" and not p.state()["pending_change"], so
     so, _ = p.rehearse("wait")
@@ -837,7 +840,7 @@ try:
     p = waiting()
     decide(p, "--resume", "--says", "my answer")
     s = p.state()
-    assert s["phase"] == "build" and s["strikes"] == 1 and s["failing_runs"] == 0 and not s["pending_change"]
+    assert s["phase"] == "build" and len(s["strike_log"]) == 1 and s["failing_runs"] == 0 and not s["pending_change"]
     assert not s["start_director"] and "wait decision: resume" in s["notes"] and s["failed"]["answer"] == "resume"
     assert s["wait_log"][-1]["answer"] == "resume" and s["wait_log"][-1]["says"] == "my answer", s["wait_log"]
     p = building()
@@ -846,7 +849,7 @@ try:
     p = waiting()
     decide(p, "--change", "--confirmed")
     s = p.state()
-    assert s["phase"] == "look" and s["strikes"] == 1 and s["pending_change"] and s["reopen"]["why"] == "change"
+    assert s["phase"] == "look" and len(s["strike_log"]) == 1 and s["pending_change"] and s["reopen"]["why"] == "change"
     assert F.code_change(s["fp_activation"], s["fp_phase_entry"]) == ["main.py"]  # a new snapshot
     print("wait: the words decide nothing (a paraphrase, a question, change, stop here); rehearse wait does: ok")
 
@@ -855,7 +858,7 @@ try:
     assert denied(p.spawn()) and p.phase() == "wait"
     p.write("main.py", prog(3))
     p.rehearse("run")  # the manager's own check passes while waiting: not counted, but remembered
-    assert p.phase() == "wait" and p.state()["strikes"] == 1
+    assert p.phase() == "wait" and len(p.state()["strike_log"]) == 1
     _, out = decide(p, "--resume", "--says", "my answer")
     s = p.state()
     assert s["phase"] == "build" and s["start_director"] and "start rehearse:director" in text(out), out
@@ -899,7 +902,7 @@ try:
     p.edit("main.py", prog(3), WORKER)
     so, _ = p.rehearse("run", who=WORKER, filt=cut)
     out = p.returned("rehearse:worker")
-    assert "passed" in ctx(out) and p.state()["strikes"] == 0, (out, so[-300:], p.state()["worker"], p.state()["runs"])
+    assert "passed" in ctx(out) and len(p.state()["strike_log"]) == 0, (out, so[-300:], p.state()["worker"], p.state()["runs"])
     print("a build worker's filtered passing run is no strike: ok")
 
     # ================= 3.0.1: the run folder's own records are written by the plugin only =================
@@ -1011,7 +1014,7 @@ try:
     p.run_collect()
     p.spawn()
     p.verdict(REWORK)  # a strike nobody can log: stays unknown
-    assert p.state()["strikes"] == 1
+    assert len(p.state()["strike_log"]) == 1
     downgrade(p)
     assert denied(p.pre("Edit", file_path=p.j("drafts/x.md")) or {}) is False  # a refusal log that is missing stays missing
     p.spawn("rehearse:worker")  # a worker stop in the old-shaped stage: held like any other, no crash on the missing list
@@ -1041,7 +1044,7 @@ try:
     p.cli("run")
     assert p.state()["runs"] == []
     out = p.returned("rehearse:worker")
-    assert "passed" in ctx(out) and p.state()["strikes"] == 0 and p.state()["runs"][-1]["passing"], out
+    assert "passed" in ctx(out) and len(p.state()["strike_log"]) == 0 and p.state()["runs"][-1]["passing"], out
     p = building()  # the director's own run, its hook call missed: applied at its stop as a director run
     p.write("main.py", prog(3))
     p.spawn()
@@ -1086,7 +1089,7 @@ try:
     p.rehearse("run", who=WORKER)
     s = p.state()
     assert s["runs"][-1]["at"] >= s["worker"]["at"] and any("clock stepped back" in n for n in s["notes"]), s["notes"]
-    assert "passed" in ctx(p.returned("rehearse:worker")) and p.state()["strikes"] == 0
+    assert "passed" in ctx(p.returned("rehearse:worker")) and len(p.state()["strike_log"]) == 0
     p = one_stage()  # a file written during the stage with a modification time from before the stage: still new
     p.write("tool.py", "print('x')\n")
     old = p.state()["started_at"] - 10
@@ -1161,10 +1164,9 @@ try:
     assert p.phase() == "confirm" and p.state()["ending"]["expectations"][0]["value"] == "a: skipped", so
     p.prompt("yes")  # the answers carried over to the re-registered ending: the confirmation is accepted
     assert p.phase() == "build"
-    q = one_stage(UN)  # unattended: nobody is asked, so the call is recorded as not verified
+    q = one_stage(UN)  # headless: nobody is asked, so the call is taken as registered and listed as chosen
     q.rehearse(*END3, "--call", "a: 1", "is a a tool?", env=UN)
-    assert q.phase() == "build" and any("judgment call not put to a person: is a a tool?" in x
-                                        for x in q.state()["not_verified"]), q.state()["not_verified"]
+    assert q.phase() == "build" and any(d["what"] == "judgment call: is a a tool?" for d in q.state()["decisions"])
     print("judgment calls: tied to the check they decide, asked apart from the confirmation, recorded: ok")
 
     # ================= 3.2.0: the wait options: "these checks are wrong" keeps the work =================
@@ -1179,7 +1181,7 @@ try:
     assert "--says" in so and p.phase() == "wait"
     _, out = p.rehearse("wait", "--correct", "--says", "only a: 1 is required")
     s = p.state()
-    assert s["phase"] == "look" and s["reopen"]["why"] == "correct" and s["strikes"] == 1 and not s["pending_change"], out
+    assert s["phase"] == "look" and s["reopen"]["why"] == "correct" and len(s["strike_log"]) == 1 and not s["pending_change"], out
     assert denied(p.pre("Edit", file_path=p.j("main.py")))  # the work stays, and stays locked
     p.rehearse("plan", "--stage", "1", "--stage-def", "only", "fix", "x", "-", "-")
     assert p.state()["stages"][0]["line"] == "print the three lines"  # correct does not rewrite the stage
@@ -1303,7 +1305,7 @@ try:
     _, out = p.rehearse(*S1_END, "--call", "items", "does a draft item count?")
     s = p.state()
     assert s["phase"] == "build" and s["confirmation"]["by"] == "auto" and "not confirmed by a person" in ctx(out), out
-    assert any("judgment call not put to a person: does a draft item count?" in x for x in s["not_verified"])
+    assert any(d["what"] == "judgment call: does a draft item count?" for d in s["decisions"])
     q = Proj({"README.txt": "x\n"})  # headless auto: nothing is asked, a wait is blocked with the next step
     q.prompt(REQ2, UN)
     assert "assumed" in S.next_step(q.state()) and blocked(q.stop(UN), "goal")
@@ -1347,7 +1349,7 @@ try:
     p.returned("rehearse:worker")
     p.rehearse("failed", "--needs", "an api key")  # every candidate of the latest review is tried: accepted
     s = p.state()
-    assert s["phase"] == "wait" and s["failed"]["needs"] == "an api key" and s["strikes"] == 2, s["phase"]
+    assert s["phase"] == "wait" and s["failed"]["needs"] == "an api key" and len(s["strike_log"]) == 2, s["phase"]
     assert "routes tried: 2; reviews: 1; candidates dropped: 1; failed: stage 1: needs an api key" in p.rehearse("job")[0]
     print("the loop: tried needs logged steps; a stop needs a search; a review needs a search and fresh eyes; "
           "failed needs the review's candidates tried or dropped: ok")
@@ -1845,8 +1847,8 @@ try:
     review(p)
     p.rehearse("failed", "--exhausted")
     assert p.phase() == "wait" and p.state()["wait_from"] == "look"
-    _, out = p.rehearse("wait", "--change", "--confirmed")  # structural: the user has not spoken since the wait began
-    assert blocked(out, "no answer from the user") and not p.state()["pending_change"], out
+    so, _ = p.rehearse("wait", "--change", "--confirmed")  # structural: the user has not spoken since the wait began
+    assert "no answer from the user" in so and not p.state()["pending_change"], so
     so, out = decide(p, "--change", "--confirmed")
     s = p.state()
     assert s["pending_change"] and s["phase"] == "look", (out, so[-300:], s["worker"], s.get("user_answer_at"),
@@ -1874,7 +1876,7 @@ try:
     decide(p, "--change", "--confirmed")
     assert p.state()["pending_change"] and not denied(p.spawn("rehearse:worker"))  # the failure was recorded: a new worker
     exhausted(p, route="the feed", outcome="empty feed")  # no ending again: a strike clears the mark
-    assert p.state()["strikes"] == 2 and not p.state()["pending_change"]
+    assert len(p.state()["strike_log"]) == 2 and not p.state()["pending_change"]
     print("pending_change cleared by a passing run, stop here, resume and a strike: ok")
 
     p = final_stage()
@@ -2061,10 +2063,10 @@ try:
 
     p = two_stage()  # a "no" at a stage confirmation: back to look, a worker re-registers
     p.rehearse(*S1_END)
-    entry, strikes = p.state()["fp_phase_entry"], p.state()["strikes"]
+    entry, strikes = p.state()["fp_phase_entry"], len(p.state()["strike_log"])
     out = p.prompt("no, the expected value is wrong\nit should say items: 3 exactly")
     s = p.state()
-    assert s["phase"] == "look" and s["fp_phase_entry"] == entry and s["strikes"] == strikes, s["phase"]
+    assert s["phase"] == "look" and s["fp_phase_entry"] == entry and len(s["strike_log"]) == strikes, s["phase"]
     assert s["prompts"][-1].startswith("no, the expected value is wrong")
     assert "the user said: no, the expected value is wrong" in ctx(out) and "exactly" not in ctx(out), out
     ui = p.spawn("rehearse:worker")["hookSpecificOutput"]["updatedInput"]
@@ -2122,10 +2124,10 @@ try:
     out = q.bash("R=rehearse; $R ending ... ; $R run ; $R job", so, env=UN)
     assert blocked(out, "already passes"), out
     s2 = q.state()
-    assert s2["phase"] == "look" and s2["ending"] is None and not s2.get("runs") and s2["strikes"] == 0, s2["phase"]
+    assert s2["phase"] == "look" and s2["ending"] is None and not s2.get("runs") and len(s2["strike_log"]) == 0, s2["phase"]
     print("a refused ending blocks the rest of the same call: ok")
 
-    for word in ("rehearse job", "REHEARSE status  "):  # typed as a prompt: a status answer, never a new job
+    for word in ("rehearse job", "REHEARSE job  "):  # typed as a prompt: a status answer, never a new job
         q = Proj({})
         out = q.prompt(word)
         assert q.state() is None and "no active rehearse job" in ctx(out), out
@@ -2203,7 +2205,7 @@ try:
     launched(p, "rehearse:director", "bg-r1")
     stopped(p, DIRECTOR, "bg-r1", REWORK)
     s = p.state()
-    assert s["phase"] == "build" and s["findings"] == ["only the sample"] and s["strikes"] == 1, s["phase"]
+    assert s["phase"] == "build" and s["findings"] == ["only the sample"] and len(s["strike_log"]) == 1, s["phase"]
     assert "build stage 1 (start rehearse:worker)" in job_line(p, "next:")
     assert "asks for rework" in job_line(p, "last:")
     p = building()  # a background void: the director again, and the last line names the void

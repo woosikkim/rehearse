@@ -10,7 +10,7 @@ REHEARSE-RESULT <json>, which the plugin's hook records.
                   ... [--unchecked '<taste item>'] [--call '<requirement>' '<the judgment call, as a question>']
   rehearse run [--as-director] [--stage <n>]
   rehearse fetch <url> [curl args]
-  rehearse job          (also: rehearse status)
+  rehearse job
   rehearse tried --route '<name>' --steps S<n>,... --outcome '<what happened>' [--no-websearch '<why none>']
   rehearse review --searched S<n>,... --candidate '<name>' '<how it differs>' ... [--drop '<name>' '<why>' ...]
                   [--no-websearch '<why none>']          (a logged WebSearch step is cited, or the reason recorded)
@@ -39,6 +39,7 @@ import urllib.parse
 PLUGIN = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, os.path.join(PLUGIN, "hooks"))
 import ending as E  # noqa: E402
+import gates as G  # noqa: E402
 import log as L  # noqa: E402
 import state as S  # noqa: E402
 
@@ -300,52 +301,25 @@ def cmd_job(s, argv):
     return result(s["run_id"], "job", ok=True, phase=s["phase"], stage=s.get("stage"), stages_passed=S.passed(s))
 
 
-def _steps(arg):
-    return [x.strip() for x in (arg or "").split(",") if x.strip()]
-
-
 def cmd_tried(s, argv):
     """One route the worker (or the manager, in a one-stage job) tried: the logged steps that tried it, the outcome."""
     ap = argparse.ArgumentParser(prog="rehearse tried")
     ap.add_argument("--route", required=True)
     ap.add_argument("--steps", required=True, help="the logged steps that tried it, S<n>,S<m>")
     ap.add_argument("--outcome", required=True)
-    ap.add_argument("--no-websearch", help="why no WebSearch step is cited (WebSearch unavailable in this session)")
+    ap.add_argument("--no-websearch", help="why no WebSearch step is cited (only with the websearch setting off)")
     try:
         a = ap.parse_args(argv)
     except SystemExit:
         return result(s["run_id"], "tried", ok=False, error="bad arguments: --route, --steps S<n>,..., --outcome")
-    steps = _steps(a.steps)
-    logged = {r["step"] for r in L.records(s["run_folder"]) if "step" in r}
-    missing = [x for x in steps if x not in logged]
-    why = _no_websearch(s, a.no_websearch)
-    if not steps or missing:
-        why = "every step must be in the log: %s" % (", ".join(missing) or "none given")
+    steps = G.steps(a.steps)
+    why = G.tried(s, steps, a.no_websearch)
     if why:
         print(why)
         return result(s["run_id"], "tried", ok=False, error=why)
     print("tried: %s (%s): %s" % (a.route, ", ".join(steps), a.outcome))
     return result(s["run_id"], "tried", ok=True, route=a.route, steps=steps, outcome=a.outcome,
                   no_websearch=a.no_websearch)
-
-
-def _no_websearch(s, reason):
-    """A reason for citing no WebSearch is accepted only when the job was activated with WebSearch declared
-    unavailable (the websearch setting; REHEARSE_WEBSEARCH=0), and never when the log shows one was made."""
-    if not reason:
-        return None
-    if s.get("websearch", True):
-        return ("--no-websearch is refused: WebSearch is available in this environment (the websearch setting; "
-                "REHEARSE_WEBSEARCH=0 declares it unavailable); cite a WebSearch step")
-    web = L.search_steps(s["run_folder"], web=True)
-    if web:
-        return "--no-websearch is refused: WebSearch was used in this run (%s); cite a WebSearch step" % ", ".join(sorted(web))
-    return None
-
-
-def _tried_with_search(s):
-    web = L.search_steps(s["run_folder"], web=True)
-    return any(S.cites_search(x, web) for x in s.get("tried") or [])
 
 
 def cmd_review(s, argv):
@@ -355,37 +329,22 @@ def cmd_review(s, argv):
                                                        "fetch steps alongside")
     ap.add_argument("--candidate", nargs=2, action="append", default=[], metavar=("NAME", "HOW_IT_DIFFERS"))
     ap.add_argument("--drop", nargs=2, action="append", default=[], metavar=("NAME", "WHY_A_VARIANT"))
-    ap.add_argument("--no-websearch", help="why no WebSearch step is cited (WebSearch unavailable in this session)")
+    ap.add_argument("--no-websearch", help="why no WebSearch step is cited (only with the websearch setting off)")
     try:
         a = ap.parse_args(argv)
     except SystemExit:
         return result(s["run_id"], "review", ok=False,
                       error="bad arguments: --searched S<n>,... [--candidate NAME HOW] ... [--drop NAME WHY] ...")
-    searched, problems = _steps(a.searched), []
-    searches = L.search_steps(s["run_folder"])
-    not_search = [x for x in searched if x not in searches]
-    if not searched or not_search:
-        problems.append("every --searched step must be a logged search (a WebSearch or WebFetch call, or rehearse "
-                        "fetch): %s" % (", ".join(not_search) or "none given"))
-    elif not S.cites_search({"searched": searched, "no_websearch": a.no_websearch},
-                            L.search_steps(s["run_folder"], web=True)):
-        problems.append("at least one --searched step must be a logged WebSearch (methods are found by search; a "
-                        "fetch alone is not a search); if WebSearch is unavailable in this session, give the "
-                        "reason with --no-websearch")
-    if _no_websearch(s, a.no_websearch):
-        problems.append(_no_websearch(s, a.no_websearch))
+    searched = G.steps(a.searched)
+    candidates = [{"name": n, "differs": h} for n, h in a.candidate]
     if len(s.get("stages") or []) == 1:
         print("note: in a one-stage job only rehearse:reviewer may record the review; the hook refuses any other")
-    tried = S.tried_names(s)
-    for name, _ in a.candidate:
-        if name.strip().lower() in tried:
-            problems.append("candidate %r names a route already tried; a candidate is something new" % name)
-    if problems:
-        print("review refused:\n" + "\n".join("  " + x for x in problems))
-        return result(s["run_id"], "review", ok=False, error="; ".join(problems))
+    why = G.review(s, searched, candidates, a.no_websearch)
+    if why:
+        print("review refused: " + why)
+        return result(s["run_id"], "review", ok=False, error=why)
     print("review: searched %s; candidates %d; dropped %d" % (", ".join(searched), len(a.candidate), len(a.drop)))
-    return result(s["run_id"], "review", ok=True, searched=searched,
-                  candidates=[{"name": n, "differs": h} for n, h in a.candidate],
+    return result(s["run_id"], "review", ok=True, searched=searched, candidates=candidates,
                   dropped=[{"name": n, "why": w} for n, w in a.drop], no_websearch=a.no_websearch)
 
 
@@ -400,17 +359,7 @@ def cmd_failed(s, argv):
         a = ap.parse_args(argv)
     except SystemExit:
         return result(s["run_id"], "failed", ok=False, error="bad arguments: --needs '<thing>' | --exhausted [--summary]")
-    why = None
-    if s["phase"] not in ("look", "build"):
-        why = "rehearse failed is recorded in look or build; the job is in %s" % s["phase"]
-    elif not s.get("reviews"):
-        why = "no review is recorded for %s: review the log first (rehearse review)" % S.label(s)
-    elif S.untried(s):
-        why = "candidates of the latest review are neither tried nor dropped: %s" % ", ".join(
-            c["name"] for c in S.untried(s))
-    elif not _tried_with_search(s):
-        why = ("failed is recorded only after at least one route was tried, recorded, and cites a logged WebSearch "
-               "(or a recorded --no-websearch reason)")
+    why = G.failed(s)
     if why:
         print(why)
         return result(s["run_id"], "failed", ok=False, error=why)
@@ -432,22 +381,7 @@ def cmd_wait(s, argv):
         return result(s["run_id"], "wait", ok=False, error="one of --stop-here, --resume --says '<the user's words>', "
                                                           "--correct --says '<the user's words>', --change --confirmed")
     answer = "stop here" if a.stop_here else "resume" if a.resume else "correct" if a.correct else "change"
-    why = None
-    if answer != "stop here" and s["phase"] != "wait":
-        why = "rehearse wait is accepted while the stage waits; the job is in %s" % s["phase"]
-    elif answer in ("correct", "resume") and not (a.says or "").strip():
-        why = ("give the user's words with --says: %s; they are recorded with the decision" % (
-            "which checks are wrong and what is right (correct keeps the work and changes only the failing checks)"
-            if answer == "correct" else "what they gave or decided"))
-    elif answer in ("correct", "resume") and not S.said(s, a.says, S.question_since(s)):
-        why = ("--says must be the user's words, word for word, from an answer recorded since the wait began; "
-               "not a paraphrase")
-    elif answer == "correct" and not S.failing(s):
-        why = "correct has nothing to apply: no failing check is recorded for %s" % S.label(s)
-    elif answer == "change" and not a.confirmed:
-        why = ("change redoes %s from the look: a look worker, the ending registered and confirmed again, then the "
-               "build and the director. Put that to the user as one yes-or-no question, and run this again with "
-               "--confirmed only after an explicit yes" % S.label(s))
+    why = G.wait(s, answer, a.says, a.confirmed)
     if why:
         print(why)
         return result(s["run_id"], "wait", ok=False, error=why)
@@ -466,17 +400,8 @@ def cmd_wrong(s, argv):
         a = ap.parse_args(argv)
     except SystemExit:
         return result(s["run_id"], "wrong", ok=False, error="bad arguments: --check, --evidence S<n>,..., --propose")
-    steps = _steps(a.evidence)
-    logged = {r["step"] for r in L.records(s["run_folder"]) if "step" in r}
-    missing = [x for x in steps if x not in logged]
-    bad = [r.get("requirement") for r in S.failing(s)]
-    why = None
-    if s["phase"] not in ("look", "build"):
-        why = "rehearse wrong is recorded in look or build; the job is in %s" % s["phase"]
-    elif not steps or missing:
-        why = "every evidence step must be in the log: %s" % (", ".join(missing) or "none given")
-    elif a.check not in bad:
-        why = "wrong names a check the last run failed: %s" % (", ".join(bad) or "none recorded")
+    steps = G.steps(a.evidence)
+    why = G.wrong(s, a.check, steps)
     if why:
         print(why)
         return result(s["run_id"], "wrong", ok=False, error=why)
@@ -487,14 +412,10 @@ def cmd_wrong(s, argv):
 def cmd_irreversible(s, argv):
     """The step the user OK'd up front runs once, here, after the final pass; never inside an ending, never twice."""
     ir = s.get("irreversible")
-    why = None
-    if not ir or not ir.get("ok") or s["phase"] != "done.passed":
-        why = "rehearse irreversible runs only the step the user OK'd, after the final pass (%s; phase %s)" % (
-            S.irreversible_text(s), s["phase"])
-    else:  # the hook records the run; until it has, the command's own records say whether it already ran
+    why = G.irreversible(s)
+    if not why:  # the hook records the run; until it has, the command's own records say whether it already ran
         earlier, _ = L.new_results(s["run_folder"], 0)
-        if ir.get("ran") or any(r.get("kind") == "irreversible" and r.get("ok") and r.get("run") == s["run_id"]
-                                for r in earlier):
+        if any(r.get("kind") == "irreversible" and r.get("ok") and r.get("run") == s["run_id"] for r in earlier):
             why = "the irreversible step already ran once; it never runs twice"
     if why:
         print(why)
@@ -548,7 +469,7 @@ def cmd_stage(s, argv):
 def main():
     global FOLDER
     cmds = {"plan": cmd_plan, "ending": cmd_ending, "run": cmd_run, "fetch": cmd_fetch, "job": cmd_job,
-            "status": cmd_job, "wait": cmd_wait, "wrong": cmd_wrong, "stage": cmd_stage, "tried": cmd_tried,
+            "wait": cmd_wait, "wrong": cmd_wrong, "stage": cmd_stage, "tried": cmd_tried,
             "review": cmd_review, "failed": cmd_failed, "irreversible": cmd_irreversible, "feedback": None}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)

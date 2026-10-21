@@ -208,7 +208,7 @@ rehearse plan --goal <item> request|answer|assumed '<text>' ... --stage-def <nam
 rehearse ending [--job] --cmd '<cmd>' [--tests '<cmd>'] --expect '<requirement>' <check> <value> --cite <source> ... [--unchecked '<item>'] [--call '<requirement>' '<question>']
 rehearse run [--as-director] [--stage <n>]
 rehearse fetch <url> [curl args]
-rehearse job          (also: rehearse status)
+rehearse job
 rehearse tried --route '<name>' --steps S<n>,... --outcome '<what happened>' [--no-websearch '<why none>']
 rehearse review --searched S<n>,... --candidate '<name>' '<how it differs>' ... [--drop '<name>' '<why>' ...] [--no-websearch '<why none>']
 rehearse failed --needs '<the one thing>' | --exhausted [--summary '<text>']

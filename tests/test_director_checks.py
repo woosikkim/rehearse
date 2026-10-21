@@ -180,7 +180,7 @@ try:
     before = p.state()
     p.verdict(PASS, agent_type="rehearse:rehearser")  # a foreign agent changes nothing
     after = p.state()
-    assert (after["phase"], after["verdicts"], after["strikes"]) == ("judge", [], 0), after["phase"]
+    assert (after["phase"], after["verdicts"], len(after["strike_log"])) == ("judge", [], 0), after["phase"]
     p.verdict(PASS)
     s = p.state()
     assert s["phase"] == "done.passed" and s["verdicts"][-1]["verdict"] == "PASS"
@@ -188,9 +188,9 @@ try:
     p = in_work()
     p.spawn()
     p.verdict("not quite.\n" + REWORK)
-    assert "next: build stage 1" in p.rehearse("status")[0]  # what to do now, from the command
+    assert "next: build stage 1" in p.rehearse("job")[0]  # what to do now, from the command
     s = p.state()
-    assert s["phase"] == "build" and s["strikes"] == 1 and s["findings"] == ["only the sample input is handled"]
+    assert s["phase"] == "build" and len(s["strike_log"]) == 1 and s["findings"] == ["only the sample input is handled"]
 
     p = in_work(git=False)
     p.spawn()
@@ -201,7 +201,7 @@ try:
 
     p = rejected_three_times({"REHEARSE_CONFIRM_ENDING": "0"})
     s = p.state()
-    assert s["phase"] == "build" and s["strikes"] == 3, s["phase"]  # a count is never failure (4.0.0)
+    assert s["phase"] == "build" and len(s["strike_log"]) == 3, s["phase"]  # a count is never failure (4.0.0)
     print("verdict: ok")
 
     # ---------------- stop matrix ----------------

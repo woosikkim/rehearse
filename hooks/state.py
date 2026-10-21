@@ -37,7 +37,7 @@ def fresh_stage(fp, at=None):
             "fp_phase_entry": fp, "director_runs": [], "findings": None, "verdicts": [], "spawn_fingerprint": None,
             "config_edits": [], "started_at": at or time.time(), "runs": [], "failing_runs": 0, "fewest_failing": None,
             "direct_pending": False, "project_edits_since_run": 0, "code_edits_since_run": 0, "relocks": [],
-            "strikes": 0, "pending_change": False, "reopen": None, "redo": None, "worker": None,
+            "pending_change": False, "reopen": None, "redo": None, "worker": None,
             "spawn": None, "workers": 0, "start_director": False, "strike_log": [], "wait_log": [], "wrongs": [],
             "corrections": [], "tried": [], "reviews": [], "review_due": None, "failed": None, "reviewer": None}
 
@@ -55,6 +55,11 @@ def now(cur):
     t = max(t, last + 1e-6)
     cur["clock"] = t
     return t
+
+
+def strikes(s):
+    """The stage's strike count, from its log; a job file from before 3.1.0 kept a counter and no log."""
+    return len(s["strike_log"]) if s.get("strike_log") is not None else s.get("strikes", "not recorded")
 
 
 def cites_search(x, web):
@@ -279,8 +284,8 @@ def said(s, text, since=0):
 def job_text(s):
     """What `rehearse job` prints, and what the hook answers when the user types it as a prompt."""
     stages = s.get("stages") or []
-    lines = ["job %s: phase %s, %s, strikes %d, failing runs %d" % (
-        s["run_id"], s["phase"], where(s), s.get("strikes", 0), s.get("failing_runs", 0))]
+    lines = ["job %s: phase %s, %s, strikes %s, failing runs %d" % (
+        s["run_id"], s["phase"], where(s), strikes(s), s.get("failing_runs", 0))]
     if s["phase"] == "wait":
         lines.append(failing_checks(s))
     lines += ["  stage %d %s (%s)%s: %s" % (i, st.get("name"), st.get("kind"), ", passed" if st.get("passed") else "",
@@ -327,8 +332,9 @@ def process_lines(s):
     exact = [r for r in steps if "rehearse" in r]
     ran = sum(int(r.get("rehearse") or 0) for r in exact)
     rec = sum(1 for r in records if "at" in r)
-    by_text = sum(len(re.findall(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:plan|ending|run|fetch|job|status|wait|wrong|irreversible|feedback|"
-                                 r"stage|tried|review|failed)\b", r.get("cmd") or "")) for r in steps if "rehearse" not in r)
+    # frozen at the 3.0.1 command set: this counts only records from before 3.1.0, which hold no later command
+    by_text = sum(len(re.findall(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:plan|ending|run|fetch|job|status|stuck|stage)\b",
+                                 r.get("cmd") or "")) for r in steps if "rehearse" not in r)
     commands = "- rehearse commands: %d; results recorded: %d; without a record: %d" % (ran, rec, max(ran - rec, 0))
     if rec > ran:  # a script (python3 - <<EOF ...) that calls rehearse in a loop is not countable from its text
         commands += "; results from commands inside scripts, not counted: %d" % (rec - ran)
