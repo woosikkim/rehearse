@@ -222,9 +222,33 @@ def confirm_job(cur):
     return "[rehearse] the user confirmed the job. Next: stage %d's look" % cur["stage"]
 
 
-def unanswered_calls(cur):
+def open_calls(cur):
+    """The judgment calls a confirmation may be asked after: the plan's (asked up front, the irreversible OK among
+    them), then the ending's that is being confirmed."""
     e = cur.get("job_ending") if cur["phase"] == "job-confirm" else cur.get("ending")
-    return [c for c in (e or {}).get("calls") or [] if c.get("answer") is None]
+    return list(cur.get("calls") or []) + list((e or {}).get("calls") or [])
+
+
+def unanswered_calls(cur):
+    return [c for c in open_calls(cur) if c.get("answer") is None]
+
+
+def record_call(cur, c, a, by="user"):
+    """The answer to a judgment call, word for word; the irreversible OK is a call whose yes is the OK."""
+    c.update(answer=a, by=by, at=S.now(cur))
+    if c.get("kind") == "irreversible" and cur.get("irreversible"):
+        yes = a.strip().lower().rstrip(".!") in AFFIRMATIVE
+        cur["irreversible"].update(ok=yes, says=a, at=S.now(cur))
+        if by != "user":
+            chosen(cur, "irreversible step: %s" % cur["irreversible"]["what"], "left for you, not run",
+                   "nobody could give the OK")
+    elif by != "user":
+        chosen(cur, "judgment call: %s" % c["question"], a, "taken as registered, nobody was asked")
+
+
+def chosen(cur, what, taken, reason):
+    """A decision taken without the user: the report's "chosen on your behalf" list is written from these."""
+    cur.setdefault("decisions", []).append({"what": what, "taken": taken, "reason": reason, "at": S.now(cur)})
 
 
 def call_note(cur):
@@ -240,7 +264,7 @@ def confirm_answer(cur, a, low):
     ph = cur["phase"]
     left = unanswered_calls(cur) if not S.headless(cur) else []
     if left:  # a prompt while a call is open answers the first open call (a headless manager asks them in order)
-        left[0]["answer"] = a
+        record_call(cur, left[0], a)
         return "[rehearse] recorded as the answer to the judgment call %r; the confirmation is not asked yet. %s" % (
             left[0]["question"], call_note(cur))
     yes = low in AFFIRMATIVE
@@ -250,6 +274,8 @@ def confirm_answer(cur, a, low):
         return confirm_job(cur)
     if yes:
         cur["phase"] = "build"
+        if len(cur["stages"]) == 1 and cur.get("job_confirmation") is None:  # the stage ending is the job ending
+            cur["job_confirmation"] = cur["confirmation"]
         return "[rehearse] the user confirmed the ending; edits are open." + (
             " It already passes: start rehearse:director" if cur["start_director"] else "")
     if ph == "confirm":  # a "no": back to look for the same stage, where a worker may re-register the ending
@@ -316,7 +342,8 @@ def on_prompt(p, sid):
     mode, headless, task, refusal = activation_mode(prompt, m)
     if refusal:
         return {"systemMessage": "rehearse: " + refusal}
-    s = S.new_run(sid, root, prompt, F.fingerprint(root), mode, headless, task)
+    websearch = str(option("WEBSEARCH", "1")).strip().lower() not in ("0", "false", "no", "off")
+    s = S.new_run(sid, root, prompt, F.fingerprint(root), mode, headless, task, websearch)
     said = S.mode_text(s)
     text = instruction("manager.md") + "\n[rehearse] job %s activated\n%s\ncommand: rehearse (if not on PATH: %s)" % (
         s["run_id"], said, BIN)
@@ -463,6 +490,11 @@ def on_pre(p, sid):
         if tool == "Bash" and any(seg["targets"] or seg["outputs"]
                                   for seg in P.parse(str(tin.get("command") or ""), cwd)):
             return deny(s, "the reviewer reads and searches only; this command writes files", "reviewer edit")
+    ir = s.get("irreversible")
+    if tool == "Bash" and ir and ir["cmd"] in str(tin.get("command") or "") and not re.search(
+            r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:irreversible|plan)\b", str(tin.get("command") or "")):
+        return deny(s, "the irreversible step (%s) runs only through rehearse irreversible, once, after the final "
+                       "pass; the words recorded in the plan decide what counts as the step" % ir["cmd"], "irreversible")
     locked = s["phase"] in S.LOCKED
     outs = declared(s) if locked else set()
     # the plugin's own records in the run folder are written by the plugin only, in every phase, for any caller:
@@ -570,7 +602,20 @@ def apply_plan(cur, res, msgs):
         return False
     cur.update(goal=res["goal"], assumptions=res["assumptions"], blockers=res["blockers"], stages=res["stages"],
                stages_from="request" if res.get("from_request") else "manager", job_ending=None,
-               job_confirmation=None, confirm_return=None)
+               job_confirmation=None, confirm_return=None,
+               calls=[dict(c, answer=None, by=None, at=None) for c in res.get("calls") or []],
+               irreversible=dict(res["irreversible"], ok=None, says=None, ran=None) if res.get("irreversible") else None)
+    if cur["irreversible"]:  # the OK is asked up front as a call of its own; its yes is the OK, recorded word for word
+        cur["calls"].append({"kind": "irreversible", "taken": "no: left for you",
+                             "question": "May the irreversible step run once after the final pass: %s (command: %s)? "
+                                         "It cannot be undone." % (cur["irreversible"]["what"], cur["irreversible"]["cmd"]),
+                             "answer": None, "by": None, "at": None})
+    for k, g in (res["goal"] or {}).items():
+        if g.get("source") == "assumed":
+            chosen(cur, "goal item %s" % k, g.get("text"), "assumed: the request is silent and nobody was asked")
+    if S.headless(cur):  # nobody can answer: every call is taken as registered, and recorded as chosen
+        for c in cur["calls"]:
+            record_call(cur, c, c.get("taken") or "", by="auto")
     if len(cur["stages"]) == 1:
         start_stage(cur, 1)
         cur["phase"] = "look"
@@ -592,6 +637,7 @@ def set_job_ending(cur, e, msgs):
         return False
     if S.headless(cur):  # nobody can answer; an interactive auto job confirms the job up front like ask
         cur["job_confirmation"] = auto_mark()
+        chosen(cur, "the job ending", "accepted as registered", "headless: nobody can confirm it")
         if not from_look:
             start_stage(cur, 1)
             cur["phase"] = "look"
@@ -620,6 +666,11 @@ def apply_ending(cur, res, msgs):
         if changed:
             msgs.append("code changed while edits were locked: %s; put them back, then register" % ", ".join(changed))
             return True
+    ir = cur.get("irreversible")
+    if ir and (ir["cmd"] in str(res["ending"].get("cmd") or "") or ir["cmd"] in str(res["ending"].get("tests") or "")):
+        msgs.append("the irreversible step (%s) is never inside an ending command: an ending runs on every check "
+                    "and every director rerun; it runs once through rehearse irreversible after the final pass" % ir["cmd"])
+        return True
     already = bool(res.get("all_pass"))
     if already and (job or not ro):
         msgs.append("the ending shows nothing wrong: every expectation already passes. An ending must fail before "
@@ -656,9 +707,16 @@ def apply_ending(cur, res, msgs):
     if S.final(cur):
         cur["job_ending"] = e
     calls = e.get("calls") or []
-    if S.auto(cur):  # auto: a stage ending found mid-run is accepted as registered, and recorded as such
+    # auto: a stage ending found mid-run is accepted as registered and recorded as chosen; a one-stage job's first
+    # ending is its job ending, confirmed up front like a plan (headless: nobody can)
+    up_front = len(cur["stages"]) == 1 and cur.get("job_confirmation") is None and not S.headless(cur)
+    if S.auto(cur) and not up_front:
         cur["not_verified"] += ["judgment call not put to a person: %s (decides: %s)" % (c["question"], c["requirement"])
                                 for c in calls]
+        for c in calls:
+            record_call(cur, c, "as registered: %s" % c["requirement"], by="auto")
+        chosen(cur, "%s ending" % S.label(cur), "accepted as registered",
+               "headless: nobody can confirm it" if S.headless(cur) else "auto: found after the up-front questions")
         cur.update(confirmation=auto_mark(), phase="build")
         msgs.append("ending registered and accepted (auto: not confirmed by a person); edits are open"
                     + ("; it already passes: start rehearse:director" if already else ""))
@@ -796,9 +854,16 @@ def apply_wrong(cur, res, msgs):
 
 
 def no_websearch_refused(cur, res, msgs):
-    """A recorded reason for citing no WebSearch is refused when the log shows one was made in this run."""
+    """A recorded reason for citing no WebSearch is accepted only when the websearch setting declared the tool
+    unavailable at activation (websearch off, REHEARSE_WEBSEARCH=0), and never when the log shows one was made."""
+    if not res.get("no_websearch"):
+        return False
     web = L.search_steps(cur["run_folder"], web=True)
-    if res.get("no_websearch") and web:
+    if cur.get("websearch", True):
+        msgs.append("--no-websearch is refused: WebSearch is available in this environment (the websearch setting; "
+                    "REHEARSE_WEBSEARCH=0 declares it unavailable); cite a WebSearch step")
+        return True
+    if web:
         msgs.append("--no-websearch is refused: WebSearch was used in this run (%s); cite a WebSearch step"
                     % ", ".join(sorted(web)))
         return True
@@ -864,9 +929,25 @@ def apply_failed(cur, res, msgs):
     return False
 
 
+def apply_irreversible(cur, res, msgs):
+    """The OK'd step ran once through its own command, after the final pass; a second run is refused."""
+    ir = cur.get("irreversible")
+    if not ir or not ir.get("ok") or cur["phase"] != "done.passed":
+        msgs.append("rehearse irreversible runs only the step the user OK'd, after the final pass (%s; phase %s)"
+                    % (S.irreversible_text(cur), cur["phase"]))
+        return True
+    if ir.get("ran"):
+        msgs.append("the irreversible step already ran once (rc %s); it never runs twice" % ir["ran"].get("rc"))
+        return True
+    ir["ran"] = {"at": S.now(cur), "rc": res.get("rc"), "out": L.trim(str(res.get("stdout") or ""))}
+    msgs.append("the irreversible step ran once (rc %s): say so in report.md, then finish" % res.get("rc"))
+    return False
+
+
 def apply_result(cur, res, msgs):
     kind = res.get("kind")
-    if not res.get("ok") and kind in ("plan", "ending", "run", "wait", "wrong", "tried", "review", "failed"):
+    if not res.get("ok") and kind in ("plan", "ending", "run", "wait", "wrong", "tried", "review", "failed",
+                                      "irreversible"):
         return False
     if kind == "tried":
         return apply_tried(cur, res, msgs)
@@ -882,6 +963,8 @@ def apply_result(cur, res, msgs):
         return apply_run(cur, res, msgs)
     if kind == "wait":
         return apply_wait(cur, res, msgs)
+    if kind == "irreversible":
+        return apply_irreversible(cur, res, msgs)
     if kind == "wrong":
         return apply_wrong(cur, res, msgs)
     if kind == "fetch" and res.get("ok") and res.get("fixture"):
@@ -994,13 +1077,12 @@ def on_post(p, sid):
                     user_said(cur, a)
                 return None
             # a judgment call asked word for word is answered here, never taken as the confirmation
-            e = cur.get("job_ending") if cur["phase"] == "job-confirm" else cur.get("ending")
-            calls = (e or {}).get("calls") or [] if cur["phase"] in ("confirm", "job-confirm") else []
+            calls = open_calls(cur) if cur["phase"] in ("confirm", "job-confirm") else []
             rest = []
             for q, a in answers.items():
                 hit = [c for c in calls if c["question"] and c["question"] in q]
                 for c in hit:
-                    c["answer"] = a
+                    record_call(cur, c, a)
                     cur["prompts"].append(a)
                     user_said(cur, a)
                 if not hit:
@@ -1222,6 +1304,8 @@ def on_stop(p, sid):
     if ph == "done.not_fixed" or s.get("stop_here"):
         if not (first or "").startswith("not fixed"):
             nxt = 'write report.md starting with "not fixed"'
+    elif ph == "done.passed" and S.irreversible_due(s):
+        nxt = S.next_step(s)
     elif ph == "done.passed" and first is None:
         nxt = "write report.md, then finish"
     elif ph in ("build", "judge", "done.passed") and first is not None:

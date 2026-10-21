@@ -33,6 +33,18 @@
       "description": "The model the director runs on.",
       "default": "opus"
     },
+    "reviewer_model": {
+      "type": "string",
+      "title": "Reviewer model",
+      "description": "The model the reviewer (fresh eyes on a stopped worker's log) runs on; the director's by default.",
+      "default": "opus"
+    },
+    "websearch": {
+      "type": "boolean",
+      "title": "WebSearch available",
+      "description": "Whether the WebSearch tool is available in this environment. A tried route or a review must cite a logged WebSearch; only when this is off may a record carry --no-websearch '<reason>' instead.",
+      "default": true
+    },
     "worker_model": {
       "type": "string",
       "title": "Worker model",

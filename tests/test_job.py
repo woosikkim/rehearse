@@ -1387,30 +1387,60 @@ try:
     p.rehearse("tried", "--route", "the page, saved", "--steps", p.last_step(), "--outcome", "403", who=WORKER)
     assert blocked(p.stop_only("rehearse:worker"), "none citing a WebSearch")
     so, _ = p.rehearse("tried", "--route", "the export", "--steps", f1, "--outcome", "none",
-                       "--no-websearch", "no WebSearch tool in this session", who=WORKER)
-    assert p.state()["tried"][-1]["no_websearch"] == "no WebSearch tool in this session", so
-    out = p.returned("rehearse:worker")  # the recorded reason stands in for the search
+                       "--no-websearch", "no WebSearch tool in this session", who=WORKER)  # the setting says available
+    assert "WebSearch is available in this environment" in so and len(p.state()["tried"]) == 2, so
+    out = p.result("tried", ok=True, route="x", steps=[f1], outcome="no", no_websearch="none", who=WORKER)  # past the command
+    assert blocked(out, "WebSearch is available in this environment"), out
+    assert blocked(p.stop_only("rehearse:worker"), "none citing a WebSearch")
+    p.search("export methods", WORKER)
+    s1 = p.last_step()
+    p.rehearse("tried", "--route", "the export", "--steps", s1, "--outcome", "none", who=WORKER)
+    out = p.returned("rehearse:worker")
     assert "stopped without a pass" in ctx(out) and p.state()["review_due"], out
     p.spawn("rehearse:reviewer")
     p.fetch("https://x.test/docs", REVIEWERWHO)
     f2 = p.last_step()
     so, _ = p.rehearse("review", "--searched", f2, "--candidate", "the api", "an api", who=REVIEWERWHO)
     assert "must be a logged WebSearch" in so and p.state()["reviews"] == [], so
-    p.search("export methods", REVIEWERWHO)
-    s1 = p.last_step()
     so, _ = p.rehearse("review", "--searched", f2, "--no-websearch", "none here", "--candidate", "the api", "an api",
-                       who=REVIEWERWHO)  # the log now holds a WebSearch: the reason is refused
-    assert "WebSearch was used in this run" in so and p.state()["reviews"] == [], so
-    _, out = p.rehearse("review", "--searched", f2 + "," + s1, "--candidate", "the api", "an api", who=REVIEWERWHO)
-    assert not blocked(out) and p.state()["reviews"][-1]["searched"] == [f2, s1], out
+                       who=REVIEWERWHO)
+    assert "WebSearch is available in this environment" in so and p.state()["reviews"] == [], so
+    p.search("export apis", REVIEWERWHO)
+    s2 = p.last_step()
+    _, out = p.rehearse("review", "--searched", f2 + "," + s2, "--candidate", "the api", "an api", who=REVIEWERWHO)
+    assert not blocked(out) and p.state()["reviews"][-1]["searched"] == [f2, s2], out
     p.returned("rehearse:reviewer")
-    so, _ = p.rehearse("tried", "--route", "x", "--steps", f1, "--outcome", "no", "--no-websearch", "none")
+    assert "without a web search, reason recorded: 0" in p.rehearse("job")[0]
+    print("a search is a logged WebSearch: a fetch alone holds the stop and fails a review; the escape is refused "
+          "while the setting says WebSearch is available: ok")
+
+    NOWEB = {"REHEARSE_WEBSEARCH": "0"}  # the setting declares WebSearch unavailable: the recorded reason stands in
+    p = building(NOWEB)
+    assert p.state()["websearch"] is False
+    p.spawn("rehearse:worker", env=NOWEB)
+    p.fetch("https://x.test/page", WORKER, NOWEB)
+    f1 = p.last_step()
+    p.rehearse("tried", "--route", "the page", "--steps", f1, "--outcome", "403", who=WORKER, env=NOWEB)
+    assert blocked(p.stop_only("rehearse:worker", NOWEB), "none citing a WebSearch")  # a fetch alone still is not one
+    p.rehearse("tried", "--route", "the export", "--steps", f1, "--outcome", "none", "--no-websearch",
+               "no WebSearch tool in this environment", who=WORKER, env=NOWEB)
+    assert p.state()["tried"][-1]["no_websearch"] == "no WebSearch tool in this environment"
+    out = p.returned("rehearse:worker", NOWEB)
+    assert "stopped without a pass" in ctx(out) and p.state()["review_due"], out
+    p.spawn("rehearse:reviewer", env=NOWEB)
+    p.fetch("https://x.test/docs", REVIEWERWHO, NOWEB)
+    f2 = p.last_step()
+    _, out = p.rehearse("review", "--searched", f2, "--no-websearch", "none here", "--candidate", "the api", "an api",
+                        who=REVIEWERWHO, env=NOWEB)
+    assert not blocked(out) and p.state()["reviews"][-1]["no_websearch"] == "none here", out
+    p.returned("rehearse:reviewer", NOWEB)
+    p.search("export methods", None, NOWEB)  # the log now holds a WebSearch after all: the reason is refused again
+    so, _ = p.rehearse("tried", "--route", "x", "--steps", f1, "--outcome", "no", "--no-websearch", "none", env=NOWEB)
     assert "WebSearch was used in this run" in so
-    out = p.result("tried", ok=True, route="x", steps=[f1], outcome="no", no_websearch="none")  # past the command
+    out = p.result("tried", ok=True, route="x", steps=[f1], outcome="no", no_websearch="none")
     assert blocked(out, "WebSearch was used in this run"), out
-    assert "without a web search, reason recorded: 1" in p.rehearse("job")[0]
-    print("a search is a logged WebSearch: a fetch alone holds the stop and fails a review; a recorded reason stands "
-          "in only while no WebSearch is logged: ok")
+    assert "without a web search, reason recorded: 2" in p.rehearse("job", env=NOWEB)[0]
+    print("with the websearch setting off, a recorded reason stands in for the search, until the log shows one: ok")
 
     p = two_stage()  # two stages: the worker that made the tried records may not review; the manager may
     p.spawn("rehearse:worker")
@@ -1478,6 +1508,145 @@ try:
     assert P.invocations("rehearse stuck --stop-here") == 0
     print("the wait phase: entered by a recorded failure or a wrong check only; stuck, rehearse stuck and max_strikes "
           "are gone: ok")
+
+    # ================= 4.0.0 step 4: plan-level calls, the irreversible OK and its one run, the chosen list =================
+    CALL = ["--call", "does a draft item count?", "no"]
+    IRR = ["--irreversible", "publish the draft", "python3 publish.py"]
+    PUB = {"publish.py": "open('published', 'w').write('x')\n"}
+    OKQ = ("May the irreversible step run once after the final pass: publish the draft (command: python3 publish.py)? "
+           "It cannot be undone.")
+    p = Proj(dict(PUB))
+    p.prompt(REQ2)
+    so, _ = p.rehearse("plan", "--stage", "1", "--stage-def", "collect", "build", "x", "-", "-", *CALL)
+    assert "belong to the whole plan" in so
+    p.rehearse(*PLAN2, *CALL, *IRR)
+    s = p.state()
+    assert s["calls"][0]["question"] == "does a draft item count?" and s["calls"][1]["kind"] == "irreversible", s["calls"]
+    assert s["calls"][1]["question"] == OKQ and s["irreversible"]["cmd"] == "python3 publish.py" and s["irreversible"]["ok"] is None
+    assert [d["what"] for d in s["decisions"]] == ["goal item %s" % k for k in S.GOAL_ITEMS]  # assumed: chosen
+    out = p.pre("Bash", command="python3 publish.py")  # the step runs only through its own command, anywhere
+    assert denied(out) and "runs only through rehearse irreversible" in text(out), out
+    assert not denied(p.pre("Bash", command="rehearse plan --irreversible 'publish the draft' 'python3 publish.py'"))
+    so, _ = p.rehearse("ending", "--job", "--cmd", "python3 publish.py && cat drafts/summary.md", "--expect", "draft",
+                       "contains", "summary: done", "--cite", "request")
+    assert "never inside an ending command" in so and p.state()["job_ending"] is None, so
+    out = p.result("ending", ok=True, job=True, all_pass=False, before={"results": [], "all_pass": False},  # past the command
+                   ending={"cmd": "cat x; python3 publish.py", "tests": None, "expectations": [], "unchecked": [], "calls": []})
+    assert blocked(out, "never inside an ending command") and p.state()["job_ending"] is None, out
+    p.rehearse(*JOB_END)
+    assert p.phase() == "job-confirm"
+    out = p.prompt("yes")  # a prompt while a plan call is open answers the first call, never the confirmation
+    s = p.state()
+    assert s["phase"] == "job-confirm" and s["calls"][0]["answer"] == "yes" and "not asked yet" in ctx(out), out
+    out = p.ask("yes")  # the question tool asked something else while the OK is open: refused
+    assert p.phase() == "job-confirm" and "did not match one word for word" in ctx(out) and OKQ in ctx(out), out
+    out = p.ask_calls({OKQ: "yes"})
+    s = p.state()
+    assert s["irreversible"]["ok"] is True and s["irreversible"]["says"] == "yes" and s["calls"][1]["by"] == "user", s["irreversible"]
+    p.prompt("yes")
+    assert p.phase() == "look" and p.state()["job_confirmation"]["by"] == "user"
+    so, _ = p.rehearse("irreversible")  # before the final pass: refused
+    assert "after the final pass" in so and p.state()["irreversible"]["ran"] is None, so
+    out = p.result("irreversible", ok=True, rc=0)
+    assert blocked(out, "after the final pass") and p.state()["irreversible"]["ran"] is None
+    print("plan calls and the irreversible OK: asked up front word for word, the confirmation waits for them; the "
+          "step is refused in an ending, in any other command and before the final pass: ok")
+
+    p = Proj(dict(PUB, **{"main.py": prog(0)}))  # the OK'd step: once, after the final pass, through its own command
+    p.prompt(REQ3)
+    p.rehearse(*PLAN1, *IRR)
+    p.rehearse(*END3)
+    assert p.phase() == "confirm"
+    p.prompt("yes")  # the OK first
+    assert p.phase() == "confirm" and p.state()["irreversible"]["ok"] is True
+    p.prompt("yes")
+    assert p.phase() == "build" and p.state()["job_confirmation"]["by"] == "user"
+    p.write("main.py", prog(3))
+    p.rehearse("run")
+    p.spawn()
+    p.verdict(PASS)
+    assert p.phase() == "done.passed" and "rehearse irreversible" in p.rehearse("job")[0]
+    p.report("fixed\n\n## Not verified\nnone\n")
+    assert blocked(p.stop(), "rehearse irreversible")  # OK'd and not run yet: the Stop names it
+    so, _ = p.rehearse("irreversible")
+    s = p.state()
+    assert "ran once" in so and s["irreversible"]["ran"]["rc"] == 0 and os.path.exists(p.j("published")), (so, s["irreversible"])
+    os.remove(p.j("published"))
+    so, _ = p.rehearse("irreversible")  # a second run is refused by the command, and past it
+    assert "never runs twice" in so and not os.path.exists(p.j("published")), so
+    out = p.result("irreversible", ok=True, rc=0)
+    assert blocked(out, "never runs twice") and p.state()["irreversible"]["ran"] == s["irreversible"]["ran"]
+    assert p.stop() is None and p.phase() == "done.passed"
+    rep = open(os.path.join(p.state()["run_folder"], "report.md")).read()
+    assert "irreversible step: publish the draft: OK'd by the user ('yes'), ran once (rc 0)" in rep, rep
+    assert rep.startswith("fixed\n\n## Chosen on your behalf") and "- goal item purpose: the job works (assumed" in rep, rep
+    print("the OK'd irreversible step runs once through rehearse irreversible after the final pass; never twice: ok")
+
+    p = Proj(dict(PUB, **{"main.py": prog(0)}))  # not OK'd: left for the user
+    p.prompt(REQ3)
+    p.rehearse(*PLAN1, *IRR)
+    p.rehearse(*END3)
+    p.prompt("no, leave publishing to me")
+    assert p.state()["irreversible"]["ok"] is False and p.phase() == "confirm"
+    p.prompt("yes")
+    p.write("main.py", prog(3))
+    p.rehearse("run")
+    p.spawn()
+    p.verdict(PASS)
+    so, _ = p.rehearse("irreversible")
+    assert "not OK'd, left for the user" in so and not os.path.exists(p.j("published")), so
+    p.report("fixed\n\n## Not verified\nnone\n")
+    assert p.stop() is None
+    assert "irreversible step: publish the draft: not OK'd, left for the user" in open(
+        os.path.join(p.state()["run_folder"], "report.md")).read()
+    print("without the OK the irreversible step never runs and the report says it was left for the user: ok")
+
+    q = Proj(dict(PUB, **{"main.py": prog(0)}))  # headless: calls taken as registered, the OK not given, all listed
+    q.prompt(REQ3, UN)
+    q.rehearse(*PLAN1, *CALL, *IRR, env=UN)
+    s = q.state()
+    assert s["calls"][0]["answer"] == "no" and s["calls"][0]["by"] == "auto" and s["irreversible"]["ok"] is False
+    assert [d["what"] for d in s["decisions"]][4:] == ["judgment call: does a draft item count?",
+                                                       "irreversible step: publish the draft"], s["decisions"]
+    q.rehearse(*END3, env=UN)
+    s = q.state()
+    assert s["phase"] == "build" and s["decisions"][-1]["what"] == "stage 1 ending", s["decisions"][-1]
+    q.write("main.py", prog(3))
+    q.rehearse("run", env=UN)
+    q.spawn(env=UN)
+    q.verdict(PASS, UN)
+    q.report("fixed\n\n## Not verified\nnone\n")
+    assert q.stop(UN) is None
+    rep = open(os.path.join(q.state()["run_folder"], "report.md")).read()
+    assert rep.startswith("fixed\n\n## Chosen on your behalf (written by the plugin from the job file)\n"), rep
+    assert "- judgment call: does a draft item count?: no (taken as registered, nobody was asked)" in rep, rep
+    assert "- irreversible step: publish the draft: left for you, not run (nobody could give the OK)" in rep, rep
+    assert "- stage 1 ending: accepted as registered (headless: nobody can confirm it)" in rep and "## Process" in rep
+    assert "chosen on your behalf: 7; irreversible step: publish the draft: not OK'd, left for the user" in rep, rep
+    print("headless: calls taken as registered, the OK not given, every choice listed after the first line: ok")
+
+    p = Proj({"main.py": prog(0)})  # interactive auto, one stage: the job ending is confirmed up front, after the calls
+    p.prompt("rehearse auto " + REQ3[len("rehearse "):])
+    p.rehearse(*PLAN1, *CALL)
+    p.rehearse(*END3)
+    assert p.phase() == "confirm", p.phase()
+    p.prompt("yes it does")
+    assert p.state()["calls"][0]["answer"] == "yes it does" and p.phase() == "confirm"
+    p.prompt("yes")
+    s = p.state()
+    assert s["phase"] == "build" and s["confirmation"]["by"] == "user" and s["job_confirmation"]["by"] == "user"
+    fail(p, 3)
+    fail(p, 3)
+    assert p.phase() == "look"
+    p.result("fetch", ok=True, fixture="f")
+    p.rehearse("ending", "--cmd", "python3 main.py", "--expect", "a", "contains", "a: 1", "--cite", "request",
+               "--call", "a", "is a a tool?")  # found mid-run: accepted as registered, recorded as chosen
+    s = p.state()
+    assert s["phase"] == "build" and s["confirmation"]["by"] == "auto" and s["ending"]["calls"][0]["answer"] == "as registered: a"
+    assert [d["what"] for d in s["decisions"]][4:] == ["judgment call: is a a tool?", "stage 1 ending"], s["decisions"]
+    assert P.invocations("rehearse irreversible") == 1
+    print("interactive auto, one stage: confirmed up front after the plan's calls; later endings and calls are "
+          "accepted and listed as chosen: ok")
 
     # ================= 3.2.0: stop here is said to end the whole job =================
     p = building()

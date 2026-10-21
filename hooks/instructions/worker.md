@@ -34,7 +34,7 @@ You stop only when everything you found by search or thought of has been tried a
 
 1. Find other methods: from what you know, and by web search with `WebSearch` (`WebFetch`, or `rehearse fetch <url>` for a page you want saved, may follow it; neither counts as the search). Practitioners' write-ups, the target's own docs, feeds, exports and APIs, libraries that do the step.
 2. Try each by hand, as logged steps, the way you look.
-3. Record each one: `rehearse tried --route '<name>' --steps S<n>,S<m> --outcome '<what happened>'`. Every step must be in the log; at least one of your tried routes must cite a logged `WebSearch` step. A stop without that is refused. If `WebSearch` is unavailable in this session, say why on the record: `--no-websearch '<reason>'` (refused when the log shows a WebSearch in this run).
+3. Record each one: `rehearse tried --route '<name>' --steps S<n>,S<m> --outcome '<what happened>'`. Every step must be in the log; at least one of your tried routes must cite a logged `WebSearch` step. A stop without that is refused. Only when the `websearch` setting declares the tool unavailable in this environment may the record carry `--no-websearch '<reason>'` instead; otherwise it is refused.
 4. When all of them are tried, stop. Your final message lists the routes, why each failed, and what would be needed next. The manager reviews your log with fresh eyes and sends the next worker the candidates you missed.
 
 The brake is different: after two failing runs in a row the plugin locks edits and you stop at once for a re-look; that stop needs no search and is not a failure.

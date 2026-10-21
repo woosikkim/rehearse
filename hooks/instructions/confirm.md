@@ -23,7 +23,9 @@ Options: `yes`, `no, the expected value is wrong`, `stop here and write the repo
 
 ## The job (two or more stages)
 
-One question with: the goal items (each marked from the request, from the user's answers, or assumed), the assumptions, the blockers, the stages with their plan lines (and whether they came from the request, with any merge you propose), the worker and director models, and the job ending's command and expectations.
+**The plan's judgment calls first**, each as its own question, word for word as registered with `rehearse plan --call`; the irreversible step's OK among them, as a yes-or-no question ("May the irreversible step run once after the final pass: ...? It cannot be undone."), where only a plain yes is the OK. The plugin refuses the job confirmation while one is open. On a one-stage job the same calls come before the stage confirmation.
+
+Then one question with: the goal items (each marked from the request, from the user's answers, or assumed), the assumptions, the blockers, the stages with their plan lines (and whether they came from the request, with any merge you propose), the worker and director models, and the job ending's command and expectations. In auto, say that nothing more will be asked.
 
 Options: `yes`, `no, change the plan`, `stop here and write the report`.
 

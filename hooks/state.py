@@ -120,6 +120,8 @@ def next_step(s):
         return "register the job ending with rehearse ending --job"
     if ph == "job-confirm":
         return "have the job confirmed: ask the user"
+    if ph == "done.passed" and irreversible_due(s):
+        return "run the irreversible step the user OK'd, once: rehearse irreversible; then write report.md, then finish"
     if ph in ("look", "build") and s.get("review_due"):
         rv = latest_review(s, s["review_due"]["at"])
         if not rv:
@@ -146,6 +148,25 @@ def next_step(s):
             return "start rehearse:director" + (" again" if s.get("verdicts") else "")
         return "build %s (start rehearse:worker), rehearse run until it passes, then start rehearse:director" % label(s)
     return NEXT.get(ph, "see the instructions")
+
+
+def irreversible_due(s):
+    """The user OK'd the irreversible step and it has not run yet."""
+    ir = s.get("irreversible") or {}
+    return bool(ir.get("ok")) and not ir.get("ran")
+
+
+def irreversible_text(s):
+    ir = s.get("irreversible")
+    if not ir:
+        return "none declared"
+    if ir.get("ran"):
+        return "%s: OK'd by the user (%r), ran once (rc %s)" % (ir["what"], ir.get("says"), ir["ran"].get("rc"))
+    if ir.get("ok"):
+        return "%s: OK'd by the user (%r), not run yet" % (ir["what"], ir.get("says"))
+    if ir.get("ok") is False:
+        return "%s: not OK'd, left for the user" % ir["what"]
+    return "%s: the OK was not asked yet" % ir["what"]
 
 
 def failing(s):
@@ -229,7 +250,7 @@ def process_lines(s):
     exact = [r for r in steps if "rehearse" in r]
     ran = sum(int(r.get("rehearse") or 0) for r in exact)
     rec = sum(1 for r in records if "at" in r)
-    by_text = sum(len(re.findall(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:plan|ending|run|fetch|job|status|wait|wrong|"
+    by_text = sum(len(re.findall(r"(?:^|[\s;&|(])(?:\S*rehearse|\$\w+)\s+(?:plan|ending|run|fetch|job|status|wait|wrong|irreversible|"
                                  r"stage|tried|review|failed)\b", r.get("cmd") or "")) for r in steps if "rehearse" not in r)
     commands = "- rehearse commands: %d; results recorded: %d; without a record: %d" % (ran, rec, max(ran - rec, 0))
     if rec > ran:  # a script (python3 - <<EOF ...) that calls rehearse in a loop is not countable from its text
@@ -282,7 +303,18 @@ def process_lines(s):
             "- waits: %s; free-text answers while waiting: %d; checks reported wrong: %d" % (waits, free, wrongs),
             "- corrected checks (%d):%s" % (len(fixes), "\n" + "\n".join(fixes) if fixes else " none"),
             loops,
-            "- relocks: %d" % relocks]
+            "- relocks: %d" % relocks,
+            "- chosen on your behalf: %d; irreversible step: %s" % (len(s.get("decisions") or []), irreversible_text(s))]
+
+
+def chosen_lines(s):
+    """The list the plugin writes right after the report's first line: every decision taken without the user, so
+    they can undo just those."""
+    ds = s.get("decisions") or []
+    if not ds:
+        return []
+    return ["## Chosen on your behalf (written by the plugin from the job file)"] + [
+        "- %s: %s (%s)" % (d.get("what"), d.get("taken"), d.get("reason")) for d in ds]
 
 
 def finish_report(s):
@@ -295,8 +327,12 @@ def finish_report(s):
         return
     if "## Process" in text:
         return
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(("\n" if text.endswith("\n") else "\n\n") + "\n".join(process_lines(s)) + "\n")
+    chosen = chosen_lines(s)
+    if chosen and "## Chosen on your behalf" not in text:
+        first, _, rest = text.partition("\n")
+        text = first + "\n\n" + "\n".join(chosen) + "\n" + rest
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text + ("\n" if text.endswith("\n") else "\n\n") + "\n".join(process_lines(s)) + "\n")
 
 
 def plan_refused(s, n=None):
@@ -450,7 +486,7 @@ def mode_text(s):
     return "ask: the user confirms the goal, the plan and each ending"
 
 
-def new_run(session_id, root, request, fp, mode="ask", headless=False, task=None):
+def new_run(session_id, root, request, fp, mode="ask", headless=False, task=None, websearch=True):
     """A new job in goal. The key stays run_id: stage/client.py and the hook's result matching read it."""
     ts = _stamp()
     try:  # newest() and find_for_cwd() sort by this prefix: it must sort after every earlier job of the session,
@@ -467,9 +503,10 @@ def new_run(session_id, root, request, fp, mode="ask", headless=False, task=None
     os.makedirs(session_dir(session_id), exist_ok=True)
     s = dict(fresh_stage(fp), run_id=run_id, session_id=session_id,
              path=os.path.join(session_dir(session_id), run_id + ".json"), phase="goal", stage=1, root=root,
-             mode=mode, headless=headless, task=task,  # decided at activation; later checks read the job file
+             mode=mode, headless=headless, task=task, websearch=websearch,  # at activation; later checks read the job file
              run_folder=folder, request=request, prompts=[], goal=None, assumptions=[], blockers=[], stages=[],
              stages_from=None, job_ending=None, job_confirmation=None, confirm_return=None, not_verified=[],
+             calls=[], irreversible=None, decisions=[],  # 4.0.0: plan-level calls, the OK'd step, what was chosen
              fixtures=[], notes=[], results_read=0, refusals=[], user_words=[], created_at=time.time(),
              updated_at=time.time())
     _save(s)

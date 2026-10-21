@@ -64,7 +64,7 @@ flowchart LR
 ```
 
 1. **Goal.** The manager needs four things: what the job is for, what you get at the end, what counts as done, and what is out of scope. It asks once, in one set of up to four questions, for whatever your request did not say. Anything it did not ask is written down as an assumption.
-2. **Plan.** The manager takes a quick look at the riskiest parts, such as a login, a paid service or the upload page at the end. Then it splits the job into stages. A stage ends only where the result must be checked before the next step can rely on it, or before a step that cannot be undone.
+2. **Plan.** The manager takes a read-only look at each stage's target, such as a login, a paid service or the upload page at the end, so that what only you can give is asked once, at the start. Then it splits the job into stages. A stage ends only where the result must be checked before the next step can rely on it, or before a step that cannot be undone. Judgment calls it foresees and the step that cannot be undone go into the plan and are put to you, word for word, before you confirm the job.
 3. **You confirm the job.** For two or more stages you see the goal, the assumptions, anything blocking, the stages, the models and the whole-job check, in one question. A one-stage job skips this; its single confirmation also shows the goal and assumptions.
 4. **Look.** For each stage, a worker does the job by hand against the real thing. It runs your program, calls your functions one step at a time in a *stage session* (a Python session where the plugin logs every step), and gets real server responses with the plugin's `fetch` command. Edits are locked while it looks.
 5. **Write the ending.** The *ending* is the command to run and the result it must show. Every expected value has to come from something the worker saw or from your own words. The ending must fail right now, either because it shows the bug or because the program does not exist yet.
@@ -80,7 +80,7 @@ flowchart LR
 
 **When a stage waits for you.** A stage waits only after a recorded failure, a check the real target cannot meet (a worker records it with `rehearse wrong`, with the evidence step and a proposed correction, instead of retrying against it), or an irreversible step without your OK; never because of a count. The manager gives a solution-ready report, names the checks that fail, and asks you once: **give what is needed** (the stage resumes with your answer), **these checks are wrong** (the work stays; only the checks change to match your answer, then the director judges), **redo this stage**, or **stop here**, which ends the whole rehearse job, not just the stage. It says what each one does and costs, and which applies. It records your answer with a command of its own, never by reading your words, and a change is confirmed with you a second time, since it redoes the stage from the look. Headless runs end as `not fixed` wherever they would wait. A blocked step is never faked.
 
-**Steps that cannot be undone.** Publishing, uploading, sending or deleting never runs without your explicit OK. The manager simulates it, or leaves it for you.
+**Steps that cannot be undone.** Publishing, uploading, sending or deleting never runs without your explicit OK. The plan names the step and its exact command; you are asked for the OK up front, as a yes-or-no question, and your words are recorded. With a yes, the step runs once, through the plugin's own command, only after the final pass; the plugin refuses it before that, a second time, inside an ending, and through any other command. Without a yes, the manager simulates it or leaves it for you. Everything chosen without you, such as an assumed goal item, a judgment call taken as registered or an ending accepted without a person, is listed by the plugin right after the report's first line, so you can undo just those.
 
 The plugin enforces two locks. There are no edits before you confirm the ending, and no finishing before the director passes the work or the manager writes an honest `not fixed` report. Files a stage is meant to produce, such as a CSV or a draft, are locked like code. While it is looking, a worker also cannot run a file it has just written; it uses the plugin's own tools instead. Everything else is a reminder.
 
@@ -92,6 +92,8 @@ The plugin enforces two locks. There are no edits before you confirm the ending,
 | `loop_breaker_rounds` | `2` | Failing runs in a row before edits lock again. |
 | `worker_model` | `sonnet` | The model the workers run on. |
 | `director_model` | `opus` | The model the director runs on. Keep the default unless you accept a lighter judge; it is the correctness gate. |
+| `reviewer_model` | the director's | The model the reviewer runs on: fresh eyes on a stopped worker's log. |
+| `websearch` | `true` | Whether the WebSearch tool is available. A tried route and a review must cite a logged WebSearch; only when this is off may a record say why none could be made (`--no-websearch`). Eval cases without WebSearch set `EVAL_REHEARSE_WEBSEARCH=0`. |
 
 Change them in your Claude Code settings file, for example:
 
@@ -101,7 +103,7 @@ Change them in your Claude Code settings file, for example:
 }
 ```
 
-Each one can also be set with an environment variable: `REHEARSE_CONFIRM_ENDING`, `REHEARSE_MAX_STRIKES`, `REHEARSE_LOOP_BREAKER_ROUNDS`, `REHEARSE_WORKER_MODEL`, `REHEARSE_DIRECTOR_MODEL`. In plugin evals, the same names with an `EVAL_` prefix work too.
+Each one can also be set with an environment variable: `REHEARSE_MODE`, `REHEARSE_HEADLESS`, `REHEARSE_WEBSEARCH`, `REHEARSE_LOOP_BREAKER_ROUNDS`, `REHEARSE_WORKER_MODEL`, `REHEARSE_DIRECTOR_MODEL`, `REHEARSE_REVIEWER_MODEL`. In plugin evals, the same names with an `EVAL_` prefix work too. The old `REHEARSE_CONFIRM_ENDING=0` still means auto plus headless.
 
 The Claude Code setting `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` forces every subagent into the foreground for the whole session, with side effects such as turning off background tasks and Ctrl+B; rehearse does not need it.
 
@@ -202,7 +204,7 @@ All of them run [`hooks/rehearse_hook.py`](hooks/rehearse_hook.py), which uses t
 These are on the agent's path while the plugin is enabled ([`bin/rehearse`](bin/rehearse)):
 
 ```
-rehearse plan --goal <item> request|answer|assumed '<text>' ... --stage-def <name> fix|build '<plan line>' <inputs> <outputs> ...
+rehearse plan --goal <item> request|answer|assumed '<text>' ... --stage-def <name> fix|build '<plan line>' <inputs> <outputs> ... [--call '<question>' '<answer taken when nobody can answer>' ...] [--irreversible '<what>' '<command>']
 rehearse ending [--job] --cmd '<cmd>' [--tests '<cmd>'] --expect '<requirement>' <check> <value> --cite <source> ... [--unchecked '<item>'] [--call '<requirement>' '<question>']
 rehearse run [--as-director] [--stage <n>]
 rehearse fetch <url> [curl args]
@@ -212,6 +214,7 @@ rehearse review --searched S<n>,... --candidate '<name>' '<how it differs>' ... 
 rehearse failed --needs '<the one thing>' | --exhausted [--summary '<text>']
 rehearse wrong --check '<requirement>' --evidence S<n>,... --propose '<value>'
 rehearse wait --resume --says '<words>' | --correct --says '<words>' | --change --confirmed | --stop-here
+rehearse irreversible
 rehearse stage start [--python <path>] | step '<code>' | stop
 ```
 

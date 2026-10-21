@@ -17,14 +17,16 @@ A job has four goal items: `purpose`, `deliverable`, `done` (what counts as done
 
 ## 2. The riskiest touchpoints
 
-Before the plan, take a few read-only looks at the riskiest touchpoints only: above all the irreversible last step (is the upload page reachable, does it need a login, what do its terms say), and any login, paid API or captcha the request names. Use `rehearse fetch` and read-only commands. Leave every other target to each stage's own look. A blocker you find goes into the plan with `--blocker`.
+Before the plan, take read-only looks at every stage's target, so that what only the user can give is asked once, at the start: above all the irreversible last step (is the upload page reachable, does it need a login, what do its terms say), and any login, paid API, captcha or borderline judgment the request touches. Use `rehearse fetch` and read-only commands. A blocker you find goes into the plan with `--blocker`; a judgment call you foresee goes in with `--call`; the irreversible step goes in with `--irreversible`.
 
 ## 3. The plan
 
 ```
 rehearse plan --goal purpose request|answer|assumed '<text>' --goal deliverable ... --goal done ... --goal out_of_scope ... \
   --stage-def <name> fix|build '<plan line>' <inputs> <outputs> [--stage-def ...] \
-  [--assume '<text>'] [--blocker '<text>'] [--from-request]
+  [--assume '<text>'] [--blocker '<text>'] [--from-request] \
+  [--call '<judgment call, as one question>' '<the answer taken when nobody can answer>' ...] \
+  [--irreversible '<what the step does>' '<its exact command>']
 ```
 
 - A `request` goal text must appear word for word in the request; an `answer` one in the user's answers. The source is what the report shows.
@@ -32,6 +34,8 @@ rehearse plan --goal purpose request|answer|assumed '<text>' --goal deliverable 
 - When you write the plan yourself, make the stages as coarse as checking allows: a stage boundary goes only where reality must be checked before the next step can rely on it, or before an irreversible step. Never one action per stage.
 - When the request already contains a plan, its steps fix the stages: use them as the stages and add `--from-request`. You may only propose merging steps into fewer stages; a merge takes effect only when the user says yes to it at job confirmation, and never in an auto job.
 - A tool or library the request names is a candidate: put it in the plan line for the worker to try by hand first.
+- A judgment call you foresee (is a draft an item? does the archive count?) goes in with `--call`, as one question, with the answer you would take if nobody could answer. The plugin puts each to the user, word for word, before the job confirmation (on a one-stage job, before the stage confirmation), and refuses the confirmation while one is open; headless, the answer given is taken and listed as chosen on the user's behalf.
+- The irreversible step (publish, upload, send, delete) goes in with `--irreversible '<what it does>' '<its exact command>'`. The plugin asks the user's OK for it up front, as its own yes-or-no question, word for word. With a yes recorded, the step runs once, after the final director's PASS, only through `rehearse irreversible`; a command containing its text is refused anywhere else, inside an ending too, and a second run is refused. Without a yes, it is left for the user. A job may declare one.
 
 ## 4. The job ending (two or more stages)
 
@@ -45,11 +49,11 @@ A one-stage job skips this: its stage ending is the job ending.
 
 ## 5. Job confirmation
 
-Ask the user once, in one question, as `${CLAUDE_PLUGIN_ROOT}/hooks/instructions/confirm.md` shows: the goal items, the assumptions, the blockers, the stages (and whether they came from the request, with any merge you propose), the worker and director models, and the job ending. On a change to a stage before any stage has passed, run `rehearse plan` again; on a change to the ending, `rehearse ending --job` again.
+First the plan's judgment calls and the irreversible OK, each as its own question, word for word as registered (the plugin's note lists them and refuses the confirmation while one is open). Then ask the user once, in one question, as `${CLAUDE_PLUGIN_ROOT}/hooks/instructions/confirm.md` shows: the goal items, the assumptions, the blockers, the stages (and whether they came from the request, with any merge you propose), the worker and director models, and the job ending. On a change to a stage before any stage has passed, run `rehearse plan` again; on a change to the ending, `rehearse ending --job` again. In auto, this is the last time anything is asked: say so.
 
 ## 6. A one-stage job: do it yourself
 
-Start no worker. Do the stage as a worker would: follow `${CLAUDE_PLUGIN_ROOT}/hooks/instructions/worker.md`, then `<kind>-look.md` and `<kind>-build.md` in the same folder (`fix` or `build`). Their lines "you cannot ask the user" and "do not start the director" do not apply to you. Where they say to stop and return, go on here instead: confirm the ending with the user (confirm.md, which on a one-stage job also lists the goal items and assumptions), build, run, start the director (a background launch: section 7), write the report. An irreversible step (publish, upload, send, delete) never runs without the user's explicit OK, also when you do the stage yourself: simulate it, or leave it for the user.
+Start no worker. Do the stage as a worker would: follow `${CLAUDE_PLUGIN_ROOT}/hooks/instructions/worker.md`, then `<kind>-look.md` and `<kind>-build.md` in the same folder (`fix` or `build`). Their lines "you cannot ask the user" and "do not start the director" do not apply to you. Where they say to stop and return, go on here instead: confirm the ending with the user (confirm.md, which on a one-stage job also lists the goal items and assumptions, after the plan's judgment calls and the irreversible OK; in auto too, since this is the job ending, confirmed up front), build, run, start the director (a background launch: section 7), write the report. An irreversible step (publish, upload, send, delete) never runs without the user's recorded OK, also when you do the stage yourself: with the OK, `rehearse irreversible` once after the final pass; without it, simulate it or leave it for the user.
 
 ## 7. Each stage (two or more stages)
 
@@ -81,7 +85,7 @@ Before the next stage's worker starts, you may rewrite the job ending with what 
 The note says `no ending` or `stopped without a pass`. The worker tried and recorded its routes (`rehearse job` lists them). Now:
 
 1. Read the worker's log: `log.md` in the run folder and the tried routes with their steps. Anything not in the log counts as not tried.
-2. Search for the possible methods yourself: from what you know and by web search. A review must cite at least one logged `WebSearch` step; `WebFetch` and `rehearse fetch` steps may be cited alongside it, never alone. If `WebSearch` is unavailable in this session, record why with `--no-websearch '<reason>'` (refused when the log shows a WebSearch in this run).
+2. Search for the possible methods yourself: from what you know and by web search. A review must cite at least one logged `WebSearch` step; `WebFetch` and `rehearse fetch` steps may be cited alongside it, never alone. Only when the `websearch` setting declares the tool unavailable in this environment may a record carry `--no-websearch '<reason>'` instead; otherwise it is refused.
 3. Compare, and name the untried candidates, each tied to the record, with one line on how it differs from every tried route; a trivial variant of something tried is dropped with a reason: `rehearse review --searched S<n>,... --candidate '<name>' '<how it differs>' ... [--drop '<name>' '<why>']` (see `${CLAUDE_PLUGIN_ROOT}/hooks/instructions/review.md`).
 4. Start a new worker (never the one that failed): it gets the candidates and tries them by hand. This repeats while a genuinely new candidate remains.
 5. When a review finds no untried candidate, record the failure: `rehearse failed --exhausted`, or `rehearse failed --needs '<the one thing only the user can give>'` when every route without the user was tried. The plugin refuses `failed` while a candidate is untried, and until at least one tried route cites a logged WebSearch. The stage then waits for the user (section 8); headless, the job ends as `not fixed`.
@@ -96,7 +100,7 @@ A stage waits only after a recorded failure (`rehearse failed`), a check proven 
 
 ## 9. The final stage
 
-After the last stage passes, the job ending runs as a final stage, already in build. Run `rehearse run`, add glue if needed, then start `rehearse:director` (a background launch: section 7); it also reruns every stage's ending. The irreversible last step (publish, upload, send, delete) still never runs without the user's explicit OK: simulate it, or leave it for the user.
+After the last stage passes, the job ending runs as a final stage, already in build. Run `rehearse run`, add glue if needed, then start `rehearse:director` (a background launch: section 7); it also reruns every stage's ending. After its PASS, the irreversible last step runs once with `rehearse irreversible`, only if the user OK'd it up front; the plugin refuses it before the pass, a second time, and through any other command. Without the OK: simulate it, or leave it for the user, and say so in the report.
 
 ## 10. Report
 
@@ -106,6 +110,6 @@ Write `report.md` in the run folder. Its first line is exactly one of:
 - `built, not verified against the real target`
 - `not fixed`
 
-then why, in plain words. Then: one row per stage (plan line, ending, before, after, verdict), each ending stated in the plain sentence confirm.md asks for ("When I run the report for March, it should show 162.50; right now it shows 80.00"), the value right after the verb and the before value in the same sentence, in auto too, since nobody was asked with each chain link and its "Revealed by"; the end-to-end result; what was reused and what was written; what was simulated or stopped before (the upload); the stage whose look found a blocker, and what it did to earlier stages; a **What was collected** section when a stage collected data (what really came back, against what was asked); and a **Not verified** section, `none` if empty. Mark every ending accepted without the user as "not confirmed by a person". List every corrected check (a check changed after the user said it was wrong) with the user's words; the job file's `corrections` holds them. Do not write a Process section: the plugin appends one, computed from the job file, when the job ends.
+then why, in plain words. Then: one row per stage (plan line, ending, before, after, verdict), each ending stated in the plain sentence confirm.md asks for ("When I run the report for March, it should show 162.50; right now it shows 80.00"), the value right after the verb and the before value in the same sentence, in auto too, since nobody was asked with each chain link and its "Revealed by"; the end-to-end result; what was reused and what was written; what was simulated or stopped before (the upload); the stage whose look found a blocker, and what it did to earlier stages; a **What was collected** section when a stage collected data (what really came back, against what was asked); and a **Not verified** section, `none` if empty. Mark every ending accepted without the user as "not confirmed by a person". List every corrected check (a check changed after the user said it was wrong) with the user's words; the job file's `corrections` holds them. Say whether the irreversible step ran, was left for the user, or was not declared. Do not write a Process section or a chosen-on-your-behalf list: the plugin writes both from the job file when the job ends, the list right after the first line (every decision taken without the user: assumed goal items, calls taken as registered, endings accepted without a person), so the user can undo just those.
 
 Leave `.rehearsal/` in place. It is the evidence; the user decides when to delete it.

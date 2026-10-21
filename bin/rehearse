@@ -4,6 +4,8 @@ REHEARSE-RESULT <json>, which the plugin's hook records.
 
   rehearse plan --goal <item> request|answer|assumed '<text>' (x4) --stage-def <name> fix|build '<plan line>' <inputs> <outputs>
                 [--stage-def ...] [--assume '<text>'] [--blocker '<text>'] [--from-request] [--stage <n>]
+                [--call '<judgment call, as a question>' '<answer taken when nobody can answer>' ...]
+                [--irreversible '<what the step does>' '<its command>']   (asked up front; runs once, after the final pass)
   rehearse ending [--job] --cmd '<cmd>' [--tests '<cmd>'] --expect '<requirement>' <check> <value> --cite <citation>
                   ... [--unchecked '<taste item>'] [--call '<requirement>' '<the judgment call, as a question>']
   rehearse run [--as-director] [--stage <n>]
@@ -16,6 +18,7 @@ REHEARSE-RESULT <json>, which the plugin's hook records.
   rehearse wrong --check '<requirement>' --evidence S<n>,... --propose '<value>'   (a check the target cannot meet)
   rehearse wait --resume --says '<the user's words>' | --correct --says '<words>' | --change --confirmed | --stop-here
                   (the user's answer while the stage waits; stop here ends the whole rehearse job)
+  rehearse irreversible      (runs the OK'd irreversible step once, after the final pass; refused otherwise)
 
 goal items: purpose, deliverable, done, out_of_scope; a source of request or answer needs the text word for word
 in the request or in the user's answers. inputs/outputs: comma-separated paths, or - for none.
@@ -131,6 +134,8 @@ def cmd_plan(s, argv):
     ap.add_argument("--blocker", action="append", default=[])
     ap.add_argument("--from-request", action="store_true")
     ap.add_argument("--stage", type=int)
+    ap.add_argument("--call", nargs=2, action="append", default=[], metavar=("QUESTION", "TAKEN_IF_NOBODY_ANSWERS"))
+    ap.add_argument("--irreversible", nargs=2, metavar=("WHAT", "COMMAND"))
     try:
         a = ap.parse_args(argv)
     except SystemExit:
@@ -154,6 +159,12 @@ def cmd_plan(s, argv):
     problems += ["stage %r: the kind is fix or build" % st["name"] for st in stages if st["kind"] not in ("fix", "build")]
     if len(stages) != 1 and a.stage is not None:
         problems.append("--stage <n> takes exactly one --stage-def")
+    if a.stage is not None and (a.call or a.irreversible):
+        problems.append("--call and --irreversible belong to the whole plan, not to --stage <n>")
+    problems += ["--call: the question and the answer taken when nobody can answer are both needed"
+                 for q, taken in a.call if not q.strip() or not taken.strip()]
+    if a.irreversible and not (a.irreversible[0].strip() and a.irreversible[1].strip()):
+        problems.append("--irreversible: what the step does and its command are both needed")
     elif not stages:
         problems.append("a plan needs at least one --stage-def")
     why = S.plan_refused(s, a.stage)
@@ -166,8 +177,14 @@ def cmd_plan(s, argv):
     for i, st in enumerate(stages, a.stage or 1):
         print("stage %d %s (%s): %s; in: %s; out: %s" % (i, st["name"], st["kind"], st["line"],
                                                        ", ".join(st["inputs"]) or "-", ", ".join(st["outputs"]) or "-"))
+    for q, taken in a.call:
+        print("judgment call (asked up front): %s; taken when nobody can answer: %s" % (q, taken))
+    if a.irreversible:
+        print("irreversible step (OK asked up front; runs once after the final pass): %s: %s" % tuple(a.irreversible))
     return result(s["run_id"], "plan", ok=True, goal=goal, stages=stages, assumptions=assumptions,
-                  blockers=a.blocker, from_request=a.from_request, change=a.stage)
+                  blockers=a.blocker, from_request=a.from_request, change=a.stage,
+                  calls=[{"question": q, "taken": taken} for q, taken in a.call],
+                  irreversible={"what": a.irreversible[0], "cmd": a.irreversible[1]} if a.irreversible else None)
 
 
 def cmd_ending(s, argv):
@@ -201,6 +218,11 @@ def cmd_ending(s, argv):
     # user as its own question at confirmation, never as one line among the checks
     problems += ["--call %r: no --expect has that requirement" % r for r, _ in a.call
                  if r not in {x["requirement"] for x in exps}]
+    ir = s.get("irreversible")
+    if ir and (ir["cmd"] in a.cmd or ir["cmd"] in (a.tests or "")):
+        problems.append("the irreversible step (%s) is never inside an ending command: an ending runs on every check "
+                        "and every director rerun; it runs once through rehearse irreversible after the final pass"
+                        % ir["cmd"])
     if problems:
         print("ending refused:\n" + "\n".join("  " + p for p in problems))
         return res(ok=False, error="; ".join(problems))
@@ -306,9 +328,15 @@ def cmd_tried(s, argv):
 
 
 def _no_websearch(s, reason):
-    """A reason for citing no WebSearch is refused when the log shows one was made in this run."""
+    """A reason for citing no WebSearch is accepted only when the job was activated with WebSearch declared
+    unavailable (the websearch setting; REHEARSE_WEBSEARCH=0), and never when the log shows one was made."""
+    if not reason:
+        return None
+    if s.get("websearch", True):
+        return ("--no-websearch is refused: WebSearch is available in this environment (the websearch setting; "
+                "REHEARSE_WEBSEARCH=0 declares it unavailable); cite a WebSearch step")
     web = L.search_steps(s["run_folder"], web=True)
-    if reason and web:
+    if web:
         return "--no-websearch is refused: WebSearch was used in this run (%s); cite a WebSearch step" % ", ".join(sorted(web))
     return None
 
@@ -454,6 +482,26 @@ def cmd_wrong(s, argv):
     return result(s["run_id"], "wrong", ok=True, check=a.check, evidence=steps, propose=a.propose)
 
 
+def cmd_irreversible(s, argv):
+    """The step the user OK'd up front runs once, here, after the final pass; never inside an ending, never twice."""
+    ir = s.get("irreversible")
+    why = None
+    if not ir or not ir.get("ok") or s["phase"] != "done.passed":
+        why = "rehearse irreversible runs only the step the user OK'd, after the final pass (%s; phase %s)" % (
+            S.irreversible_text(s), s["phase"])
+    else:  # the hook records the run; until it has, the command's own records say whether it already ran
+        earlier, _ = L.new_results(s["run_folder"], 0)
+        if ir.get("ran") or any(r.get("kind") == "irreversible" and r.get("ok") and r.get("run") == s["run_id"]
+                                for r in earlier):
+            why = "the irreversible step already ran once; it never runs twice"
+    if why:
+        print(why)
+        return result(s["run_id"], "irreversible", ok=False, error=why)
+    rc, out, err = sh(ir["cmd"], s["root"])
+    print("irreversible step ran once: %s (rc %s)\n%s%s" % (ir["what"], rc, clip(out), ("\n" + clip(err)) if err else ""))
+    return result(s["run_id"], "irreversible", ok=True, rc=rc, stdout=clip(out, 2000), stderr=clip(err, 2000))
+
+
 def cmd_stage(s, argv):
     sys.path.insert(0, os.path.join(PLUGIN, "stage"))
     import client
@@ -465,7 +513,7 @@ def main():
     global FOLDER
     cmds = {"plan": cmd_plan, "ending": cmd_ending, "run": cmd_run, "fetch": cmd_fetch, "job": cmd_job,
             "status": cmd_job, "wait": cmd_wait, "wrong": cmd_wrong, "stage": cmd_stage, "tried": cmd_tried,
-            "review": cmd_review, "failed": cmd_failed}
+            "review": cmd_review, "failed": cmd_failed, "irreversible": cmd_irreversible}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return result(None, "usage", ok=False)
